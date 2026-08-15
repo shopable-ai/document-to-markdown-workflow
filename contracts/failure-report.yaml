@@ -1,0 +1,25 @@
+contract: failure-report
+version: 0.1.0
+description: Workflow 运行期间的可诊断失败、降级和未决事项；没有失败也必须输出空报告。
+required: [status, evidence_level, failures, warnings, diagnostics]
+status: enum[none, needs-review, failed]
+evidence_level: enum[L1-spec-static, L2-fixture-contract, L2-local-runtime, L3-remote-visual, L4-image-generation]
+failure:
+  required: [failure_id, stage_id, code, severity, retryable, status, message, evidence_paths, remediation]
+  failure_id: string
+  stage_id: string
+  code: enum[source-invalid, unsupported-format, extract-timeout, render-failed, ocr-unavailable, visual-review-unavailable, contract-invalid, provenance-missing, integrity-check-failed, broken-link, unknown-form-unresolved, provider-timeout, provider-rate-limit, image-download-failed, review-failed, other]
+  severity: enum[P0, P1, P2, info]
+  retryable: boolean
+  status: enum[open, acknowledged, resolved, blocked]
+  message: string
+  evidence_paths: array
+  remediation: string
+  resolved_evidence_paths: array
+  diagnostics: array
+invariants:
+  - status=none 时 failures 必须为空数组，不能隐藏失败
+  - failures 中每条记录必须有 stage_id、来源证据路径和 remediation
+  - severity=P0 或 code=provenance-missing/integrity-check-failed 时总报告不得为 none
+  - failure.status=resolved 必须有 resolved_evidence_paths，不能只改文字状态
+  - 不得包含 api_key、authorization、cookie、secret 或 subscription_url

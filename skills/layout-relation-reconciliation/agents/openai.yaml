@@ -1,0 +1,3 @@
+interface:
+  display_name: "版面关系复核"
+  short_description: "复核文字、形状、连线与坐标关系"

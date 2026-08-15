@@ -1,0 +1,40 @@
+contract: workflow-a-output-layout
+version: 0.1.0
+description: Workflow A 成功运行时的最终交付目录；过程证据不得替代这些结果文件。
+root: <output_root>/<package-name>/
+required_files:
+  - document.md
+  - manifest.yaml
+  - reports/processing-report.yaml
+  - reports/acceptance-report.yaml
+  - reports/failure-report.yaml
+optional_files:
+  - reports/validation-result.json
+  - reports/quality-report.yaml
+required_directories:
+  - assets/pages/
+  - assets/regions/
+  - assets/embedded/
+optional_directories:
+  - evidence/
+  - ocr/
+  - reviews/
+semantic_roles:
+  document.md: 最终可阅读、可检索的 Markdown 主文档
+  manifest.yaml: 资产、来源出现位置、哈希、命名和链接登记
+  reports/processing-report.yaml: 处理模式、工具版本、OCR/视觉复核状态和失败/警告
+  reports/acceptance-report.yaml: 最终资产包验收结果
+  reports/failure-report.yaml: 失败、降级和未决事项；无失败时输出 status=none 的空报告
+  reports/validation-result.json: 独立验收器重新读取资产包后的最终状态和下一步依据
+  assets/pages/: 来源页面视觉资产
+  assets/regions/: 按需生成的复杂结构局部视觉资产；整页图足够时允许为空目录
+  assets/embedded/: 来源文档中的嵌入媒体
+invariants:
+  - document.md 必须引用 manifest 中存在的资产 ID 或相对路径
+  - document.md 每个 section 的语义文字和关系说明必须出现在视觉资产链接之前
+  - 明确存在未裁决 unknown_forms、冲突或视觉复核失败时，reports/acceptance-report.yaml.status 不得为 passed
+  - model 未返回可选 unknown_forms 字段、未执行开放集合扫描或整页图已足够时，不得单独制造 needs-review；A4 必须记录实际复核范围和原因
+  - manifest.yaml 不得被 tests/runs/<run-id>/ 中的测试记录替代
+  - reports/acceptance-report.yaml.status=passed 才能将包标记为 complete
+  - reports/failure-report.yaml 必须存在；存在 P0、provenance-missing 或 integrity-check-failed 时 acceptance 不得为 passed
+  - 过程证据可进入 evidence/，但不能代替 document.md、manifest.yaml 或 reports/

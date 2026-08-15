@@ -1,0 +1,3 @@
+interface:
+  display_name: "区域裁剪"
+  short_description: "按坐标裁剪并追溯局部来源图"

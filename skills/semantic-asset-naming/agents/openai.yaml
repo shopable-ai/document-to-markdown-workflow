@@ -1,0 +1,3 @@
+interface:
+  display_name: "语义资产命名"
+  short_description: "生成稳定英文文件名与中文显示名"

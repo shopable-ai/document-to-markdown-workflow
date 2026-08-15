@@ -1,0 +1,3 @@
+interface:
+  display_name: "不确定性标记"
+  short_description: "显式记录候选、冲突与待复核状态"

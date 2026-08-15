@@ -1,0 +1,64 @@
+registry: tool-registry
+version: 0.1.0
+description: Skill 所依赖的确定性代码、系统能力和外部模型适配器注册表。
+schema:
+  required_entry_fields: [id, kind, used_by, implementation]
+  implementation_values: [planned, optional, available]
+  planned_is_not_production_ready: true
+tools:
+  - id: pptx-xml-parser
+    kind: local-deterministic
+    used_by: [pptx-xml-extraction]
+    implementation: available
+  - id: pdf-layout-parser
+    kind: local-deterministic
+    used_by: [pdf-layout-extraction]
+    implementation: available
+  - id: docx-ooxml-parser
+    kind: local-deterministic
+    used_by: [docx-structure-extraction]
+    implementation: planned
+  - id: office-page-renderer
+    kind: local-deterministic
+    used_by: [page-rendering]
+    implementation: available
+  - id: embedded-media-reader
+    kind: local-deterministic
+    used_by: [embedded-media-extraction]
+    implementation: available
+  - id: image-region-cropper
+    kind: local-deterministic
+    used_by: [region-cropping]
+    implementation: available
+  - id: system-ocr
+    kind: local-system
+    used_by: [local-ocr]
+    implementation: available
+  - id: mac96-vision-endpoint
+    kind: optional-remote
+    used_by: [mac96-visual-review]
+    implementation: available
+    transport: ssh
+    target: mac96
+    execution_role: default-first-visual-review
+    fallback_to: [system-ocr, needs-review]
+  - id: markdown-writer
+    kind: local-deterministic
+    used_by: [markdown-structure-builder, source-asset-linker]
+    implementation: available
+  - id: manifest-writer
+    kind: local-deterministic
+    used_by: [source-occurrence-registration, asset-deduplication, asset-package-validation]
+    implementation: available
+  - id: prompt-template-renderer
+    kind: local-deterministic
+    used_by: [visual-prompt-builder]
+    implementation: planned
+  - id: gpt-image-2-provider-adapter
+    kind: online-model-adapter
+    used_by: [gpt-image-2-generation]
+    implementation: planned
+  - id: image-download-and-integrity-check
+    kind: local-deterministic
+    used_by: [gpt-image-2-generation, generated-image-review]
+    implementation: planned

@@ -1,0 +1,4 @@
+interface:
+  display_name: "知识地图图片转 Markdown（兼容入口）"
+  short_description: "将旧知识地图入口路由到 Workflow A"
+  default_prompt: "使用 $knowledge-map-image-to-md，将知识地图来源按 Workflow A 转为可追溯 Markdown，并应用知识地图差异策略。"

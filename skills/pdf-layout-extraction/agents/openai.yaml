@@ -1,0 +1,3 @@
+interface:
+  display_name: "PDF 版面提取"
+  short_description: "提取 PDF 文本块、版面关系与图片引用"

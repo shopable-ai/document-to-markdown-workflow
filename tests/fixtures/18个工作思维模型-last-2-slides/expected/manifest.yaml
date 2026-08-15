@@ -1,0 +1,142 @@
+manifest_version: 0.2.0
+package_id: 18-work-models-last-2-slides-fixture
+source:
+  label: 18个工作思维模型
+  selected_original_pages: [24, 25]
+  source_files:
+    pptx: ../source/18个工作思维模型.pptx
+    pdf: ../source/18个工作思维模型.pdf
+assets:
+  - asset_id: fixture-page-24
+    file_name: work-models__p024__page-render__leadership-3357__original-page__o01.png
+    file_path: ../selected/pdf-page-24.png
+    display_name: 18个工作思维模型｜第24页｜提升领导力的3357｜原始页面
+    asset_kind: page-render
+    source:
+      package_id: 18-work-models-last-2-slides-fixture
+      source_fingerprint: 7190395d4d2aafe7661ef46e2b692b491beed67a51ab3b58d3d72bfb08a4dcf9
+      original_filename: 18个工作思维模型.pdf
+      source_occurrences:
+        - source_occurrence_id: occ-pdf-p024-page-render-01
+          source_file: 18个工作思维模型.pdf
+          page: 24
+          region: null
+          object_ids: []
+          parent_asset_id: null
+          ordinal: 1
+          status: located
+    semantic:
+      label: 提升领导力的3357
+      description: 原文档第24页整页渲染
+      confidence: high
+    media:
+      mime_type: image/png
+      width: 1080
+      height: 1440
+      sha256: 4a49480e6a1eb2f25e658cc03220994ea465b3f73df4f420de6519ad7bcbdafa
+    naming:
+      source_slug: work-models
+      location_slug: p024
+      semantic_slug: leadership-3357
+      purpose_slug: original-page
+      ordinal: 1
+      status: generated
+    status: available
+  - asset_id: fixture-page-25
+    file_name: work-models__p025__page-render__self-vs-others__original-page__o01.png
+    file_path: ../selected/pdf-page-25.png
+    display_name: 18个工作思维模型｜第25页｜搞定自己 vs 搞定别人｜原始页面
+    asset_kind: page-render
+    source:
+      package_id: 18-work-models-last-2-slides-fixture
+      source_fingerprint: 7190395d4d2aafe7661ef46e2b692b491beed67a51ab3b58d3d72bfb08a4dcf9
+      original_filename: 18个工作思维模型.pdf
+      source_occurrences:
+        - source_occurrence_id: occ-pdf-p025-page-render-01
+          source_file: 18个工作思维模型.pdf
+          page: 25
+          region: null
+          object_ids: []
+          parent_asset_id: null
+          ordinal: 1
+          status: located
+    semantic:
+      label: 搞定自己与搞定别人
+      description: 原文档第25页整页渲染
+      confidence: high
+    media:
+      mime_type: image/png
+      width: 1080
+      height: 1440
+      sha256: 67145986522062904045d9705bcbfc78d5fa5492dbf43a3e20b650c0b1038085
+    naming:
+      source_slug: work-models
+      location_slug: p025
+      semantic_slug: self-vs-others
+      purpose_slug: original-page
+      ordinal: 1
+      status: generated
+    status: available
+sections:
+  - section_id: page-24-leadership-3357
+    markdown_anchor: 第24页-提升领导力的3357
+    visual_asset_ids: [fixture-page-24]
+  - section_id: page-25-self-vs-others
+    markdown_anchor: 第25页-搞定自己-vs-搞定别人
+    visual_asset_ids: [fixture-page-25]
+status: fixture-expected
+processing:
+  execution_path: needs-review
+  stage_evidence_contract: contracts/stage-evidence.yaml
+  failure_report: reports/failure-report.yaml
+  stage_evidence:
+    - stage_id: A1
+      status: needs-review
+      evidence_level: L2-fixture-contract
+      evidence_paths: [fixture.yaml]
+      verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+      diagnostics: [只验证夹具选页]
+      unknown: [真实来源预检]
+    - stage_id: A2
+      status: needs-review
+      evidence_level: L2-fixture-contract
+      evidence_paths: [selected/18个工作思维模型-第24-25页.pptx]
+      verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+      diagnostics: [只验证关键文本]
+      unknown: [完整原生结构]
+    - stage_id: A3
+      status: needs-review
+      evidence_level: L2-fixture-contract
+      evidence_paths: [selected/pdf-page-24.png, selected/pdf-page-25.png]
+      verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+      diagnostics: [只验证视觉基准]
+      unknown: [真实渲染器]
+    - stage_id: A4
+      status: not-run
+      evidence_level: L2-fixture-contract
+      evidence_paths: [fixture.yaml]
+      verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+      diagnostics: [未执行 OCR/视觉复核]
+      unknown: [OCR/关系复核]
+    - stage_id: A5
+      status: needs-review
+      evidence_level: L2-fixture-contract
+      evidence_paths: [expected-structure.md]
+      verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+      diagnostics: [只验证预期结构]
+      unknown: [真实组装器]
+    - stage_id: A6
+      status: needs-review
+      evidence_level: L2-fixture-contract
+      evidence_paths: [manifest.yaml]
+      verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+      diagnostics: [只验证双名制和哈希]
+      unknown: [真实命名/去重]
+    - stage_id: A7
+      status: needs-review
+      evidence_level: L2-fixture-contract
+      evidence_paths: [reports/acceptance-report.yaml]
+      verification_commands: [python3 tests/validate_workflow_package.py]
+      diagnostics: [fixture 不能证明真实验收]
+      unknown: [真实产物验收]
+note: 这是测试夹具预期 manifest，不是完整生产解析器自动生成的 manifest。

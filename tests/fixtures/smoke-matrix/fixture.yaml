@@ -1,0 +1,69 @@
+fixture_id: workflow-a-smoke-matrix
+version: 1.0.0
+purpose: 用最小输入验证来源独立性、页数边界、候选选择和 PPTX 排版异常分流
+source_policy:
+  explicit_sources:
+    pptx_flag: --pptx-source
+    pdf_flag: --pdf-source
+    relation: same-logical-document-only-when-explicitly-declared
+  default_discovery:
+    mode: fixture-local-matching-extension-pair
+    preference: selected-or-minimal-pair
+    semantic_content: current-source-only
+  materialize: tests/scripts/materialize_workflow_a_smoke_inputs.py
+  page_selection: ordinal-pages-from-current-source
+  generated_files_are_test_inputs_not_production_outputs: true
+cases:
+  - id: pptx-single-page
+    source_kind: pptx
+    page_count: 1
+    source_files: [pptx]
+    page_selection: [1]
+    checks: [native-text, page-image, markdown-link, source-independent]
+  - id: pptx-two-pages
+    source_kind: pptx
+    page_count: 2
+    source_files: [pptx]
+    page_selection: [1, 2]
+    checks: [native-text, page-order, two-page-assets, source-independent]
+  - id: pdf-single-page
+    source_kind: pdf
+    page_count: 1
+    source_files: [pdf]
+    page_selection: [1]
+    checks: [pdf-text, page-image, markdown-link, source-independent]
+  - id: pdf-two-pages
+    source_kind: pdf
+    page_count: 2
+    source_files: [pdf]
+    page_selection: [1, 2]
+    checks: [pdf-text, page-order, two-page-assets, source-independent]
+  - id: same-name-pptx-pdf
+    source_kind: declared-candidates
+    page_count: 2
+    source_files: [pptx, pdf]
+    candidate_relation: same-logical-document
+    evidence_fields: [semantic_source, visual_source, visual_difference, selection_reason, uncertainties]
+    checks: [candidate-comparison, pptx-xml-semantic-source, visual-difference-evidence, source-independent]
+  - id: pptx-layout-anomaly-pdf
+    source_kind: declared-candidates
+    page_count: 2
+    source_files: [pptx-layout-anomaly, pdf]
+    candidate_relation: same-logical-document
+    anomaly: current-source-first-slide-has-off-canvas-or-oversized-shape
+    evidence_fields: [semantic_source, visual_source, visual_difference, selection_reason, uncertainties]
+    checks: [candidate-comparison, pptx-xml-preserved, pptx-render-evidence, pdf-visual-fallback, anomaly-evidence, source-independent]
+execution_order:
+  - pptx-single-page
+  - pptx-two-pages
+  - pdf-single-page
+  - pdf-two-pages
+  - same-name-pptx-pdf
+  - pptx-layout-anomaly-pdf
+  - existing-reference-fixture
+  - full-document-batch
+not_in_scope:
+  - 自动把两个来源合并成一个业务 package
+  - 用旧 fixture 的标题、正文、页码或页面结构填充新来源
+  - 先跑全量再从总状态猜测单页错误
+  - 把 materialization-record.json 当作解析结果或验收结果

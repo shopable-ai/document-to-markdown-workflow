@@ -1,0 +1,35 @@
+id: knowledge-map-image-to-md
+kind: workflow-profile
+version: 0.1.0
+workflow: document-to-markdown-assets
+entrypoint_skill: knowledge-map-image-to-md
+policy_reference: ../references/knowledge-map-profile.zh.md
+stage_policy:
+  no_independent_workflow: true
+  no_independent_stages: true
+  canonical_stage_order: [A1, A2, A3, A4, A5, A6, A7]
+additional_gates:
+  - id: completed-input
+    before: A1
+    terminal_status: skipped_partial
+  - id: duplicate-preflight
+    before: A4
+    terminal_status: needs-review
+  - id: semantic-eligibility
+    before: A4
+    terminal_status: blocked_unsupported
+  - id: source-fidelity-trace
+    before: A7
+    terminal_status: needs-review
+  - id: append-only-run-record
+    before: A7
+    terminal_status: needs-review
+output_policy:
+  canonical_layout: contracts/workflow-a-output-layout.yaml
+  process_layer_allowed: true
+  process_layer_must_not_replace_canonical_result: true
+unsupported_or_unimplemented_inputs:
+  - zip
+  - rar
+  - 7z
+  - archive-extraction-without-safe-adapter

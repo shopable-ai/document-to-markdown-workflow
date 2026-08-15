@@ -1,0 +1,3 @@
+interface:
+  display_name: "Markdown 章节选择"
+  short_description: "从 Markdown 选择边界明确的知识单元"

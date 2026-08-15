@@ -1,0 +1,10 @@
+contract: failure-report
+version: 0.1.0
+status: none
+evidence_level: L2-fixture-contract
+failures: []
+warnings:
+  - code: fixture-not-production
+    stage_id: A7
+    message: 夹具只验证契约，不执行生产工具
+diagnostics: [fixture contract only]

@@ -1,0 +1,23 @@
+contract: stage-evidence
+version: 0.1.0
+description: 每个 A1-A7/B1-B7 阶段的可验证证据记录；设计规格与生产运行证据分开。
+item:
+  required: [stage_id, status, evidence_level, evidence_paths, diagnostics, verification_commands]
+  stage_id: string
+  status: enum[complete, needs-review, unavailable, failed, not-run]
+  evidence_level: enum[L1-spec-static, L2-fixture-contract, L2-local-runtime, L3-remote-visual, L4-image-generation]
+  evidence_paths: array
+  verification_commands: array
+  diagnostics: array
+  unknown: array
+  design_score: integer|null
+  production_evidence_score: integer|null
+  score_basis: string|null
+invariants:
+  - stage_id 必须匹配当前 Workflow 声明的阶段 ID，且同一报告中不得重复
+  - evidence_paths 至少一条；路径不存在、为空或只指向计划文件时不得标记 complete
+  - verification_commands 至少一条；命令未执行时必须标记 not-run 或 needs-review
+  - evidence_level 只能描述实际运行层级；L2-fixture-contract 不得上推为 L2-local-runtime/L3/L4
+  - status=complete 时 diagnostics、unknown 和 score_basis 仍必须存在，不能用空缺字段伪造完整
+  - production_evidence_score 不得由 design_score 推导；未有运行证据时必须为 null 或低于设计分
+  - 任一 P0、provenance-missing、integrity-check-failed 或静默丢失内容时 status 不得为 complete

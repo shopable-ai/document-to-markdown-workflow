@@ -1,0 +1,24 @@
+contract: test-run-record
+version: 0.1.0
+description: 测试运行记录，不是 Workflow A/B 的业务转换结果。
+root: tests/runs/<run-id>/
+required_files:
+  - test-report.yaml
+  - summary.zh.md
+optional_directories:
+  - logs/
+  - evidence/
+  - outputs/
+optional_fields:
+  - outputs.fixture_sample_outputs
+  - outputs.classification
+  - outputs.real_business_result_package
+forbidden_claims:
+  - 将 test-report.yaml 当作 document.md
+  - 将测试摘要当作 markdown-asset-package
+  - 用 fixture 断言通过宣称 PPTX/PDF 解析器已完成
+invariants:
+  - test-report.yaml.kind=test-run-record
+  - 测试记录必须引用 fixture 和测试命令
+  - 测试没有生成业务结果时，generated_business_outputs 必须为空
+  - 手工预期样例必须进入 fixture_sample_outputs，并标记 fixture-sample 或 fixture-contract-only

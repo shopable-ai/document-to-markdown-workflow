@@ -1,0 +1,3 @@
+interface:
+  display_name: "页面渲染"
+  short_description: "把来源页面渲染为可复核视觉资产"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "文字来源复核"
+  short_description: "合并原生文字与 OCR 候选并保留冲突"

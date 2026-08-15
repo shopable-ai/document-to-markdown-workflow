@@ -1,0 +1,3 @@
+interface:
+  display_name: "PPTX XML 提取"
+  short_description: "提取 PPTX 原生文字、形状与媒体关系"

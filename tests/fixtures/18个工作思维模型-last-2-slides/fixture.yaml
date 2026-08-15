@@ -1,0 +1,28 @@
+id: 18-work-models-last-2-slides
+source_label: 18个工作思维模型
+source_files:
+  pptx: source/18个工作思维模型.pptx
+  pdf: source/18个工作思维模型.pdf
+selected:
+  original_slide_numbers: [24, 25]
+  pptx: selected/18个工作思维模型-第24-25页.pptx
+  pdf: selected/18个工作思维模型-第24-25页.pdf
+  page_images:
+    - selected/pdf-page-24.png
+    - selected/pdf-page-25.png
+selection_policy:
+  include: [24, 25]
+  exclude: [1, 2]
+  reason: 选择高信息密度、复杂关系和多图形页面，避免封面/目录造成低价值假通过。
+assertions:
+  pptx_slide_count: 2
+  pdf_page_count: 2
+  required_text:
+    slide_24: [领导力, 3357, 三零, 三管, 五带, 七抓, 抓执行]
+    slide_25: [搞定自己, 搞定别人, 世界观, 价值观, 正确人生观, 实力, 能力, 背景]
+  structural_expectations:
+    - slide_24_has_connectors_or_relationship_edges
+    - slide_24_has_group_or_hierarchical_structure
+    - slide_25_has_comparison_structure
+    - slide_25_has_multi_level_relationships
+    - each_page_has_visual_asset

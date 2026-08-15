@@ -1,0 +1,122 @@
+id: markdown-to-gpt-image
+version: 0.1.0
+title: Markdown 局部内容到 GPT-image-2 单图
+purpose: 将一个 Markdown 知识单元规划为一张可读、可记忆、可复核的视觉图片。
+independent: true
+readme: README.zh.md
+stage_type: phase-gate
+skill_registry: ../../skill-registry.yaml
+tool_registry: ../../tool-registry.yaml
+run_record: ../../contracts/workflow-run-record.yaml
+stage_evidence_contract: ../../contracts/stage-evidence.yaml
+handoff_inputs:
+  - contract: ../../contracts/workflow-handoff.yaml
+    producer: document-to-markdown-assets
+inputs:
+  - name: markdown_source
+    types: [md, markdown, text]
+    required: true
+  - name: section_selector
+    types: [heading, anchor, line-range, semantic-query]
+    required: true
+  - name: visual_intent
+    types: [flow, cause-effect, comparison, matrix, timeline, concept-map, other]
+    required: false
+  - name: reference_assets
+    types: [source-visual-asset, image]
+    required: false
+outputs:
+  primary:
+    type: single-raster-image
+    model: gpt-image-2
+    output_layout: ../../contracts/workflow-b-output-layout.yaml
+  secondary:
+    - type: gpt-image-generation-request
+      contract: ../../contracts/gpt-image-generation-request.yaml
+    - type: visual-review-report
+    - type: failure-report
+      contract: ../../contracts/failure-report.yaml
+validation:
+  validator: tests/validate_workflow_package.py
+  acceptance: ACCEPTANCE.zh.md
+stages:
+  - id: B1
+    name: Markdown 内容选择
+    type: stage
+    skills: [markdown-section-selector]
+    route: local-code
+    output: selected-knowledge-unit
+    evidence: [selected-section.md]
+    gate: 片段自洽，保留标题、事实、关系和限定
+    required_fields: [source_package_id, section_id, content_digest, status]
+    score_dimensions: [selection-fidelity, provenance, failure-diagnostics, evidence-honesty]
+  - id: B2
+    name: 视觉用途判断
+    type: stage
+    skills: [visual-use-case-classifier]
+    route: local-reasoning
+    output: visual-intent
+    evidence: [visual-intent.yaml]
+    gate: 选择一个主结构；无法判断则 visual-intent-ambiguous
+    required_fields: [intent, rationale, alternatives, status]
+    score_dimensions: [intent-clarity, rationale, uncertainty, evidence-honesty]
+  - id: B3
+    name: 内容与视觉结构规划
+    type: stage
+    skills: [content-to-visual-structure, density-gate]
+    route: local-reasoning
+    output: visual-structure-plan
+    evidence: [visual-structure-plan.yaml]
+    gate: 节点、层级、方向和信息密度可解释；过密则 needs-split
+    required_fields: [nodes, hierarchy, direction, density_decision, unresolved, status]
+    score_dimensions: [structure-fidelity, density-safety, uncertainty, evidence-honesty]
+  - id: B4
+    name: 参考资产选择
+    type: stage
+    skills: [source-visual-reference-selector]
+    route: local-code
+    output: selected-references
+    evidence: [selected-references.yaml]
+    gate: 每个参考图都有来源和用途；无参考图也可继续
+    required_fields: [references, provenance, usage, status]
+    score_dimensions: [provenance, authorization-boundary, relevance, evidence-honesty]
+  - id: B5
+    name: 提示词组装
+    type: stage
+    skills: [visual-prompt-builder]
+    tools: [prompt-template-renderer]
+    route: local-code
+    output: generation-request
+    evidence: [generation-request.yaml]
+    gate: 请求包含内容、结构、文字保真、画布、风格和禁用项；不含秘密
+    required_fields: [request_id, markdown_source, visual_plan, prompt, model, usage, status]
+    score_dimensions: [request-completeness, secret-safety, provenance, evidence-honesty]
+  - id: B6
+    name: GPT-image-2 调用
+    type: stage
+    skills: [gpt-image-2-generation]
+    route: online-model
+    output: single-raster-image
+    evidence: [generated-image.png]
+    gate: 成功返回恰好一张图片；模型/网络失败进入可诊断失败态
+    required_fields: [request_id, output_count, mime_type, integrity, status, diagnostics]
+    score_dimensions: [count-integrity, output-integrity, failure-diagnostics, evidence-honesty]
+  - id: B7
+    name: 单图验收
+    type: stage
+    skills: [generated-image-review]
+    route: local-review
+    output: visual-review-report
+    evidence: [visual-review-report.yaml]
+    gate: 通过 workflows/markdown-to-gpt-image/ACCEPTANCE.zh.md
+    required_fields: [request_id, image_path, checks, status, diagnostics]
+    score_dimensions: [review-completeness, visual-fidelity, failure-safety, evidence-honesty]
+failure_policy:
+  no_empty_success: true
+  retryable_states: [provider-timeout, provider-rate-limit, image-download-failed, review-failed]
+  terminal_states: [markdown-section-missing, visual-intent-ambiguous, needs-split, policy-blocked]
+does_not_generate:
+  - pptx
+  - pdf
+  - svg
+  - image-batch

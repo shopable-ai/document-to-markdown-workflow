@@ -1,0 +1,3 @@
+interface:
+  display_name: "本机 OCR"
+  short_description: "在视觉复核失败时提取候选文字"

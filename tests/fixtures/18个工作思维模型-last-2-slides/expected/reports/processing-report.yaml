@@ -1,0 +1,63 @@
+status: needs-review
+evidence_level: L2-fixture-contract
+workflow: document-to-markdown-assets
+native_extraction:
+  pptx_xml: expected-text-and-slide-selection
+  pdf_layout: expected-text-and-page-selection
+ocr:
+  used: false
+  reason: fixture contract does not execute OCR
+visual_assets:
+  page_renders: [../selected/pdf-page-24.png, ../selected/pdf-page-25.png]
+  complex_region_review: needs-review
+note: 这是测试夹具预期报告，不是完整解析运行报告。
+stage_evidence:
+  - stage_id: A1
+    status: needs-review
+    evidence_level: L2-fixture-contract
+    evidence_paths: [fixture.yaml]
+    verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+    diagnostics: [只验证夹具选择]
+    unknown: [真实来源预检]
+  - stage_id: A2
+    status: needs-review
+    evidence_level: L2-fixture-contract
+    evidence_paths: [selected/18个工作思维模型-第24-25页.pptx]
+    verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+    diagnostics: [只验证关键文字]
+    unknown: [完整原生结构]
+  - stage_id: A3
+    status: needs-review
+    evidence_level: L2-fixture-contract
+    evidence_paths: [../selected/pdf-page-24.png, ../selected/pdf-page-25.png]
+    verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+    diagnostics: [只验证视觉基准]
+    unknown: [真实渲染覆盖率]
+  - stage_id: A4
+    status: not-run
+    evidence_level: L2-fixture-contract
+    evidence_paths: [reports/processing-report.yaml]
+    verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+    diagnostics: [OCR 和视觉复核未执行]
+    unknown: [OCR/关系复核]
+  - stage_id: A5
+    status: needs-review
+    evidence_level: L2-fixture-contract
+    evidence_paths: [../expected-structure.md]
+    verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+    diagnostics: [只验证预期结构]
+    unknown: [真实组装器]
+  - stage_id: A6
+    status: needs-review
+    evidence_level: L2-fixture-contract
+    evidence_paths: [../manifest.yaml]
+    verification_commands: [RUNTIME_PY=... "$RUNTIME_PY" tests/run_fixture_contract_tests.py]
+    diagnostics: [只验证命名字段]
+    unknown: [真实命名/去重]
+  - stage_id: A7
+    status: needs-review
+    evidence_level: L2-fixture-contract
+    evidence_paths: [reports/acceptance-report.yaml]
+    verification_commands: [python3 tests/validate_workflow_package.py]
+    diagnostics: [fixture 不能证明真实验收]
+    unknown: [真实产物验收]

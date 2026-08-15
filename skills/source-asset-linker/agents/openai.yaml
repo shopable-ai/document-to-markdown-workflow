@@ -1,0 +1,3 @@
+interface:
+  display_name: "来源资产链接"
+  short_description: "在 Markdown 建立稳定资产链接与来源说明"

@@ -1,0 +1,12 @@
+kind: legacy-skill-snapshot
+version: 1
+status: historical_snapshot
+captured_at: 2026-08-14
+source_path: /Users/a0000/.codex/skills/knowledge-map-image-to-md/SKILL.md
+source_sha256: b522a4a295d4ea354defb598eccf428f7d8dce8daa86460c7022cf2660c08649
+line_count: 131
+runtime_registered: false
+active_entrypoint: skills/knowledge-map-image-to-md/SKILL.md
+active_workflow: document-to-markdown-assets
+active_profile: references/knowledge-map-profile.zh.md
+original_file_deleted: false

@@ -1,0 +1,15 @@
+contract: source-inventory
+version: 0.1.0
+description: A1 来源只读预检结果。
+required: [source_fingerprint, media_type, status, page_count_or_dimensions, text_layer, image_layer, readability, diagnostics]
+optional: [source_selection, candidate_comparison]
+candidate_comparison_fields: [candidates, preferred_source, semantic_source, visual_source, visual_difference, selection_reason, uncertainties]
+status: enum[complete, needs-review, source-invalid, unsupported-format]
+readability: enum[readable, partial, unreadable, unknown]
+invariants:
+  - source_fingerprint 必须来自输入文件内容，不能使用文件名或运行 ID 代替
+  - page_count_or_dimensions 缺失时必须是 Unknown/needs-review，不得写 0 伪造成功
+  - 不得修改来源文件；损坏或不支持输入必须有 diagnostics 和失败代码
+  - 未明确声明同一逻辑文档候选时 source_selection 必须为 single-source，candidate_comparison 必须为 null
+  - candidate_comparison 必须是可解析 JSON，包含候选路径、指纹、页数、代表页资产、维度结论、preferred_source、选择理由和不确定项；不能由关键词数量、HTTP 200 或模型列表代替
+  - 同名且页数一致的 PPTX/PDF 候选必须先保留 PPTX XML 语义/数字资产；截图差异超阈值或 PPTX 渲染异常时 visual_source 必须为 PDF，且 PPTX Office 渲染证据独立保留

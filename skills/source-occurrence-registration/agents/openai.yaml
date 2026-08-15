@@ -1,0 +1,3 @@
+interface:
+  display_name: "来源出现登记"
+  short_description: "登记资产在来源中的每次出现与定位"

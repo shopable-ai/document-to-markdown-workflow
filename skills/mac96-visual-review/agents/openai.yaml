@@ -1,0 +1,3 @@
+interface:
+  display_name: "mac96 视觉复核"
+  short_description: "通过 SSH 调用 mac96 复核复杂视觉结构"

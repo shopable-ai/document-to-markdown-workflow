@@ -1,0 +1,17 @@
+contract: native-content-model
+version: 0.1.0
+description: A2 原生结构提取的跨格式最小模型。
+required: [source_fingerprint, status, text_blocks, nodes, relations, coordinates, source_locations, diagnostics]
+status: enum[complete, partial, needs-review, unavailable, failed]
+fields:
+  text_blocks: array
+  nodes: array
+  relations: array
+  coordinates: array
+  source_locations: array
+  image_refs: array
+invariants:
+  - 每个 text_block、node、relation 必须含来源页/节点或明确 Unknown
+  - 坐标必须保留原始单位或坐标系；无坐标不能宣称完整结构
+  - XML/布局解析失败不得回退为 OCR 成功；必须保留 diagnostics 和失败代码
+  - PDF 阅读顺序不确定时必须保留 reading_order 状态和原始 bbox

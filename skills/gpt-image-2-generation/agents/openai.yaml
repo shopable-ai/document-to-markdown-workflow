@@ -1,0 +1,3 @@
+interface:
+  display_name: "GPT-image-2 生成"
+  short_description: "调用 GPT-image-2 生成单张栅格图片"

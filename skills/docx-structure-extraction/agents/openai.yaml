@@ -1,0 +1,3 @@
+interface:
+  display_name: "DOCX 结构提取"
+  short_description: "提取 DOCX 段落、表格、图片与关系"

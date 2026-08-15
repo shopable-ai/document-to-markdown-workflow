@@ -1,0 +1,3 @@
+interface:
+  display_name: "视觉提示词构建"
+  short_description: "组装单图生成所需的中文语义提示词"

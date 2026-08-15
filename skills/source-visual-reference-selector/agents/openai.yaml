@@ -1,0 +1,3 @@
+interface:
+  display_name: "来源视觉参考选择"
+  short_description: "挑选辅助结构或风格判断的参考图"

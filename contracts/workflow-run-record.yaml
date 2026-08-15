@@ -1,0 +1,38 @@
+contract: workflow-run-record
+version: 0.1.0
+description: 两个 Workflow 的运行生命周期、输入指纹、版本快照和证据等级记录。
+root: <output_root>/<run-id>/run-record.yaml
+required:
+  run_id: string
+  workflow_id: string
+  workflow_version: string
+  status: enum[planned, running, needs-review, succeeded, failed, cancelled]
+  started_at: string
+  input_digests: array
+  config_snapshot:
+    skill_registry_version: string
+    tool_registry_version: string
+    contract_versions: array
+  evidence_level: enum[L1-spec-static, L2-fixture-contract, L2-local-runtime, L3-remote-visual, L4-image-generation]
+  stages: array
+  retry:
+    attempt: integer
+    idempotency_key: string
+  outputs: array
+  failure: object|null
+  stage_evidence: array
+  stage_evidence_contract: contracts/stage-evidence.yaml
+forbidden_fields:
+  - api_key
+  - authorization
+  - cookie
+  - secret
+  - subscription_url
+invariants:
+  - run_id、workflow_id 和 workflow_version 不得为空
+  - status=succeeded 时 outputs 不得为空且必须通过对应 acceptance
+  - status=failed 时 failure 不得为空
+  - 运行记录不能声称超过实际执行的 evidence_level
+  - stage_evidence 必须逐项覆盖 A1–A7/B1–B7 中实际声明的阶段，并包含 stage_id、status、evidence_level、evidence_paths 和 diagnostics
+  - stage_evidence 的每一项必须满足 contracts/stage-evidence.yaml；验证命令未执行时不得标记 complete
+  - status=needs-review 时至少一个 stage_evidence.status 必须为 needs-review 或 unavailable

@@ -1,0 +1,43 @@
+contract: gpt-image-generation-request
+version: 0.1.0
+description: Workflow B 的无秘密单图生成请求与结果登记契约。
+required:
+  request_id: string
+  markdown_source:
+    path: string
+    section_selector: string
+    content_digest: string
+  visual_plan:
+    intent: string
+    structure: string
+    density_decision: enum[accepted, reduced, needs-split]
+  prompt:
+    text: string
+    version: string
+  model:
+    name: gpt-image-2
+    size: string
+    quality: string
+  references: array
+  output:
+    count: 1
+    path: string|null
+    mime_type: string|null
+  review:
+    status: enum[pending, passed, needs-revision, failed]
+  status: enum[planned, submitted, generated, reviewed, failed]
+  usage:
+    online_call_count: integer
+    reference_asset_count: integer
+    local_preprocessing: boolean
+    quota_note: string
+forbidden_fields:
+  - api_key
+  - authorization
+  - cookie
+  - secret
+  - subscription_url
+invariants:
+  - output.count=1
+  - usage.online_call_count is non-negative
+  - status=reviewed implies review.status in [passed, needs-revision, failed]

@@ -1,0 +1,56 @@
+contract: source-visual-asset
+version: 0.2.0
+description: 来源页面、嵌入媒体或复杂区域视觉资产的登记契约。
+required:
+  asset_id: string
+  file_name: string
+  file_path: string
+  display_name: string
+  asset_kind: enum[page-render, embedded-media, complex-region, crop, input-image]
+  source:
+    package_id: string
+    source_fingerprint: string
+    original_filename: string|null
+    source_occurrences: array
+  media:
+    mime_type: string
+    width: integer
+    height: integer
+    sha256: string
+  semantic:
+    label: string
+    description: string
+    confidence: enum[high, medium, low, unknown]
+  naming:
+    source_slug: string
+    location_slug: string
+    semantic_slug: string
+    purpose_slug: string
+    ordinal: integer
+    status: enum[generated, needs-review, unknown]
+  status: enum[available, needs-review, unavailable]
+optional:
+  - alt_text
+  - parent_asset_id
+  - extraction_notes
+invariants:
+  - file_name 必须符合 references/naming-policy.zh.md 的 ASCII 英文稳定格式
+  - display_name 必须具有人类可读语义，且不能代替 file_name
+  - asset_id 在包内稳定且不要求暴露在文件名中
+  - source.source_occurrences 至少包含一条可定位记录；page 或 input-image 来源必须可定位
+  - source_occurrences[].source_occurrence_id 与文件名解耦且在来源包内稳定
+  - status=available 时 file_path、mime_type、width、height 和 sha256 必须可读取
+  - status=available 时 media.sha256 必须与 file_path 的实际 SHA-256 相等
+  - status=available 时 source.source_occurrences 中不得存在 status=unknown；无法定位必须将资产标记为 needs-review 或 unavailable
+
+source_occurrence:
+  required: [source_occurrence_id, source_file, page, region, object_ids, parent_asset_id, ordinal, status]
+  fields:
+    source_occurrence_id: string
+    source_file: string
+    page: integer|null
+    region: object|null
+    object_ids: array
+    parent_asset_id: string|null
+    ordinal: integer
+    status: enum[located, needs-review, unknown]

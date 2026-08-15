@@ -1,0 +1,74 @@
+registry: skill-registry
+version: 0.1.0
+description: Workflow 阶段引用的可复用 Skill 注册表；每个条目对应一个独立 SKILL.md。
+schema:
+  required_entry_fields: [id, path]
+  compatibility_entry_fields: [kind, maps_to_workflow, profile]
+  path_must_exist: true
+  frontmatter_name_must_equal_id: true
+  stage_references_must_be_registered: true
+  entrypoint_skills: [document-asset-extraction, document-visual-generation, knowledge-map-image-to-md]
+skills:
+  - id: source-inventory
+    path: skills/source-inventory/SKILL.md
+  - id: pptx-xml-extraction
+    path: skills/pptx-xml-extraction/SKILL.md
+  - id: pdf-layout-extraction
+    path: skills/pdf-layout-extraction/SKILL.md
+  - id: docx-structure-extraction
+    path: skills/docx-structure-extraction/SKILL.md
+  - id: embedded-media-extraction
+    path: skills/embedded-media-extraction/SKILL.md
+  - id: page-rendering
+    path: skills/page-rendering/SKILL.md
+  - id: complex-region-detection
+    path: skills/complex-region-detection/SKILL.md
+  - id: region-cropping
+    path: skills/region-cropping/SKILL.md
+  - id: local-ocr
+    path: skills/local-ocr/SKILL.md
+  - id: text-source-reconciliation
+    path: skills/text-source-reconciliation/SKILL.md
+  - id: layout-relation-reconciliation
+    path: skills/layout-relation-reconciliation/SKILL.md
+  - id: mac96-visual-review
+    path: skills/mac96-visual-review/SKILL.md
+  - id: markdown-structure-builder
+    path: skills/markdown-structure-builder/SKILL.md
+  - id: source-asset-linker
+    path: skills/source-asset-linker/SKILL.md
+  - id: uncertainty-marking
+    path: skills/uncertainty-marking/SKILL.md
+  - id: semantic-asset-naming
+    path: skills/semantic-asset-naming/SKILL.md
+  - id: source-occurrence-registration
+    path: skills/source-occurrence-registration/SKILL.md
+  - id: asset-deduplication
+    path: skills/asset-deduplication/SKILL.md
+  - id: asset-package-validation
+    path: skills/asset-package-validation/SKILL.md
+  - id: markdown-section-selector
+    path: skills/markdown-section-selector/SKILL.md
+  - id: visual-use-case-classifier
+    path: skills/visual-use-case-classifier/SKILL.md
+  - id: content-to-visual-structure
+    path: skills/content-to-visual-structure/SKILL.md
+  - id: density-gate
+    path: skills/density-gate/SKILL.md
+  - id: source-visual-reference-selector
+    path: skills/source-visual-reference-selector/SKILL.md
+  - id: visual-prompt-builder
+    path: skills/visual-prompt-builder/SKILL.md
+  - id: gpt-image-2-generation
+    path: skills/gpt-image-2-generation/SKILL.md
+  - id: generated-image-review
+    path: skills/generated-image-review/SKILL.md
+  - id: document-asset-extraction
+    path: skills/document-asset-extraction/SKILL.md
+  - id: document-visual-generation
+    path: skills/document-visual-generation/SKILL.md
+  - id: knowledge-map-image-to-md
+    path: skills/knowledge-map-image-to-md/SKILL.md
+    kind: compatibility-entrypoint
+    maps_to_workflow: document-to-markdown-assets
+    profile: references/knowledge-map-profile.zh.md

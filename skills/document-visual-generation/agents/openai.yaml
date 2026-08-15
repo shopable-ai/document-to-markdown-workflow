@@ -1,0 +1,4 @@
+interface:
+  display_name: "文档视觉生成"
+  short_description: "把 Markdown 局部内容生成一张视觉图片"
+  default_prompt: "使用 $document-visual-generation 将 Markdown 局部内容规划并生成一张 GPT-image-2 图片。"

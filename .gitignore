@@ -1,0 +1,47 @@
+# macOS / editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python caches and local test state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/.pytest_cache/
+coverage/
+
+# Local runtime and generated workspace state
+.omx/
+.shopme/
+.cache/
+tmp/
+temp/
+scratch/
+*.tmp
+*.bak
+*.draft.md
+*.tmp.md
+
+# Build and dependency output
+node_modules/
+.next/
+build/
+dist/
+out/
+
+# Local environment and logs
+.env
+.env.*
+*.log
+
+# Automatically generated workflow/test run directories
+runs/real/
+tests/runs/
+
+# Local engineering audit snapshots (keep locally, never commit)
+.audit/
+
+# ShopMe local generated state
+.shopme/

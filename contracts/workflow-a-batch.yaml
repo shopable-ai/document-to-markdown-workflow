@@ -1,0 +1,52 @@
+contract: workflow-a-batch-run
+version: 0.1.0
+description: 多来源队列与单一长 PDF 的 smoke、分批、checkpoint、恢复和单包输出边界。
+root: <output_root>/batch-<timestamp>-<digest>/run-record.yaml
+required:
+  run_id: string
+  workflow_id: document-to-markdown-assets
+  workflow_version: string
+  status: enum[running, succeeded, needs-review, failed]
+  input_digests: array
+  config_snapshot:
+    pages: string
+    concurrency: object
+    context: object
+    retry: object
+  packages_root: string
+  queue: array
+  summary: object
+  outputs: array
+  stage_evidence: array
+page_batch:
+  checkpoint: checkpoint.json
+  required:
+    - source_sha256
+    - selected_pages
+    - smoke_pages
+    - batch_size
+    - batches
+    - next_page
+  batch_item:
+    required: [batch_index, pages, status, package, package_hash, page_states, smoke_report]
+    page_state_fields: [page, status, native, ocr, visual]
+  invariants:
+    - smoke 批次必须是第一批；smoke 失败时 queue 不得继续推进。
+    - 每批 package 使用新目录；恢复不得覆盖已有失败 package 或真实运行证据。
+    - next_page 必须指向最近一个通过 checkpoint 之后的第一张页面。
+    - package_hash 必须由 document.md 重新计算并记录。
+forbidden_fields:
+  - api_key
+  - authorization
+  - cookie
+  - secret
+  - subscription_url
+  - token
+invariants:
+  - 每个 queue 项对应一个 source，并且 source_sha256 不为空。
+  - 每个 source 仍由单文件 runner 生成独立 package，不合并不同 source 的 document.md 或 manifest。
+  - status=succeeded 仅当所有 queue 项的独立 validation-result.json.status=passed。
+  - status=needs-review 时至少一个 queue 项为 needs-review 或 failed。
+  - concurrency.auto 在没有可验证容量提示时必须解析为 workers=1。
+  - context.mode=independent 不得向模型请求发送邻页事实；neighbor 只能发送 bounded hints。
+  - resume 只能复用原始 source digest 相同的 batch。

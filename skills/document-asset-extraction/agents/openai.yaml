@@ -1,0 +1,4 @@
+interface:
+  display_name: "文档资产提取"
+  short_description: "提取文档结构与可追溯视觉来源资产"
+  default_prompt: "使用 $document-asset-extraction 将来源文档提取为可追溯的 Markdown 与视觉资产。"

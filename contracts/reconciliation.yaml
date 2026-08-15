@@ -1,0 +1,16 @@
+contract: reconciliation
+version: 0.1.0
+description: A4 原生文本、OCR 候选和视觉复核的分层合并结果。
+required: [native_input, ocr_input, visual_input, reconciled_items, conflicts, unresolved, unknown_forms, coverage_notes, status, diagnostics]
+status: enum[complete, needs-review, unavailable, failed]
+item:
+  required: [input_ids, decision, rationale, confidence, status]
+  decision: enum[native, candidate, unresolved]
+  confidence: enum[high, medium, low, unknown]
+  status: enum[confirmed, candidate, needs-review, unknown]
+invariants:
+  - 原生、OCR、视觉输入必须分层保存，OCR candidate 不得覆盖 native 事实
+  - conflicts 和 unresolved 必须保留；未决内容不得通过空数组伪装已检查
+  - unknown_forms 必须说明开放集合扫描范围；缺失 coverage_notes 时状态最多为 needs-review
+  - 视觉邻近只能作为 candidate；方向或父子关系不确定时必须 needs-review
+  - 每个 reconciled item 必须可回溯到输入 ID、来源页/节点/区域和决策理由

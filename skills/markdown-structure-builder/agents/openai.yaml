@@ -1,0 +1,3 @@
+interface:
+  display_name: "Markdown 结构组装"
+  short_description: "将复核结果组装为可检索 Markdown"

@@ -1,0 +1,21 @@
+contract: workflow-b-output-layout
+version: 0.1.0
+description: Workflow B 成功运行时的单图输出目录；不包含 PPTX/PDF/SVG 或图片批次。
+root: <output_root>/<run-id>/
+required_files:
+  - selected-section.md
+  - visual-intent.yaml
+  - visual-structure-plan.yaml
+  - generation-request.yaml
+  - generated-image.png
+  - visual-review-report.yaml
+optional_files:
+  - selected-references.yaml
+  - failure-report.yaml
+  - logs/request.jsonl
+invariants:
+  - generated-image.png 必须是可读取的 raster 图片
+  - generation-request.yaml.output.count=1
+  - visual-review-report.yaml 必须引用 selected-section.md 和 generated-image.png
+  - 失败运行不得伪造 generated-image.png
+  - 请求记录不得包含 API key、Authorization、Cookie、secret 或 subscription_url

@@ -1,0 +1,48 @@
+registry: workflow-registry
+version: 0.1.0
+description: 规格包根目录的 Workflow 入口索引；详细阶段仍以各 Workflow 目录中的 workflow.yaml 为准。
+schema:
+  required_entry_fields: [id, title, path, readme, acceptance, independent]
+  optional_entry_fields: [aliases, trigger_keywords, daily_trigger, execution_observability]
+  path_must_exist: true
+  exactly_one_root_entry_per_workflow: true
+workflows:
+  - id: document-to-markdown-assets
+    title: 文档资产化与 Markdown 转换
+    path: workflows/document-to-markdown-assets/workflow.yaml
+    readme: workflows/document-to-markdown-assets/README.zh.md
+    acceptance: workflows/document-to-markdown-assets/ACCEPTANCE.zh.md
+    independent: true
+    aliases: [knowledge-map-image-to-md]
+    primary_output: markdown-asset-package
+    execution_entrypoint: python3 adapters/workflow_a_dispatcher.py --workflow document-to-markdown-assets --source <file> --candidate-comparison <comparison-json> --output-root <dir> --pages <explicit-pages>
+    batch_entrypoint: python3 adapters/workflow_a_batch.py --source <file-1> --source <file-2> --output-root <dir> --pages all
+    runner_compatibility_entrypoint: python3 adapters/workflow_a_runner.py --source <file> --output-root <dir> --pages <explicit-pages>
+    candidate_comparison_entrypoint: python3 adapters/workflow_a_candidate_compare.py --source-a <pptx> --source-b <pdf> --pages 3,4 --output <comparison-json>
+    source_isolation: one-source-per-run
+    batch_source_isolation: one-independent-package-per-source
+    batch_contract: contracts/workflow-a-batch.yaml
+    trigger_keywords: [文档转 Markdown]
+    daily_trigger: 文档转 Markdown
+    execution_observability:
+      before_run: [workflow_id, workflow_version, source_path, media_type, sha256, total_pages, selected_pages]
+      progress: [workflow_spec_validation, candidate_comparison, source_inventory, native_extraction, source_rendering, text_structure_or_relation_review_or_fallback, markdown_assembly, independent_validation]
+      execution_evidence: evidence/workflow-execution.json
+      final_report: reports/validation-result.json
+      statuses: [passed, needs-review, failed]
+      exit_codes: {0: passed, 1: needs-review-or-validation-failed, 2: input-or-argument-error}
+      passed_means: independent_validator_passed
+      needs_review_means: package_preserved_but_human_review_required
+      failed_means: package_not_usable
+      same_name_same_page_count_preference: pdf-original-page-render
+    online_model_calls: 0 by default
+    optional_reference_for: [markdown-to-gpt-image]
+  - id: markdown-to-gpt-image
+    title: Markdown 局部内容到 GPT-image-2 单图
+    path: workflows/markdown-to-gpt-image/workflow.yaml
+    readme: workflows/markdown-to-gpt-image/README.zh.md
+    acceptance: workflows/markdown-to-gpt-image/ACCEPTANCE.zh.md
+    independent: true
+    primary_output: single-raster-image
+    online_model_calls: 1 per generation request baseline
+    accepts_optional_reference_from: [document-to-markdown-assets]

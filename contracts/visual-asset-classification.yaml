@@ -1,0 +1,18 @@
+contract: visual-asset-classification
+version: 0.1.0
+description: mac96 对页面图执行的只读视觉资产语义分类候选报告。
+required: [schema, version, status, mode, source_fingerprint, prompt_version, prompt_path, prompt_sha256, target, selected_pages, decisions, apply, diagnostics]
+status: enum[complete, needs-review, failed]
+mode: enum[candidate-only]
+decision:
+  required: [page, asset_id, file_path, sha256, source_fingerprint, decision, reason_codes, confidence, rationale]
+  decision: enum[retain, candidate-remove, needs-review]
+  confidence: enum[high, medium, low, unknown]
+  reason_codes: enum[cover, table-of-contents, text-covered, diagram, table, flow, color-coded-structure, relation-dense-layout, needs-review]
+invariants:
+  - source_fingerprint 必须与 manifest.yaml.source.source_fingerprint 相等
+  - mode 必须为 candidate-only，报告不得授权或执行删除
+  - 每个 selected_pages 必须恰有一个 decisions 记录；缺失来源资产时 decision 必须为 needs-review
+  - candidate-remove 只有在语义文字覆盖为 complete、视觉增量为 none 且理由为 cover/table-of-contents/text-covered 时才可成立
+  - 传输失败、响应不可解析或无法区分关系结构时必须为 needs-review
+  - sha256 必须是来源页面图应用前的实际哈希；分类报告不得修改来源资产

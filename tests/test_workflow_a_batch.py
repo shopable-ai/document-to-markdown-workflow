@@ -68,7 +68,7 @@ def test_batch_config_rejects_secret_keys(tmp_path):
 
 
 def test_context_mode_is_registered_in_runner_help():
-    result = subprocess.run([sys.executable, str(ROOT / "adapters/workflow_a_runner.py"), "--help"], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, str(ROOT / "archive/legacy-adapters/workflow_a_runner.py"), "--help"], capture_output=True, text=True)
     assert result.returncode == 0
     assert "--context-mode" in result.stdout
     assert "--context-window" in result.stdout
@@ -88,7 +88,7 @@ def test_run_batch_requires_independent_package_acceptance(monkeypatch, tmp_path
         return {"command": "fake", "started_at": "now", "finished_at": "now", "status": "complete", "returncode": 0, "stdout": json.dumps({"status": "passed", "output": str(package)}), "stderr": ""}
 
     monkeypatch.setattr(module, "_run_command", fake_runner)
-    code, state = module.run_batch([source], tmp_path / "out")
+    code, state = module.run_batch([source], tmp_path / "out", legacy_compat=True)
     assert code == 0
     assert state["status"] == "succeeded"
     assert state["summary"]["passed"] == 1
@@ -109,7 +109,7 @@ def test_page_batch_checkpoint_rejects_changed_source(tmp_path):
     checkpoint = tmp_path / "checkpoint.json"
     checkpoint.write_text(json.dumps({"source_sha256": "different"}), encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256"):
-        module.run_page_batches(source, tmp_path / "out", "1", "1", 1, checkpoint)
+        module.run_page_batches(source, tmp_path / "out", "1", "1", 1, checkpoint, legacy_compat=True)
 
 
 def test_batch_help_exposes_smoke_and_checkpoint_controls():
@@ -138,9 +138,21 @@ def test_page_batch_stops_on_failed_independent_validator(monkeypatch, tmp_path)
         return {"command": "fake", "started_at": "now", "finished_at": "now", "status": "complete", "returncode": 1 if failed else 0, "stdout": json.dumps({"status": "needs-review", "output": str(package)}), "stderr": ""}
 
     monkeypatch.setattr(module, "_run_command", fake_runner)
-    code, state = module.run_page_batches(source, tmp_path / "out", "24-25", "24", 1)
+    code, state = module.run_page_batches(source, tmp_path / "out", "24-25", "24", 1, legacy_compat=True)
     assert code == 1
     assert state["status"] == "needs-review"
     assert state["stop_reason"]["batch_index"] == 2
     assert state["stop_reason"]["stage"] == "batch-validation"
     assert state["next_page"] == 25
+
+
+def test_batch_cli_is_fail_closed_without_legacy_compat(tmp_path):
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"pdf-fixture")
+    result = subprocess.run(
+        [sys.executable, str(BATCH), "--source", str(source), "--output-root", str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "legacy-compat" in result.stderr

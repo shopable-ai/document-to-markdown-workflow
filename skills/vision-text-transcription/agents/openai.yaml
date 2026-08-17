@@ -1,0 +1,4 @@
+interface:
+  display_name: "页面视觉理解（文字模式兼容别名）"
+  short_description: "兼容旧调用；正式入口支持 text、layout、full 模式"
+  default_prompt: "请使用 vision-page-analysis 的 text 模式读取当前单图，不读取其他文件。"

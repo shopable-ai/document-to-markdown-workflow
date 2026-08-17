@@ -31,9 +31,63 @@ def _write(path: Path, value):
         path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _flatten_fixture_assets(package: Path) -> None:
+    """Materialize the ignored fixture as the current flat package layout."""
+
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    replacements: dict[str, str] = {}
+    assets_root = package / "assets"
+    assets_root.mkdir(parents=True, exist_ok=True)
+    for asset in manifest.get("assets", []) or []:
+        if not isinstance(asset, dict):
+            continue
+        old_relative = asset.get("file_path")
+        if not isinstance(old_relative, str):
+            continue
+        occurrence = ((asset.get("source") or {}).get("source_occurrences") or [{}])[0]
+        page = occurrence.get("page") if isinstance(occurrence, dict) else None
+        semantic_slug = ((asset.get("naming") or {}).get("semantic_slug") or "asset").strip()
+        old_path = package / old_relative
+        if not old_path.exists() and isinstance(page, int):
+            extension = old_path.suffix.lower() or ".bin"
+            candidates = sorted(assets_root.glob(f"{semantic_slug}*{extension}"))
+            candidates += sorted((assets_root / "pages").glob(f"{semantic_slug}*{extension}"))
+            if candidates:
+                old_path = candidates[0]
+                old_relative = old_path.relative_to(package).as_posix()
+        suffix = old_path.suffix.lower() or ".bin"
+        new_name = f"{semantic_slug}{suffix}"
+        ordinal = 1
+        while (assets_root / new_name).exists() and (assets_root / new_name).resolve() != old_path.resolve():
+            ordinal += 1
+            new_name = f"{semantic_slug}-{ordinal:02d}{suffix}"
+        new_path = assets_root / new_name
+        if old_path == new_path:
+            continue
+        shutil.move(str(old_path), str(new_path))
+        new_relative = new_path.relative_to(package).as_posix()
+        replacements[old_relative] = new_relative
+        asset["file_name"] = new_path.name
+        asset["file_path"] = new_relative
+
+    for path in package.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".md", ".yaml", ".yml", ".json"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for old_relative, new_relative in replacements.items():
+            text = text.replace(old_relative, new_relative)
+        path.write_text(text, encoding="utf-8")
+
+    for directory in sorted((package / "assets").glob("*"), reverse=True):
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+
+
 def make_package(tmp_path: Path) -> Path:
     package = tmp_path / "package"
     shutil.copytree(FIXTURE_RUN, package)
+    _flatten_fixture_assets(package)
     manifest_path = package / "manifest.yaml"
     manifest = _load(manifest_path)
     source_fingerprint = manifest["assets"][0]["source"]["source_fingerprint"]
@@ -48,7 +102,7 @@ def make_package(tmp_path: Path) -> Path:
                 "selected_original_pages": [24, 25],
             },
             "markdown": {
-                "path": "document.md",
+                "path": "index.md",
                 "sections": [
                     {
                         "section_id": "page-24",
@@ -115,7 +169,7 @@ def test_real_package_validator_accepts_structurally_valid_needs_review_package(
 
 def test_real_package_validator_detects_media_hash_drift(tmp_path):
     package = make_package(tmp_path)
-    asset = package / "assets/pages/work-models__p024__page-render__leadership-3357__original-page__o01.png"
+    asset = package / "assets/leadership-3357.png"
     asset.write_bytes(asset.read_bytes() + b"corruption")
     result = validate_package(package)
     assert any(error.startswith("integrity-check-failed:") for error in result.errors)
@@ -123,10 +177,75 @@ def test_real_package_validator_detects_media_hash_drift(tmp_path):
 
 def test_real_package_validator_detects_broken_markdown_link(tmp_path):
     package = make_package(tmp_path)
-    document = package / "document.md"
-    document.write_text(document.read_text(encoding="utf-8").replace("assets/pages/", "assets/missing/"), encoding="utf-8")
+    document = package / "index.md"
+    document.write_text(document.read_text(encoding="utf-8").replace("assets/leadership-3357.png", "assets/missing/leadership-3357.png"), encoding="utf-8")
     result = validate_package(package)
     assert any(error.startswith("path.missing:") or error.startswith("broken-link:") for error in result.errors)
+
+
+def test_real_package_validator_rejects_ocr_review_marker_in_reader_markdown(tmp_path):
+    package = make_package(tmp_path)
+    document = package / "index.md"
+    document.write_text(document.read_text(encoding="utf-8") + "\nOCR 待复核：请检查该文字。\n", encoding="utf-8")
+
+    result = validate_package(package)
+
+    assert any(error.startswith("reader-layer-separation:") for error in result.errors)
+
+
+def test_real_package_validator_rejects_page_number_heading(tmp_path):
+    package = make_package(tmp_path)
+    document = package / "index.md"
+    document.write_text(document.read_text(encoding="utf-8").replace("## 提升领导力的3357", "## 第 24 页", 1), encoding="utf-8")
+
+    result = validate_package(package)
+
+    assert any(error.startswith("reader-semantic-content:") for error in result.errors)
+
+
+def test_real_package_validator_rejects_untraceable_markdown_content_repair(tmp_path):
+    package = make_package(tmp_path)
+    review = package / "reviews" / "markdown-content-repair.yaml"
+    review.parent.mkdir()
+    _write(
+        review,
+        {
+            "contract": "markdown-content-repair",
+            "status": "deferred",
+            "items": [{
+                "id": "repair-1",
+                "kind": "paragraph",
+                "source_occurrence": "missing-occurrence",
+                "section_id": "page-24",
+                "source_text": "文 字",
+                "candidate_text": "文字",
+                "proposed_text": "文字",
+                "status": "deferred",
+                "repair": {
+                    "operation": "join-split-text",
+                    "basis": "extracted-text",
+                    "before": "文 字",
+                    "after": "文字",
+                },
+            }],
+        },
+    )
+
+    result = validate_package(package)
+
+    assert any(error.startswith("markdown-content-repair:") for error in result.errors)
+
+
+def test_real_package_validator_requires_page_projection_triplets_for_mac96(tmp_path):
+    package = make_package(tmp_path)
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    manifest["processing"]["execution_path"] = "mac96-direct-vision"
+    _write(manifest_path, manifest)
+
+    result = validate_package(package)
+
+    assert any(error.startswith("page-output-contract:") for error in result.errors)
 
 
 def test_real_package_validator_detects_stage_and_report_status_drift(tmp_path):

@@ -1,0 +1,106 @@
+contract: page-markdown-unit
+version: 0.1.0
+description: 单页读者层 Markdown 工作单元、阶段门、确定性合并和派生预览契约。
+status: active
+scope: reader-layer-page-repair-only
+required_metadata:
+  - page_number
+  - unit_status
+  - semantic_title
+  - relation_status
+required_sections:
+  - 正文
+  - 列表/图示文字
+  - 表格与公式
+  - 解读
+  - 举例与思考
+  - 模型结构
+  - 已确认的关系说明
+  - 原始页面图
+  - 待核对项
+metadata:
+  page_number: integer
+  unit_status: enum[passed, needs-review, failed]
+  semantic_title: string
+  relation_status: enum[confirmed, needs-review, unknown]
+  original_page_image: relative-path
+inputs:
+  split:
+    source_document: existing-index-md
+    selected_pages: explicit-page-selector
+    page_image: existing-source-page-image
+  repair:
+    page_unit: one-page-markdown-file
+    allowed_reader_evidence: [selected-page-markdown, selected-page-image]
+  merge:
+    page_units: one-or-more-page-units
+    ordering: ascending-page-number
+outputs:
+  page_unit: p<page-3-digits>.md
+  derived_preview: document-temp.md
+  final_document: index.md
+  validation_report: page-validation.json
+phase_gates:
+  - id: single-page
+    pages: [1]
+    entry: split-one-page
+    exit: page-scope-structural-guard-passed
+  - id: small-batch
+    pages: [2, 3, 4, 5]
+    requires: [single-page-page-scope-structural-guard-passed, human-review-of-page-1]
+    entry: split-explicit-pages
+    exit: page-scope-structural-guard-passed-and-human-review
+  - id: full-batch
+    pages: 6-100
+    requires: [small-batch-page-scope-structural-guard-passed, human-review-of-pages-2-5]
+    entry: split-explicit-pages
+    exit: page-scope-structural-guard-passed-and-human-review
+page_repair_verification:
+  mode: inline-structural-guard
+  separate_test_stage: false
+  required_checks:
+    - 当前页 Markdown 非空
+    - 原始页面图链接保持不变
+    - 页面编号和 Unknown/needs-review 边界保持不变
+    - 未新增来源外文字或工程字段
+    - 只写回当前 page-unit
+  human_review:
+    required_before: [small-batch, full-batch]
+    evidence: reviews/markdown-content-repair.yaml
+rules:
+  page_isolation:
+    - 修复输入只能包含当前页面单元和当前页面图。
+    - 页面单元不得跨页、跨列或跨未确认视觉容器拼接文字。
+  content_layers:
+    - 原始 OCR JSON、bbox、置信度、逐页 Vision JSON、页面图和原始 manifest.yaml 只读。
+    - 候选文字、候选标题和未确认关系不得升级为 confirmed。
+  reader_order:
+    - 语义标题
+    - 正文
+    - 列表/图示文字
+    - 表格与公式
+    - 解读
+    - 举例与思考
+    - 模型结构
+    - 已确认的关系说明
+    - 原始页面图
+    - 待核对项
+  relation_safety:
+    - 只有有明确视觉证据的关系才能进入已确认的关系说明。
+    - 未确认关系必须进入待核对项并标记 Unknown/needs-review。
+    - 不得生成未经视觉确认的箭头、层级、流程、矩阵或颜色关系说明。
+  deterministic_split:
+    - 页面编号来自固定页面边界和原始页面图链接。
+    - 选页拆分只写选定页面单元，不把其他页面正文写入单元。
+  deterministic_merge:
+    - 页面文件按 page_number 升序合并。
+    - 原始页面图链接逐字保持不变。
+    - 合并不得重新推断、摘要、翻译或补写来源中不存在的文字。
+    - 合并失败时不得生成成功预览。
+  derived_preview:
+    - document-temp.md 只是页面单元的确定性派生预览。
+    - document-temp.md 不得覆盖、替代或成为 index.md 的事实来源。
+  statuses:
+    - unit_status=passed 只表示本页面读者层结构验收通过。
+    - relation_status=needs-review 仍必须保留在待核对项。
+    - failed 和 needs-review 不得作为下一阶段通过证据。

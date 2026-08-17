@@ -71,7 +71,7 @@ def test_visual_baselines_exist():
 
 def test_fixture_run_marks_outputs_as_fixture_samples():
     run = ROOT / "runs" / "fixture-contract-20260814-0118" / "outputs" / "document-asset-package"
-    document = run / "document.md"
+    document = run / "index.md"
     manifest = run / "manifest.yaml"
     report = (ROOT / "runs" / "fixture-contract-20260814-0118" / "test-report.yaml").read_text()
     manifest_text = manifest.read_text()
@@ -90,10 +90,10 @@ def test_fixture_run_marks_outputs_as_fixture_samples():
     assert "一句话主题" not in text
     assert "处理状态" not in text
     for name in [
-        "work-models__p024__page-render__leadership-3357__original-page__o01.png",
-        "work-models__p025__page-render__self-vs-others__original-page__o01.png",
+        "leadership-3357.png",
+        "self-vs-others.png",
     ]:
-        assert (run / "assets" / "pages" / name).is_file()
+        assert (run / "assets" / name).is_file()
         assert name in text
     assert "kind: markdown-asset-package-fixture-sample" in manifest_text
     assert "status: fixture-contract-only" in manifest_text
@@ -102,14 +102,14 @@ def test_fixture_run_marks_outputs_as_fixture_samples():
 
 def test_fixture_sample_links_and_manifest_paths_exist():
     run = ROOT / "runs" / "fixture-contract-20260814-0118" / "outputs" / "document-asset-package"
-    document = run / "document.md"
+    document = run / "index.md"
     manifest = run / "manifest.yaml"
     document_text = document.read_text()
     manifest_text = manifest.read_text()
     linked_assets = re.findall(r"!\[[^]]*\]\(<([^>]+)>\)", document_text)
     assert linked_assets == [
-        "assets/pages/work-models__p024__page-render__leadership-3357__original-page__o01.png",
-        "assets/pages/work-models__p025__page-render__self-vs-others__original-page__o01.png",
+        "assets/leadership-3357.png",
+        "assets/self-vs-others.png",
     ]
     for relative_path in linked_assets:
         assert (run / unquote(relative_path)).is_file()
@@ -118,7 +118,7 @@ def test_fixture_sample_links_and_manifest_paths_exist():
 
 def test_fixture_markdown_places_visual_assets_after_semantic_content():
     run = ROOT / "runs" / "fixture-contract-20260814-0118" / "outputs" / "document-asset-package"
-    text = (run / "document.md").read_text()
+    text = (run / "index.md").read_text()
     p24 = text.index("## 提升领导力的3357")
     p24_img = text.index("![", p24)
     p24_structure = text.index("三零：", p24)
@@ -132,7 +132,7 @@ def test_fixture_markdown_places_visual_assets_after_semantic_content():
 
 
 def test_workflow_a_runner_keeps_generic_source_and_page_contract():
-    runner = (ROOT.parent / "adapters" / "workflow_a_runner.py").read_text(encoding="utf-8")
+    runner = (ROOT.parent / "archive/legacy-adapters/workflow_a_runner.py").read_text(encoding="utf-8")
     assert "--source" in runner
     assert "--pages" in runner
     assert "pages = [24, 25]" not in runner
@@ -156,20 +156,16 @@ def test_quality_target_contract_is_95_plus_and_has_hard_gates():
 def test_fixture_manifest_uses_a6_dual_name_and_traceable_occurrences():
     run = ROOT / "runs" / "fixture-contract-20260814-0118" / "outputs" / "document-asset-package"
     manifest = (run / "manifest.yaml").read_text()
-    filename_pattern = re.compile(
-        r"^[a-z0-9]+(?:-[a-z0-9]+)*__p\d{3}__"
-        r"(?:page-render|embedded-media|complex-region|crop|input-image)__"
-        r"[a-z0-9]+(?:-[a-z0-9]+)*__[a-z0-9]+(?:-[a-z0-9]+)*__o\d{2}\.[a-z0-9]+$"
-    )
+    filename_pattern = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:-\d{2})?\.[a-z0-9]+$")
     names = [
-        "work-models__p024__page-render__leadership-3357__original-page__o01.png",
-        "work-models__p025__page-render__self-vs-others__original-page__o01.png",
+        "leadership-3357.png",
+        "self-vs-others.png",
     ]
     assert len(re.findall(r"^    file_name:", manifest, re.MULTILINE)) == 2
     for name in names:
         assert filename_pattern.fullmatch(name)
         assert f"file_name: {name}" in manifest
-        assert f"file_path: assets/pages/{name}" in manifest
+        assert f"file_path: assets/{name}" in manifest
     assert manifest.count("display_name: 18个工作思维模型｜") == 2
     assert manifest.count("source_occurrence_id:") == 2
     assert "page: 24" in manifest

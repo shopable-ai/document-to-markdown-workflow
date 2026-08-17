@@ -1,5 +1,7 @@
 import json
 import sys
+import shutil
+import subprocess
 from pathlib import Path
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
@@ -9,12 +11,12 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "tests/fixtures/smoke-matrix/fixture.yaml"
-SCRIPT = ROOT / "scripts/materialize_workflow_a_smoke_inputs.py"
+SCRIPT = ROOT / "tests/scripts/materialize_workflow_a_smoke_inputs.py"
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
-REFERENCE_PPTX = ROOT / "fixtures/18个工作思维模型-last-2-slides/selected/18个工作思维模型-第24-25页.pptx"
-REFERENCE_PDF = ROOT / "fixtures/18个工作思维模型-last-2-slides/selected/18个工作思维模型-第24-25页.pdf"
+REFERENCE_PPTX = ROOT / "tests/fixtures/18个工作思维模型-last-2-slides/selected/18个工作思维模型-第24-25页.pptx"
+REFERENCE_PDF = ROOT / "tests/fixtures/18个工作思维模型-last-2-slides/selected/18个工作思维模型-第24-25页.pdf"
 
 
 def _slide_parts(path: Path) -> list[str]:
@@ -40,8 +42,13 @@ def _pptx_text(path: Path) -> str:
 
 
 def _pdf_page_count(path: Path) -> int:
-    from pypdf import PdfReader
-
+    try:
+        from pypdf import PdfReader
+    except ModuleNotFoundError:
+        pdfinfo = shutil.which("pdfinfo")
+        assert pdfinfo, "pypdf or pdfinfo is required for PDF fixture checks"
+        result = subprocess.run([pdfinfo, str(path)], check=True, capture_output=True, text=True)
+        return next(int(line.split(":", 1)[1].strip()) for line in result.stdout.splitlines() if line.startswith("Pages:"))
     return len(PdfReader(str(path)).pages)
 
 
@@ -99,7 +106,7 @@ def test_materializer_creates_six_inputs_without_a_business_package(tmp_path):
     assert (output / "pptx-layout-anomaly-pdf-candidates/layout-anomaly.pptx").is_file()
     assert (output / "pptx-layout-anomaly-pdf-candidates/layout-anomaly.pdf").is_file()
     assert (output / "materialization-record.json").is_file()
-    assert not (output / "document.md").exists()
+    assert not (output / "index.md").exists()
     assert not (output / "assets").exists()
     assert record["generated_files_are_test_inputs_not_production_outputs"] is True
 

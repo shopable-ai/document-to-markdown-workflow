@@ -1,0 +1,30 @@
+profile_id: workflow-a-reader-noise-compatibility
+version: 0.1.0
+status: compatibility-only
+description: >-
+  旧版思维模型资料使用过的页眉、布局标签和少量 OCR 字符修复规则。
+  这些规则不代表任何新来源的事实；新来源应先通过页面证据确认，必要时再建立新的 profile。
+generic_headers:
+  - 每天学一个思维模型
+  - 查理芒格思维模型与100个思维模型
+  - 查理芒格的100个思维模型
+  - 《万物皆模型》100个思维模型
+  - Charlie Munger's 100 Mental Models
+  - Charlie Munger's Mind Model And 100 Mind Models
+  - Charlie Munger 100 Mental Models
+  - Charlie Munger 100 Mind Models
+  - Charlie Munger
+  - 模型结构
+  - 模型结构推导
+compact_prefixes:
+  - CHARLIEMUNGER
+noise_patterns:
+  - '^(?:EVERYTHING|ISMODEL|MENTALMODELS)$'
+title_signal_pattern: '模型|法则|方法|分析法|理论|原则|定律|效应|视角|原理|系统|成本|心流|SWOT|PDCA|5W1H|HOOK'
+glyph_replacements:
+  蕞: 最
+  決: 决
+  綁: 绑
+special_title_repairs:
+  - raw_pattern: '^福格\s*行\s*模型$'
+    supported_pattern: '^(福格行为模型)'

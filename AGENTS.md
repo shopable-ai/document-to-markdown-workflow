@@ -36,19 +36,23 @@ Workflow A 的唯一推荐生产入口是“固定 Workflow 提示词 + 单一 `
 每次调用只处理一个来源，不把 PPTX 与 PDF 自动配对：
 
 ```bash
-python3 adapters/workflow_a_runner.py \
+python3 adapters/workflow_a_source_runner.py \
   --source "/absolute/path/input.pptx" \
   --output-root "/absolute/path/output-root" \
-  --pages all
+  --pages all \
+  --plan-only
 
-python3 adapters/workflow_a_runner.py \
+python3 adapters/workflow_a_source_runner.py \
   --source "/absolute/path/input.pdf" \
   --output-root "/absolute/path/output-root" \
-  --pages all
+  --pages all \
+  --plan-only
 ```
 
-`--pages` 支持 `all`、单页、逗号列表和范围（如 `1-3,7`）。旧的 `--pptx` 或
-`--pdf` 只保留为单一来源兼容别名，不能同时传入。正式入口、阶段和输出契约
+`--pages` 支持 `all`、单页、逗号列表和范围（如 `1-3,7`）。以上是当前
+source-independent 的安全计划入口；`archive/legacy-adapters/workflow_a_runner.py` 只保留为明确指定的
+legacy/document-profile 兼容别名。旧的 `--pptx` 或
+`--pdf` 不能同时传入。正式入口、阶段和输出契约
 分别登记在 `workflow-registry.yaml`、`workflows/document-to-markdown-assets/workflow.yaml`
 和 `contracts/workflow-a-output-layout.yaml`。
 
@@ -59,11 +63,21 @@ python3 adapters/workflow_a_runner.py \
 - `status: passed`、`needs-review` 或 `failed`；
 - 资产包绝对路径和实际处理页数；
 - 独立验收器结果及 `reports/validation-result.json`；
-- `document.md`、`assets/` 和报告的下一步使用方式。
+- `index.md`、`assets/` 和报告的下一步使用方式。
 
 `passed` 才能作为已验收结果交给后续流程；`needs-review` 只能作为保留证据，必须先查看
 报告和页面资产；`failed` 不能声称转换完成。runner 自己生成的状态不替代独立验收器。
 命令退出码为：`0` 表示 `passed`，`1` 表示已生成但需复核或验收失败，`2` 表示输入/参数错误。
+
+## 页面 Markdown 修复阶段门
+
+读者层 Markdown 修复必须遵循固定推进顺序：**先单页，第 1 页的页面结构守卫通过后再小批量第 2–5 页，人工复核通过后才允许全量第 6–100 页**。前一阶段没有页面结构守卫和规定阶段人工查看记录时，不得启动下一阶段，也不得以一次全量运行替代阶段门。
+
+- 修复一页时只加载该页工作单元；不得为修复一页把其他页面正文、OCR 候选、bbox 或逐页 Vision JSON 读入修复输入。
+- 原始 OCR JSON、bbox、置信度、逐页 Vision JSON、页面图和原始 `manifest.yaml` 只读保留；读者层修复不得覆盖、重排或伪造这些来源证据。
+- 页面单元格式、拆分/合并规则和 `document-temp.md` 的派生边界以 [`contracts/page-markdown-unit.yaml`](contracts/page-markdown-unit.yaml)、[`skills/page-markdown-unit/SKILL.md`](skills/page-markdown-unit/SKILL.md) 和 [`workflows/document-to-markdown-assets/workflow.yaml`](workflows/document-to-markdown-assets/workflow.yaml) 为准；本文件只规定阶段门，不复制详细格式。
+- `document-temp.md` 只能作为当前已通过页面单元的可审阅预览，不能覆盖或替代最终 `index.md`，也不能成为新的事实来源。
+- 无法由视觉证据确认的图示关系必须保留为 `Unknown`/`needs-review`，不得生成未经确认的箭头、层级、流程、矩阵或颜色关系说明。
 
 ## 验证
 
@@ -73,6 +87,10 @@ python3 adapters/workflow_a_runner.py \
 python3 tests/validate_workflow_package.py
 python3 -m pytest -q tests/test_repository_layout.py tests/test_real_output_root_validator.py
 ```
+
+以上命令用于规格包或完整资产包维护，不是单页 Markdown 修复的必经步骤。单页修复只执行
+适配器内的页面结构守卫、当前页写回检查和规定阶段的人工查看；完整生产包仍按 Workflow A
+的 A7 规则执行独立验收。
 
 对具体真实包，另外执行：
 

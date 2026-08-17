@@ -23,7 +23,7 @@
 
 ![第24页-提升领导力的3357-原始页面](../selected/pdf-page-24.png)
 
-> A6 file_name: `work-models__p024__page-render__leadership-3357__original-page__o01.png`
+> A6 file_name: `leadership-3357.png`
 
 ### 待核对与未知形式
 
@@ -54,7 +54,7 @@
 
 ![第25页-搞定自己与别人-原始页面](../selected/pdf-page-25.png)
 
-> A6 file_name: `work-models__p025__page-render__self-vs-others__original-page__o01.png`
+> A6 file_name: `self-vs-others.png`
 
 ### 待核对与未知形式
 

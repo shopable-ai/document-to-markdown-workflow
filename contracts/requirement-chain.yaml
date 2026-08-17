@@ -7,7 +7,7 @@ purpose: >-
 scope: frontmatter-only
 status: awaiting-human-confirmation
 authority_order:
-  - markdown-human-review
+  - markdown-content-repair
   - machine-contract-projection
   - execution-adapter
 description_policy: >-
@@ -77,14 +77,23 @@ canonical_chain:
     source_files:
       - TASK-TREE.zh.md
       - WORKFLOW-MAP.zh.md
+      - EXECUTION-TASK-TREE.zh.md
     required_fields:
       - requirement_groups
       - engineering_task_mapping
+      - execution_task_tree
+      - execution_control_tree
+      - content_quality_tree
+      - vertical_slice_gate
+      - language_quality_repair
+      - observability_gate
+      - scale_expansion
+      - test_matrix
       - acceptance_questions
       - dependency_order
     gate:
       id: task-complete
-      assertion: TASK-TREE 只含需求语言和推进顺序；工程 Task 在 Chain 中单列并回指已确认的需求组。
+      assertion: TASK-TREE 只含需求语言和推进顺序；工程 Task 在 Chain 中单列并回指已确认的需求组；执行任务树先完成单页纵向切片，再扩展多页、多文件和测试门。
       failure_status: blocked
 
   - id: workflow
@@ -199,6 +208,7 @@ frontmatter_gate:
   human_readable_first: true
   primary_review_files: [GOAL.zh.md, TASK-TREE.zh.md]
   engineering_chain_review_file: WORKFLOW-MAP.zh.md
+  engineering_task_tree_file: EXECUTION-TASK-TREE.zh.md
   projection_files:
     - contracts/requirement-chain.yaml
     - workflow-registry.yaml

@@ -8,7 +8,7 @@ source:
     pdf: ../source/18个工作思维模型.pdf
 assets:
   - asset_id: fixture-page-24
-    file_name: work-models__p024__page-render__leadership-3357__original-page__o01.png
+    file_name: leadership-3357.png
     file_path: ../selected/pdf-page-24.png
     display_name: 18个工作思维模型｜第24页｜提升领导力的3357｜原始页面
     asset_kind: page-render
@@ -43,7 +43,7 @@ assets:
       status: generated
     status: available
   - asset_id: fixture-page-25
-    file_name: work-models__p025__page-render__self-vs-others__original-page__o01.png
+    file_name: self-vs-others.png
     file_path: ../selected/pdf-page-25.png
     display_name: 18个工作思维模型｜第25页｜搞定自己 vs 搞定别人｜原始页面
     asset_kind: page-render

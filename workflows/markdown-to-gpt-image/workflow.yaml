@@ -23,7 +23,10 @@ inputs:
     types: [flow, cause-effect, comparison, matrix, timeline, concept-map, other]
     required: false
   - name: reference_assets
-    types: [source-visual-asset, image]
+    types: [source-visual-asset, visual-reconstruction-profile, image]
+    required: false
+  - name: visual_reconstruction_profile
+    types: [visual-reconstruction-profile]
     required: false
 outputs:
   primary:
@@ -77,8 +80,8 @@ stages:
     route: local-code
     output: selected-references
     evidence: [selected-references.yaml]
-    gate: 每个参考图都有来源和用途；无参考图也可继续
-    required_fields: [references, provenance, usage, status]
+    gate: 每个参考图都有来源和用途；若资产带 visual-reconstruction-profile，必须一并登记 profile_id、用途和未决项；无参考图也可继续
+    required_fields: [references, reconstruction_profiles, provenance, usage, status]
     score_dimensions: [provenance, authorization-boundary, relevance, evidence-honesty]
   - id: B5
     name: 提示词组装
@@ -88,7 +91,7 @@ stages:
     route: local-code
     output: generation-request
     evidence: [generation-request.yaml]
-    gate: 请求包含内容、结构、文字保真、画布、风格和禁用项；不含秘密
+    gate: 请求包含内容、结构、文字保真、画布、风格和禁用项；使用 profile 时必须记录 profile_id、来源字段和未决项；不含秘密
     required_fields: [request_id, markdown_source, visual_plan, prompt, model, usage, status]
     score_dimensions: [request-completeness, secret-safety, provenance, evidence-honesty]
   - id: B6

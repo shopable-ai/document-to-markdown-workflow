@@ -1,9 +1,9 @@
 registry: skill-registry
 version: 0.1.0
-description: Workflow 阶段引用的可复用 Skill 注册表；每个条目对应一个独立 SKILL.md。
+description: Workflow 阶段引用的可复用 Skill 注册表；条目可以是正式 Skill 或指向正式 Skill 的兼容别名。
 schema:
   required_entry_fields: [id, path]
-  compatibility_entry_fields: [kind, maps_to_workflow, profile]
+  compatibility_entry_fields: [kind, maps_to_workflow, profile, alias_of]
   path_must_exist: true
   frontmatter_name_must_equal_id: true
   stage_references_must_be_registered: true
@@ -27,14 +27,26 @@ skills:
     path: skills/region-cropping/SKILL.md
   - id: local-ocr
     path: skills/local-ocr/SKILL.md
+  - id: vision-page-analysis
+    path: skills/vision-page-analysis/SKILL.md
   - id: text-source-reconciliation
     path: skills/text-source-reconciliation/SKILL.md
   - id: layout-relation-reconciliation
     path: skills/layout-relation-reconciliation/SKILL.md
+  - id: vision-text-transcription
+    path: skills/vision-text-transcription/SKILL.md
+    kind: compatibility-alias
+    alias_of: vision-page-analysis
   - id: mac96-visual-review
     path: skills/mac96-visual-review/SKILL.md
+    kind: compatibility-alias
+    alias_of: vision-page-analysis
   - id: markdown-structure-builder
     path: skills/markdown-structure-builder/SKILL.md
+  - id: page-markdown-unit
+    path: skills/page-markdown-unit/SKILL.md
+  - id: markdown-content-repair
+    path: skills/markdown-content-repair/SKILL.md
   - id: source-asset-linker
     path: skills/source-asset-linker/SKILL.md
   - id: uncertainty-marking
@@ -45,8 +57,15 @@ skills:
     path: skills/source-occurrence-registration/SKILL.md
   - id: asset-deduplication
     path: skills/asset-deduplication/SKILL.md
+  - id: semantic-visual-asset-pruning
+    path: skills/semantic-visual-asset-pruning/SKILL.md
   - id: asset-package-validation
     path: skills/asset-package-validation/SKILL.md
+  - id: markdown-asset-copy
+    path: skills/markdown-asset-copy/SKILL.md
+    modes: [single_markdown, collection_merge]
+    collection_merge_entrypoint: python3 adapters/markdown_collection_merge.py
+    collection_merge_contract: contracts/markdown-collection-output-layout.yaml
   - id: markdown-section-selector
     path: skills/markdown-section-selector/SKILL.md
   - id: visual-use-case-classifier
@@ -59,6 +78,8 @@ skills:
     path: skills/source-visual-reference-selector/SKILL.md
   - id: visual-prompt-builder
     path: skills/visual-prompt-builder/SKILL.md
+  - id: visual-reconstruction-profile
+    path: skills/visual-reconstruction-profile/SKILL.md
   - id: gpt-image-2-generation
     path: skills/gpt-image-2-generation/SKILL.md
   - id: generated-image-review

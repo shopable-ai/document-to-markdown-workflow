@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Small, observable dispatcher for Workflow A.
+"""Small, observable dispatcher for the active source-independent Workflow A runner.
 
-The project intentionally does not grow a general workflow engine here.  This
-adapter reads the registered Workflow and its phase-gate specification, records
-the A1-A7 execution envelope, then invokes the existing candidate comparator
-and single-source runner as child commands.
+The dispatcher reads the registered Workflow and its phase-gate specification,
+records the A1-A7 envelope, runs the explicit candidate comparison, and then
+invokes the active plan-only source runner.  The legacy document-profile
+runner is deliberately not part of this path.
 """
 from __future__ import annotations
 
@@ -19,10 +19,16 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from workflow_a_preflight import run_preflight
+except ImportError:  # pragma: no cover - package-style imports in test tools
+    from .workflow_a_preflight import run_preflight
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "workflow-registry.yaml"
 WORKFLOW = ROOT / "workflows/document-to-markdown-assets/workflow.yaml"
+ACTIVE_RUNNER = ROOT / "adapters/workflow_a_source_runner.py"
 
 
 def now() -> str:
@@ -77,6 +83,25 @@ def run_command(command: list[str], *, cwd: Path, timeout: int = 1800) -> dict:
     return record
 
 
+def candidate_comparison_gate(path: Path, source: Path) -> tuple[bool, list[str]]:
+    """Validate the completed preflight before starting the conversion runner."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, [f"candidate comparison is unreadable: {exc}"]
+    failures: list[str] = []
+    if not value.get("preferred_source"):
+        failures.append("preferred_source is missing")
+    elif Path(str(value["preferred_source"])).expanduser().resolve() != source:
+        failures.append("preferred_source does not match selected source")
+    candidates = value.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) != 2:
+        failures.append("candidate comparison must retain exactly two candidates")
+    if not value.get("selected_pages"):
+        failures.append("selected_pages is missing")
+    return not failures, failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dispatch registered Workflow A stages")
     parser.add_argument("--workflow", required=True)
@@ -109,6 +134,10 @@ def main() -> int:
     if len(candidate_paths) != 2 or any(not item.is_file() for item in candidate_paths):
         parser.error("candidate comparison must retain two readable source candidates")
     output_root.mkdir(parents=True, exist_ok=True)
+    preflight = run_preflight(source, output_root, args.pages, candidate_comparison=comparison)
+    preflight_path = output_root / ".preflight" / f"{source.stem}-{preflight['source'].get('sha256', 'unknown')[:8]}-{now().replace(':', '').replace('+00:00', 'z')}.json"
+    preflight_path.parent.mkdir(parents=True, exist_ok=True)
+    preflight_path.write_text(json.dumps(preflight, ensure_ascii=False, indent=2), encoding="utf-8")
     execution_path = output_root / "evidence" / "workflow-execution.json"
     execution_path.parent.mkdir(parents=True, exist_ok=True)
     started = now()
@@ -123,28 +152,37 @@ def main() -> int:
         "stages": [{"stage_id": stage["id"], "name": stage.get("name"), "status": "not-run"} for stage in workflow["stages"]],
         "commands": [],
         "fallback": [],
+        "preflight": {"status": preflight["status"], "can_start": preflight["can_start"], "path": str(preflight_path), "failures": preflight.get("failures", []), "warnings": preflight.get("warnings", [])},
         "status": "running",
     }
 
-    # Re-run the explicit candidate comparator using the candidates already
-    # recorded in the user's comparison file.  This keeps the execution chain
-    # observable without inventing a second selection policy.
-    comparison_command = [
-        sys.executable,
-        str(ROOT / "adapters/workflow_a_candidate_compare.py"),
-        "--source-a",
-        str(candidate_paths[0]),
-        "--source-b",
-        str(candidate_paths[1]),
-        "--pages",
-        args.pages,
-        "--output",
-        str(comparison),
-    ]
-    comparison_record = run_command(comparison_command, cwd=ROOT)
-    record["commands"].append({"stage": "candidate-comparison", **comparison_record})
-    if comparison_record["status"] != "complete":
+    if not preflight["can_start"]:
         record["status"] = "failed"
+        record["stop_reason"] = {"stage": "execution_preflight", "diagnostics": [item["message"] for item in preflight.get("failures", [])], "next_action": preflight["next_action"]}
+        record["finished_at"] = now()
+        execution_path.parent.mkdir(parents=True, exist_ok=True)
+        execution_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({"status": "failed", "execution": str(execution_path), "preflight": str(preflight_path)}, ensure_ascii=False))
+        return 1
+
+    # Plan-only dispatch consumes the already recorded comparison as input.
+    # Re-running the comparator here would re-enter the archived compatibility
+    # adapter through its historical helper imports.
+    comparison_record = {
+        "status": "skipped",
+        "command": "not-run; candidate comparison was supplied and preflight-checked",
+        "started_at": now(),
+        "finished_at": now(),
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+    }
+    record["commands"].append({"stage": "candidate-comparison", **comparison_record})
+    comparison_ok, comparison_failures = candidate_comparison_gate(comparison, source)
+    record["stages"][0].update({"status": "complete" if comparison_ok else "failed", "diagnostics": comparison_failures})
+    if not comparison_ok:
+        record["status"] = "failed"
+        record["stop_reason"] = {"stage": "candidate-comparison", "diagnostics": comparison_failures, "next_action": "修复来源候选预检后重新运行；不得启动后续 runner。"}
         record["finished_at"] = now()
         execution_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"status": "failed", "execution": str(execution_path)}, ensure_ascii=False))
@@ -152,7 +190,7 @@ def main() -> int:
 
     runner_command = [
         sys.executable,
-        str(ROOT / "adapters/workflow_a_runner.py"),
+        str(ACTIVE_RUNNER),
         "--source",
         str(source),
         "--candidate-comparison",
@@ -161,12 +199,21 @@ def main() -> int:
         str(output_root),
         "--pages",
         args.pages,
+        "--plan-only",
     ]
     runner_record = run_command(runner_command, cwd=ROOT)
     record["commands"].append({"stage": "single-source-runner", **runner_record})
+    runner_summary = {}
+    try:
+        runner_summary = json.loads(runner_record.get("stdout", ""))
+    except ValueError:
+        runner_summary = {}
+    plan_only = runner_summary.get("status") == "planned"
     for stage in record["stages"]:
-        stage["status"] = "complete" if runner_record["status"] == "complete" else "needs-review"
-    record["status"] = "complete" if runner_record["status"] == "complete" else "needs-review"
+        stage["status"] = "needs-review" if plan_only else "complete" if runner_record["status"] == "complete" else "needs-review"
+    record["status"] = "needs-review" if plan_only else "complete" if runner_record["status"] == "complete" else "needs-review"
+    if plan_only:
+        record["next_action"] = "通用 execute 尚未提升；当前仅保存来源无关执行计划，不得声称转换完成。"
     record["finished_at"] = now()
     record["exit_code"] = runner_record.get("returncode")
     record["runner_summary"] = runner_record.get("stdout", "").splitlines()[-1:] or []
@@ -184,7 +231,7 @@ def main() -> int:
         pass
     execution_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"status": record["status"], "execution": str(execution_path), "runner": runner_record.get("stdout", "").splitlines()[-1:]}, ensure_ascii=False))
-    return 0 if runner_record.get("returncode") == 0 else 1
+    return 0 if runner_record.get("returncode") == 0 and not plan_only else 1
 
 
 if __name__ == "__main__":

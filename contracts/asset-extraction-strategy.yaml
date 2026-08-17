@@ -1,0 +1,54 @@
+contract: asset-extraction-strategy
+version: 0.1.0
+description: 多格式图片资产提取、视觉模型校准、质量比较和成本路线选择的证据契约。
+required:
+  source:
+    source_fingerprint: string
+    media_type: enum[ppt, pptx, pdf, png, jpg, jpeg]
+    selected_pages_or_dimensions: string
+  assets: array
+  extraction_routes: array
+  selected_route: enum[deterministic, high-quality-online-baseline, local-vision-calibrated, budget-online-fallback, needs-review]
+  quality_comparison:
+    same_input: boolean
+    same_schema: boolean
+    same_prompt_version: boolean
+    dimensions: array
+    status: enum[passed, needs-review, failed, not-run]
+  evidence:
+    strategy: string
+    comparison: string
+    audit: string
+  status: enum[complete, needs-review, failed, not-run]
+asset:
+  required: [asset_id, asset_kind, source_occurrence_id, source_location, extraction_method, sha256, status]
+  asset_kind: enum[page-render, embedded-media, complex-region, crop, input-image]
+  extraction_method: enum[embedded-lossless, office-render, pdf-render, original-preserved, region-crop, model-understanding]
+  source_location: object
+  sha256: string
+  status: enum[available, needs-review, unavailable]
+  reconstruction_profile:
+    path: string|null
+    mode: enum[structure-and-prompt, structure-only, prompt-only, insufficient-evidence, not-applicable]
+    status: enum[available, needs-review, not-applicable, unavailable]
+route:
+  required: [route_id, role, implementation, authorization, input_assets, prompt_or_schema_version, status]
+  role: enum[deterministic, calibration-baseline, local-candidate, budget-fallback]
+  implementation: string
+  authorization: enum[not-required, explicit-only]
+  input_assets: array
+  prompt_or_schema_version: string|null
+  status: enum[available, planned, attempted, passed, needs-review, unavailable]
+quality_dimension:
+  required: [name, score, evidence_paths, notes]
+  score: integer|null
+  evidence_paths: array
+  notes: string
+invariants:
+  - 原始输入图或无损嵌入媒体不得被模型输出替代；模型结果必须是独立候选或结构化证据
+  - baseline/local/fallback 比较必须引用相同输入资产、schema 和 prompt 版本；不满足时 status 不得为 passed
+  - HTTP 200、服务可达、模型列表或队列接收不能单独构成 quality_comparison 通过证据
+  - local-vision-calibrated 只有在质量、重复性、成本和来源追溯均有当前证据时才能作为 selected_route
+  - 资产 status=available 时 source_location、sha256 和实际文件必须可重读
+  - 未授权的在线路线只能为 planned 或 needs-review，不得写成 attempted/passed
+  - 复杂结构或明确需要重建的资产若没有 reconstruction_profile，只能保留为 needs-review，不能声称已保存可复用结构或提示词

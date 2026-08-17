@@ -1,0 +1,81 @@
+contract: markdown-content-repair
+version: 0.4.0
+description: 页面单元生成后的读者层内容结构修复；优先使用局域网语言模型，在线模型只作为明确授权的失败后回退。
+scope: post-page-unit-reader-layer-repair
+write_policy: direct-when-deterministic
+route:
+  order:
+    - id: lan-language-model
+      status: primary
+      transport: ssh
+      target: mac96
+      endpoint: http://127.0.0.1:11434/api/generate
+      model_default: qwen3.6:latest
+      input_scope: one-current-page-unit-only
+      image_input: false
+      authorization: local-resource
+    - id: conversation-online-language-model
+      status: fallback-only
+      transport: current-conversation
+      target: current-conversation
+      input_scope: one-current-page-unit-only
+      authorization: explicit-current-task
+      trigger: lan-unavailable-timeout-unparseable-or-rejected
+  success_policy:
+    lan_success_stops_fallback: true
+    online_call_count_after_lan_success: 0
+    write_back_only_after_structural_guard: true
+input_boundary:
+  required:
+    - 当前待修复的 Markdown 文件或单页 Markdown 工作单元
+    - 明确的页面、章节或文本范围
+  optional:
+    - 当前范围对应的人工明确提供的文字候选
+  forbidden_by_default:
+    - manifest.yaml
+    - 原始 OCR JSON
+    - bbox、坐标和置信度
+    - 逐页 Vision JSON
+    - 全部页面正文、来源文档和页面图
+    - evidence/ 中的解析、复核和运行报告
+    - 任何其他页面单元
+required:
+  package_id: string
+  document: string
+  generated_from: array
+  status: enum[applied, rejected, deferred]
+  items: array
+  route: object
+  model_calls: array
+  page_results: array
+item:
+  required: [id, kind, section_id, source_text, candidate_text, proposed_text, status]
+  kind: enum[heading, paragraph, list, table, punctuation, duplicate-fragment]
+  source_occurrence: string|null
+  section_id: string
+  visual_asset_id: string|null
+  reader_text: string|null
+  source_text: string|null
+  candidate_text: string|null
+  proposed_text: string|null
+  repair:
+    operation: enum[none, join-split-text, restore-sentence-break, restore-paragraph-break, restore-list-structure, restore-heading-structure, restore-text-order, local-punctuation, remove-duplicate-fragment, page-unit-structure-repair]
+    basis: enum[markdown-context, extracted-text, cross-source-agreement, human-confirmation, none]
+    before: string|null
+    after: string|null
+    evidence: array
+  rationale: string
+  status: enum[applied, rejected, deferred]
+  decision_note: string|null
+invariants:
+  - 每项必须定位到 section；source_occurrence 和 visual_asset_id 只有在调用方已有对应元数据时才记录。
+  - 具体文字修复提案（repair.operation 不为 none）必须同时保存 source_text、candidate_text、proposed_text 和 repair.before/after。
+  - proposed_text 必须由当前 Markdown 或显式提供的当前范围文字候选逐字得到，不得新增来源中不存在的词。
+  - 跨页、缺字、多个合理断句或需要视觉关系才能判断的内容只能保持 deferred。
+  - deferred 和 rejected 项不得在 index.md 中显示 OCR、候选、置信度、页码或审核旁注。
+  - applied 项表示局域网或获授权的在线模型结果已经通过当前页结构守卫并直接写回当前 page-unit；图片链接和来源资产不属于本契约的修改范围。
+  - 原文、候选、提案文本和最终通过文本必须分字段保存，不能以候选覆盖原始证据。
+  - page_results 中每个页面只能记录一个当前页输入哈希、输出哈希、调用路由和写回状态。
+  - 局域网模型成功后不得再调用在线模型；在线模型回退必须记录明确授权和失败原因。
+  - page-unit 的页面编号、原始页面图链接和未确认关系边界必须保持不变。
+  - 修复提示词必须要求模型只返回当前页 Markdown，不得返回解释、摘要、JSON 诊断或工程字段。

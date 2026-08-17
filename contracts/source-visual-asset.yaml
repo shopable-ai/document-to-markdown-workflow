@@ -7,6 +7,8 @@ required:
   file_path: string
   display_name: string
   asset_kind: enum[page-render, embedded-media, complex-region, crop, input-image]
+  source_location: object
+  extraction_method: enum[embedded-lossless, office-render, pdf-render, original-preserved, region-crop, model-understanding]
   source:
     package_id: string
     source_fingerprint: string
@@ -33,6 +35,14 @@ optional:
   - alt_text
   - parent_asset_id
   - extraction_notes
+  - reconstruction_profile
+reconstruction_profile:
+  required: [profile_id, path, mode, status]
+  profile_id: string
+  path: string
+  mode: enum[structure-and-prompt, structure-only, prompt-only, insufficient-evidence]
+  status: enum[available, needs-review, not-applicable, unavailable]
+  contract: contracts/visual-reconstruction-profile.yaml
 invariants:
   - file_name 必须符合 references/naming-policy.zh.md 的 ASCII 英文稳定格式
   - display_name 必须具有人类可读语义，且不能代替 file_name
@@ -42,6 +52,7 @@ invariants:
   - status=available 时 file_path、mime_type、width、height 和 sha256 必须可读取
   - status=available 时 media.sha256 必须与 file_path 的实际 SHA-256 相等
   - status=available 时 source.source_occurrences 中不得存在 status=unknown；无法定位必须将资产标记为 needs-review 或 unavailable
+  - reconstruction_profile.path 存在时必须指向同一输出包内的 profile，并且 profile.source.asset_id 必须等于该资产的 asset_id
 
 source_occurrence:
   required: [source_occurrence_id, source_file, page, region, object_ids, parent_asset_id, ordinal, status]

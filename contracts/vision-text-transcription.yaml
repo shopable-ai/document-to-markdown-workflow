@@ -1,0 +1,59 @@
+contract: vision-text-transcription
+version: 0.1.0
+description: 通过局域网 mac96 视觉模型对当前单图执行逐字转写，失败后交给当前对话在线视觉模型，最后才使用 Apple Vision OCR。
+authorization:
+  mac96:
+    required: local-resource
+    default: enabled
+  online_provider:
+    id: conversation-online-vision-text-transcription
+    required: current-task-explicit
+    default: fallback-only-after-mac96
+    authorization: explicit-current-conversation
+    input_scope: current-image-only
+input:
+  required: [input_asset_id, source_fingerprint, image_sha256, page_or_region, prompt_version]
+  image_count: 1
+  allowed_input: current-page-render-or-current-region-crop-only
+  prohibited_context: [other-files, previous-image, next-image, other-page-body, ocr-json, bbox, confidence, manifest]
+transport:
+  primary:
+    type: ssh
+    target: mac96
+    endpoint: http://127.0.0.1:11434/api/generate
+  conversation_fallback:
+    type: current-conversation
+    target: current-conversation
+    trigger: mac96-unavailable-timeout-or-unparseable
+    adapter: none-direct-current-vision-model
+    input_scope: one-current-page-or-region-image-only
+  fallback:
+    type: local-system
+    target: apple-vision-ocr
+    trigger: mac96-and-conversation-online-unavailable-timeout-or-unparseable
+prompt:
+  source: references/prompts/vision-text-transcription-mac96.zh.txt
+  skill: skills/vision-text-transcription/SKILL.md
+  version: vision-text-transcription-v1
+  policy: direct-vision-only-no-ocr
+output:
+  format: markdown-only
+  layer: candidate
+  evidence_path: evidence/vision-text-transcription.json
+  required: [input_asset_id, source_fingerprint, image_sha256, page_or_region, prompt_version, transport, target, model, requested_at, candidate_markdown, status, diagnostics]
+  status: enum[complete, unavailable, failed]
+fallback:
+  ordered: [mac96-vision-text-transcription, conversation-online-vision-text-transcription, apple-vision-ocr]
+  terminal_on_all_failures: failed
+  needs_review_is_not_fallback: true
+forbidden_fields: [api_key, authorization, cookie, secret, subscription_url]
+invariants:
+  - 每次请求只能读取并上传一张当前页面图或当前区域图
+  - mac96 是默认主路径；mac96 不可用、超时或输出不可解析时，先调用当前对话在线视觉模型
+  - Apple Vision OCR 只能在 mac96 与当前对话在线视觉模型都不可用、超时或输出不可解析时运行
+  - 不调用 OCR，不读取其他文件，不参考前后图片或其他页面文字
+  - candidate_markdown 只能包含图片实际可见的文字和可直接确认的关系；无法确认的文字必须写为〔无法确认〕
+  - 不得新增定义、选择关系、解读、总结或图片中没有的标题
+  - 结果不得覆盖原始图片、原生文字或原始 OCR 证据
+  - mac96、当前对话在线视觉模型与 Apple Vision OCR 均失败时必须输出 failed/unavailable 证据，不自动伪造 needs-review
+  - 记录模型标识、请求时间和输入指纹，但不得记录密钥、认证信息或订阅地址

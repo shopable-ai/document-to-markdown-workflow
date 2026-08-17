@@ -13,7 +13,7 @@ order: 10
 
 ## 输入与输出
 
-输入：`output_root/<package-name>/` 中的 `document.md`、`manifest.yaml`、`assets/`、`reports/processing-report.yaml` 和 `reports/failure-report.yaml`。输出：`reports/acceptance-report.yaml`。规则：任何断链、无来源资产、缺少失败报告或缺少最终文件均不通过。
+输入：`output_root/<package-name>/` 中的 `index.md`、`manifest.yaml`、`assets/`、`reports/processing-report.yaml` 和 `reports/failure-report.yaml`。输出：`reports/acceptance-report.yaml`。规则：任何断链、无来源资产、缺少失败报告或缺少最终文件均不通过。
 
 参考实现：`tests/validate_real_output_root.py`。对真实包必须单独运行该 validator；`tests/validate_workflow_package.py` 只验证规格注册表，不能替代 output-root 验收。validator 会重新读取文件并校验目录、Markdown 链接、manifest asset ID、来源 occurrence、媒体 MIME/尺寸/SHA-256、A1–A7 stage evidence、报告状态一致性和禁止秘密字段。
 

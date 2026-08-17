@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markdown 资产复制"
+  short_description: "复制 Markdown、整理页面集合并校验引用资产"
+  default_prompt: "使用 $markdown-asset-copy；单个 Markdown 使用 single_markdown，多页 page-units 集合必须显式使用 collection_merge，并遵循 contracts/markdown-collection-output-layout.yaml 的 index.md、total.md、单页内容/ 命名边界。"

@@ -38,7 +38,7 @@ A 的正式业务结果必须符合：
 
 ```text
 <output_root>/<package-name>/
-├── document.md
+├── index.md
 ├── manifest.yaml
 ├── assets/
 │   ├── pages/
@@ -50,7 +50,7 @@ A 的正式业务结果必须符合：
     └── failure-report.yaml
 ```
 
-`document.md`、`manifest.yaml`、`assets/` 和 `reports/` 才是业务结果；阶段日志、解析中间模型、测试摘要和断言报告不能替代它们。
+`index.md`、`manifest.yaml`、`assets/` 和 `reports/` 才是业务结果；阶段日志、解析中间模型、测试摘要和断言报告不能替代它们。
 
 ### Workflow B：markdown-to-gpt-image
 
@@ -121,11 +121,10 @@ skills/asset-package-validation/SKILL.md
 
 确认所有正式结果统一使用：
 
-- `document.md`
+- `index.md`
 - `manifest.yaml`
-- `assets/pages/`
-- `assets/regions/`
-- `assets/embedded/`
+- `assets/`（扁平目录）
+- 不得存在 `assets/pages/`、`assets/regions/`、`assets/embedded/`
 - `reports/processing-report.yaml`
 - `reports/acceptance-report.yaml`
 - `reports/failure-report.yaml`

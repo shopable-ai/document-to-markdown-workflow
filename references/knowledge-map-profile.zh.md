@@ -33,15 +33,13 @@ $knowledge-map-image-to-md
 
 ## 3. 输出与过程层
 
-单个来源的正式用户结果仍使用 Workflow A 的布局：
+单个来源的正式用户结果仍使用 Workflow A 的扁平资产布局：
 
 ```text
 <output_root>/<package-id>/
-├── document.md
+├── index.md
 ├── manifest.yaml
-├── assets/pages/
-├── assets/regions/
-├── assets/embedded/
+├── assets/                 # 所有来源视觉资产；类型由 manifest.asset_kind 区分
 └── reports/
 ```
 
@@ -73,7 +71,7 @@ _过程文件/       # OCR、VLM、crop、trace、duplicate review 等中间证�
 | 早期技能内容 | 当前唯一权威位置 | 是否在 profile 重复 |
 |---|---|---|
 | 来源识别、原生提取、渲染、裁剪 | A1-A3 及其 Skill | 否，只引用 |
-| mac96 → Apple Vision OCR 降级 | A4、`mac96-visual-review`、`local-ocr` | 否，只引用 |
+| 页面视觉理解（默认 `full + single`；高风险可 `dual`）→ 文字层 fallback | A4、`vision-page-analysis`、`local-ocr` | 否，只引用 |
 | Markdown/图片链接/不确定性 | A5 及其 Skill、相关 contracts | 否，只引用 |
 | manifest、命名、occurrence、资产 hash | A6 及其 Skill | 否，只引用 |
 | 语义资格、精确/近重复、版本仲裁 | 本 profile 的差异门禁 | 是，唯一增量 |

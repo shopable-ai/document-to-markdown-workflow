@@ -1,0 +1,112 @@
+contract: vision-page-analysis
+version: 0.1.0
+description: 通过局域网 mac96 视觉模型对当前单图执行文字提取、视觉结构分析或两者；mac96 失败后交给当前对话在线视觉模型，文字层最后才使用 Apple Vision OCR。
+authorization:
+  mac96:
+    required: local-resource
+    default: enabled
+  online_provider:
+    id: conversation-online-vision-page-analysis
+    required: current-task-explicit
+    default: fallback-only-after-mac96
+    authorization: explicit-current-conversation
+    input_scope: current-image-only
+input:
+  required: [input_asset_id, source_fingerprint, image_sha256, page_or_region, prompt_version]
+  image_count: 1
+  allowed_input: current-page-render-or-current-region-crop-only
+  modes: [text, layout, full]
+  pass_strategies: [single, dual]
+  default_mode: full
+  default_pass_strategy: single
+  prohibited_context: [other-files, previous-image, next-image, other-page-body, ocr-json, bbox, confidence, manifest]
+prompt:
+  source: references/prompts/vision-page-analysis-mac96.zh.txt
+  skill: skills/vision-page-analysis/SKILL.md
+  version: vision-page-analysis-v4
+  policy: direct-vision-only-no-ocr
+transport:
+  primary:
+    type: ssh
+    target: mac96
+    endpoint: http://127.0.0.1:11434/api/generate
+  conversation_fallback:
+    type: current-conversation
+    target: current-conversation
+    trigger: mac96-unavailable-timeout-or-unparseable
+    adapter: none-direct-current-vision-model
+    input_scope: one-current-page-or-region-image-only
+  text_fallback:
+    type: local-system
+    target: apple-vision-ocr
+    trigger: mac96-and-conversation-text-unavailable-timeout-or-unparseable
+    does_not_provide: visual-analysis
+output:
+  evidence_path: evidence/vision-page-analysis.json
+  format_by_mode:
+    text: markdown
+    layout: structured-json
+    full: structured-json-with-markdown
+  layer_policy:
+    native: fact
+    text: candidate
+    visual: candidate-review
+  required:
+    - input_asset_id
+    - source_fingerprint
+    - image_sha256
+    - page_or_region
+    - prompt_version
+    - mode_requested
+    - pass_strategy_requested
+    - pass_strategy_used
+    - model_call_count
+    - text
+    - visual
+    - status
+    - diagnostics
+  status: enum[complete, partial, unavailable, failed]
+  text_required: [status, source, markdown, diagnostics]
+  visual_required: [status, source, visual_analysis, diagnostics]
+projections:
+  markdown:
+    candidate_field: text.markdown
+    workflow_output: index.md
+    rule: A5 负责把候选文字与原生事实 reconciliation 后写入读者层 Markdown
+    per_page_output: page-units/p<page-3-digits>.md
+    per_page_rule: 分页执行器在记录页面完成前必须写入当前页 Markdown；不得依赖调用提示词重复声明
+  visual:
+    candidate_field: visual.visual_analysis
+    workflow_output: evidence/vision-page-analysis.json
+    rule: 结构候选只进入证据与 reconciliation；复杂图表或明确重建意图时另写 visual-reconstruction-profile
+  page_completion:
+    required_files:
+      - evidence/vision-page-analysis-p<page-3-digits>.json
+      - evidence/vision-text-transcription-p<page-3-digits>.json
+      - page-units/p<page-3-digits>.md
+    complete_only_when: all-required-files-exist-and-match-current-page
+    resume_missing_markdown: repair-from-existing-vision-json-without-new-model-call
+policy:
+  single_pass_default: full-mode-one-request
+  dual_pass_when:
+    - relation-dense
+    - chart-or-table-heavy
+    - color-or-spatial-encoding-is-semantic
+    - explicit-high-confidence-request
+  dual_pass_order: [text, layout]
+  full_complete_requires: [text.status=complete, visual.status=complete]
+  partial_means: exactly-one-requested-layer-complete
+  ocr_fallback_scope: text-only
+  fallback_order: [mac96-vision-page-analysis, conversation-online-vision-page-analysis, apple-vision-ocr]
+  text_fallback_order: [mac96, current-conversation, apple-vision-ocr]
+  no_quality_claim_from: [ssh-reachable, http-200, model-list, queue-accepted, response-length]
+forbidden_fields: [api_key, authorization, cookie, secret, subscription_url]
+invariants:
+  - 每个 pass 只能读取并上传一张当前页面图或当前区域图。
+  - full 是默认模式，默认只发起一次 mac96 请求，同时请求 Markdown 和视觉结构。
+  - dual 只有在调用方明确选择或已知页面风险满足策略时才发起两次专门请求。
+  - 原生内容、视觉文字候选和视觉结构候选必须分层保存，不能互相覆盖。
+  - Apple Vision OCR 只能补 text 层，不能把 OCR 候选写成 visual 分析完成。
+  - 视觉模型不得读取其他文件、前后图片或整份文档。
+  - 无法确认的文字或关系必须保留为〔无法确认〕、Unknown 或 needs-review。
+  - 不记录密码、Token、Cookie、Authorization 或订阅地址。

@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 try:
-    from workflow_a_runner import (
+    from workflow_a_legacy_loader import (
         media_type_for,
         parse_pages,
         pdf_info,
@@ -24,7 +24,7 @@ try:
         write_render_fontconfig,
     )
 except ImportError:  # pragma: no cover
-    from .workflow_a_runner import (
+    from .workflow_a_legacy_loader import (
         media_type_for,
         parse_pages,
         pdf_info,

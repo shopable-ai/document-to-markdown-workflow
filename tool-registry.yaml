@@ -6,10 +6,30 @@ schema:
   implementation_values: [planned, optional, available]
   planned_is_not_production_ready: true
 tools:
+  - id: workflow-a-source-runner
+    kind: local-deterministic-orchestrator
+    used_by: [document-asset-extraction]
+    implementation: planned
+    status: active-design
+    contract: contracts/workflow-a-source-runner.yaml
+    default_mode: plan-only
+    execute_promotion: planned
+    source_profiles: [references/profiles/source-runner-generic.yaml]
+  - id: workflow-a-legacy-runner
+    kind: local-compatibility-adapter
+    used_by: [document-asset-extraction]
+    implementation: available
+    status: legacy/document-profile
+    path: archive/legacy-adapters/workflow_a_runner.py
   - id: pptx-xml-parser
     kind: local-deterministic
     used_by: [pptx-xml-extraction]
     implementation: available
+  - id: office-ppt-parser
+    kind: local-deterministic
+    used_by: [source-inventory, page-rendering]
+    implementation: planned
+    source_type: ppt
   - id: pdf-layout-parser
     kind: local-deterministic
     used_by: [pdf-layout-extraction]
@@ -34,14 +54,45 @@ tools:
     kind: local-system
     used_by: [local-ocr]
     implementation: available
-  - id: mac96-vision-endpoint
-    kind: optional-remote
-    used_by: [mac96-visual-review]
+  - id: mac96-vision-page-analysis
+    kind: remote-local-network-model-adapter
+    used_by: [vision-page-analysis]
     implementation: available
     transport: ssh
     target: mac96
-    execution_role: default-first-visual-review
-    fallback_to: [system-ocr, needs-review]
+    model_default: qwen3-vl:30b-a3b-instruct
+    input_scope: one-current-page-or-region-image
+    modes: [text, layout, full]
+    default_mode: full
+    default_pass_strategy: single
+    output: evidence/vision-page-analysis.json
+    contract: contracts/vision-page-analysis.yaml
+  - id: conversation-online-vision-page-analysis
+    kind: host-provided-current-conversation-vision-model
+    used_by: [vision-page-analysis]
+    implementation: optional
+    transport: conversation
+    target: current-conversation
+    adapter: none-direct-current-vision-model
+    authorization: current-task-explicit
+    input_scope: one-current-page-or-region-image
+    modes: [text, layout, full]
+    output: evidence/vision-page-analysis.json
+    contract: contracts/vision-page-analysis.yaml
+  - id: language-quality-repair-adapter
+    kind: remote-local-network-language-model-adapter
+    used_by: [document-asset-extraction, markdown-content-repair]
+    implementation: available
+    path: adapters/markdown_content_repair.py
+    transport: ssh
+    target: mac96
+    model_default: qwen3.6:latest
+    input_scope: one-current-page-unit-only
+    image_input: false
+    online_fallback: current-conversation-explicit-only
+    raw_layer_immutable: true
+    output: evidence/markdown-content-repair-p<page-3-digits>.json
+    contract: contracts/markdown-content-repair.yaml
   - id: markdown-writer
     kind: local-deterministic
     used_by: [markdown-structure-builder, source-asset-linker]

@@ -1,0 +1,3 @@
+interface:
+  display_name: "视觉重建信息提取"
+  short_description: "保存复杂图片结构和可复用图像模型提示词"

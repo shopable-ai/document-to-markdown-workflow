@@ -5,7 +5,7 @@
 多个来源不要把文件拼成一个伪文档，也不要让一个 shell 循环丢失中间状态。使用批处理编排器；它按 source 建立队列，每个 source 继续调用单文件 runner，并生成独立资产包：
 
 ```bash
-python3 adapters/workflow_a_batch.py \
+python3 adapters/workflow_a_batch.py --legacy-compat \
   --source "/absolute/path/a.pdf" \
   --source "/absolute/path/b.pdf" \
   --output-root "/absolute/path/output-root" \
@@ -15,7 +15,7 @@ python3 adapters/workflow_a_batch.py \
 来源较多时，可以使用 UTF-8 文本清单，每行一个绝对或相对路径；空行和 `#` 注释会被忽略，不展开 glob：
 
 ```bash
-python3 adapters/workflow_a_batch.py \
+python3 adapters/workflow_a_batch.py --legacy-compat \
   --source-list "/absolute/path/sources.txt" \
   --output-root "/absolute/path/output-root" \
   --pages all
@@ -28,7 +28,7 @@ python3 adapters/workflow_a_batch.py \
 ├── run-record.yaml
 └── packages/
     ├── <source-a-hash>-pdf/
-    │   ├── document.md
+    │   ├── index.md
     │   ├── manifest.yaml
     │   └── reports/validation-result.json
     └── <source-b-hash>-pdf/
@@ -40,7 +40,7 @@ python3 adapters/workflow_a_batch.py \
 
 ```bash
 WORKFLOW_A_MAC96_CONCURRENCY=2 \
-python3 adapters/workflow_a_batch.py --source-list sources.txt --output-root out --concurrency auto
+python3 adapters/workflow_a_batch.py --legacy-compat --source-list sources.txt --output-root out --concurrency auto
 ```
 
 没有可验证的 mac96/Ollama 并发容量时，`auto` 必须解析为 `workers=1`。`ollama list` 或 HTTP 200 只能证明服务可达，不能证明模型可以安全并行；因此不会因为“看起来没有限制”而放大请求。容量提示也可以写入配置：
@@ -75,8 +75,8 @@ context:
 每次批处理写 `run-record.yaml`。可以恢复最新批次，或指定准确记录：
 
 ```bash
-python3 adapters/workflow_a_batch.py --source-list sources.txt --output-root out --resume
-python3 adapters/workflow_a_batch.py --source-list sources.txt --output-root out \
+python3 adapters/workflow_a_batch.py --legacy-compat --source-list sources.txt --output-root out --resume
+python3 adapters/workflow_a_batch.py --legacy-compat --source-list sources.txt --output-root out \
   --resume-run out/batch-.../run-record.yaml --retry-needs-review
 ```
 
@@ -84,10 +84,10 @@ python3 adapters/workflow_a_batch.py --source-list sources.txt --output-root out
 
 长 PDF 的页级批处理使用同一个编排器的 `--batch-size` 模式。它先固定运行 smoke 页，
 smoke 报告通过后才启动后续页；每批使用新 package 目录，checkpoint 记录页面状态和
-`document.md` 哈希：
+`index.md` 哈希：
 
 ```bash
-python3 adapters/workflow_a_batch.py \
+python3 adapters/workflow_a_batch.py --legacy-compat \
   --source "/absolute/path/long.pdf" --output-root out \
   --pages all --smoke-pages 1-2 --batch-size 8
 ```

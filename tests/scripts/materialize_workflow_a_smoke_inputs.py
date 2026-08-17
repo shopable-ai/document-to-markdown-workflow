@@ -12,6 +12,8 @@ import json
 import posixpath
 import shutil
 import sys
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -69,8 +71,20 @@ def _slide_number(part_name: str) -> int:
 def _pdf_page_count(source: Path) -> int:
     try:
         from pypdf import PdfReader
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency-light hosts
-        raise RuntimeError("pypdf is required to materialize PDF smoke inputs") from exc
+    except ModuleNotFoundError:
+        pdfinfo = shutil.which("pdfinfo")
+        if not pdfinfo:
+            raise RuntimeError("pypdf or pdfinfo is required to materialize PDF smoke inputs")
+        result = subprocess.run(
+            [pdfinfo, str(source)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("Pages:"):
+                return int(line.split(":", 1)[1].strip())
+        raise RuntimeError(f"pdfinfo did not report a page count for {source}")
     return len(PdfReader(str(source)).pages)
 
 
@@ -130,8 +144,22 @@ def select_pdf(source: Path, output: Path, positions: list[int]) -> None:
     """Retain ordinal PDF pages from the current PDF source."""
     try:
         from pypdf import PdfReader, PdfWriter
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency-light hosts
-        raise RuntimeError("pypdf is required to materialize PDF smoke inputs") from exc
+    except ModuleNotFoundError:
+        poppler_bin = Path("/Users/a0000/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/poppler/poppler/bin")
+        pdfseparate = shutil.which("pdfseparate") or str(poppler_bin / "pdfseparate")
+        pdfunite = shutil.which("pdfunite") or str(poppler_bin / "pdfunite")
+        if not Path(pdfseparate).is_file() or not Path(pdfunite).is_file():
+            raise RuntimeError("pypdf or bundled pdfseparate/pdfunite is required to materialize PDF smoke inputs")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="workflow-a-pdf-pages-") as directory:
+            page_pattern = str(Path(directory) / "page-%d.pdf")
+            subprocess.run([pdfseparate, str(source), page_pattern], check=True, capture_output=True, text=True)
+            selected = [str(Path(directory) / f"page-{position}.pdf") for position in positions]
+            missing = [path for path in selected if not Path(path).is_file()]
+            if missing:
+                raise RuntimeError(f"pdfseparate did not create requested pages: {missing}")
+            subprocess.run([pdfunite, *selected, str(output)], check=True, capture_output=True, text=True)
+        return
 
     reader = PdfReader(str(source))
     if not positions or max(positions) > len(reader.pages):

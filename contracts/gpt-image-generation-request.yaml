@@ -11,6 +11,7 @@ required:
     intent: string
     structure: string
     density_decision: enum[accepted, reduced, needs-split]
+    reconstruction_profile_id: string|null
   prompt:
     text: string
     version: string
@@ -30,7 +31,19 @@ required:
     online_call_count: integer
     reference_asset_count: integer
     local_preprocessing: boolean
-    quota_note: string
+  quota_note: string
+optional:
+  - visual_reconstruction_profile:
+      profile_id: string
+      path: string
+      mode: enum[structure-and-prompt, structure-only, prompt-only, insufficient-evidence]
+      source_asset_id: string
+      source_fingerprint: string
+      status: enum[available, needs-review, not-applicable, unavailable]
+  - prompt_derivation:
+      profile_id: string|null
+      source_fields: array
+      unresolved: array
 forbidden_fields:
   - api_key
   - authorization
@@ -41,3 +54,4 @@ invariants:
   - output.count=1
   - usage.online_call_count is non-negative
   - status=reviewed implies review.status in [passed, needs-revision, failed]
+  - visual_reconstruction_profile.path 存在时必须引用当前 generation-request 的 source asset，且不能把 profile 的 Unknown 字段改写成 confirmed

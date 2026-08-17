@@ -4,7 +4,7 @@
 
 测试只是一个普通验证环节，不单独建立测试 Workflow 或测试 Skill。测试说明和测试提示词保存在 `tests/`，运行产物保存在 `tests/runs/<run-id>/`。
 
-注意：`tests/runs/<run-id>/` 保存的是测试记录；Workflow A 的业务结果必须写入它的 `output_root`，并符合 `contracts/workflow-a-output-layout.yaml`，不能用测试摘要或阶段日志代替 `document.md`。
+注意：`tests/runs/<run-id>/` 保存的是测试记录；Workflow A 的业务结果必须写入它的 `output_root`，并符合 `contracts/workflow-a-output-layout.yaml`，不能用测试摘要或阶段日志代替 `index.md`。
 
 `validate_workflow_package.py` 只验证规格与路由层，不执行真实解析或在线调用。它检查：
 

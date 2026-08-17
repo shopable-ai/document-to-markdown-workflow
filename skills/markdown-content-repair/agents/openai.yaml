@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markdown 内容修复"
+  short_description: "修复提取文字在 Markdown 中的断词、断句与结构问题"
+  default_prompt: "使用 $markdown-content-repair 修复这个 Markdown 资产包当前范围内的断词、断句、段落、列表和标题结构，并提交局部修复提案。"

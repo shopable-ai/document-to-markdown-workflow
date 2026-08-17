@@ -1,0 +1,63 @@
+id: workflow-a-generic-source
+version: 0.1.0
+status: active-design
+source_types:
+  - id: pptx
+    suffixes: [.pptx]
+    page_unit: slide
+    native_extractors: [pptx-xml-parser]
+    page_asset_strategy: [embedded-lossless, office-render, region-crop-when-needed]
+  - id: ppt
+    suffixes: [.ppt]
+    page_unit: slide
+    native_extractors: [office-ppt-parser]
+    page_asset_strategy: [office-render, region-crop-when-needed]
+  - id: pdf
+    suffixes: [.pdf]
+    page_unit: page
+    native_extractors: [pdf-layout-parser]
+    page_asset_strategy: [embedded-lossless, pdf-render, region-crop-when-needed]
+  - id: image
+    suffixes: [.png, .jpg, .jpeg]
+    page_unit: image
+    native_extractors: [image-metadata]
+    page_asset_strategy: [original-preserved, region-crop-when-needed]
+asset_policy:
+  asset_kinds: [page-render, embedded-media, input-image, complex-region, crop]
+  registration_fields: [asset_id, source_occurrence_id, source_location, extraction_method, sha256, status]
+  preserve_original: true
+  naming:
+    filename_format: "<short-semantic-slug>.<ext>"
+    semantic_source: [verified-alias, source-derived-title]
+    fallback_status: needs-review
+    page_in_filename: false
+    collision_suffix: "-02"
+  semantic_aliases: {}
+content_ladder:
+  ordered: [native-structure, verified-visual-model, apple-vision-ocr, other-ocr]
+  candidate_status: [candidate, needs-review]
+  raw_layer_immutable: true
+language_repair:
+  status: available-via-lan-first-adapter
+  adapter: adapters/markdown_content_repair.py
+  contract: contracts/markdown-content-repair.yaml
+  prompt: references/prompts/markdown-content-repair-lan.zh.txt
+  output: evidence/markdown-content-repair-p<page-3-digits>.json
+  review_output: reviews/markdown-content-repair.yaml
+  primary_route: lan-language-model
+  primary_target: mac96
+  primary_model_default: qwen3.6:latest
+  input_scope: one-current-page-unit-only
+  online_fallback: explicit-current-task-only-after-lan-failure
+markdown_policy:
+  title_source: current-source-evidence
+  source_metadata_boundary: manifest-and-evidence
+  dynamic_from_source: true
+  fixed_document_terms: false
+validation_policy:
+  validator: independent-package-validator
+  quality_audit_after_assembly: true
+calibration_routes:
+  status: planned
+  default_enabled: false
+  ordered: [high-quality-online-baseline, local-vision-reproduction, quality-comparison, cost-reduction]

@@ -10,30 +10,32 @@
 
 | 你的输入/目标 | 使用 Workflow | 主要产物 |
 |---|---|---|
-| 手里有 PPTX、PDF、DOCX 或图片，想提取为可检索内容并保留复杂图 | `document-to-markdown-assets` | Markdown 资产包 + 来源视觉资产 + manifest |
+| 手里有 PPT、PPTX、PDF 或图片，想提取为可检索内容并保留复杂图 | `document-to-markdown-assets` | Markdown 资产包 + 来源视觉资产 + manifest |
 | 已经有 Markdown，想把其中一节变成一张知识视觉图 | `markdown-to-gpt-image` | 一张 GPT-image-2 raster 图片 + 请求/复核记录 |
 | 仍在使用早期 `knowledge-map-image-to-md` 调用名 | 兼容入口 → `document-to-markdown-assets` | Workflow A 资产包 + 知识地图差异门禁；不新增 Workflow |
-| 想把 A 的页面图作为 B 的参考 | A → B（可选） | A 的视觉资产作为 B 的 `reference_assets` |
+| 想把 A 的页面图和复杂结构提示词作为 B 的参考 | A → B（可选） | A 的视觉资产 + `visual-reconstruction-profile` 作为 B 的 `reference_assets` |
 | 想自动从原文档直接批量生成图片 | 不属于当前默认路径 | 需要显式设计新的编排 Workflow，不由 A 自动触发 B |
 
 ## 两个 Workflow 的关系
 
 ```text
 任意来源文档 ──→ Workflow A：document-to-markdown-assets
-                         ├── document.md
+                         ├── index.md
                          ├── source visual assets
-                         └── manifest
+                         ├── manifest
+                         └── visual-reconstruction-profile（复杂资产适用时）
 
 任意 Markdown ──→ Workflow B：markdown-to-gpt-image ──→ 一张图片
                          ↑
                          └── 可选引用 Workflow A 的视觉资产
+
 ```
 
 Workflow A 和 B 都可以脱离对方运行：
 
-- A 不调用 GPT-image-2，不生成 PPTX/PDF；A4 默认先尝试 SSH/mac96，失败后才 Apple Vision OCR；
+- A 不调用 GPT-image-2，不生成 PPTX/PDF；当前轮次只完成 source runner/profile 设计，A4 的 SSH/mac96/OCR/明确授权在线视觉转写都是后续 execute 阶段，不是本轮动作；
 - B 不重新解析 PPTX/PDF，也不要求输入一定来自 A；
-- A 的来源图默认是证据/参考资产，不自动升级为通用模板；
+- A 的来源图默认是证据/参考资产；复杂资产可额外保存结构/提示词 profile，但不自动升级为通用模板；
 - B 的成功标准是“一张可读图片”，不是一个可编辑幻灯片文件。
 
 已有转换结果审计继续使用原工作流目录中的阶段、步骤技能和新对话提示词；不因为它是后续阶段就另立一个 Workflow。
@@ -49,13 +51,17 @@ Workflow A 和 B 都可以脱离对方运行：
 A1 来源预检
   → A2 原生内容提取
   → A3 视觉来源资产保留
-  → A4 OCR 与结构复核
+  → A4 视觉文本提取与结构复核
   → A5 Markdown 组装
   → A6 命名与来源登记
   → A7 资产包验收
 ```
 
-核心原则：原生结构优先，OCR 只补缺或复核；复杂图必须保留视觉证据；落盘文件名使用稳定英文 `file_name`，中文语义放在 `display_name`，稳定 ID、来源出现记录与哈希放入 manifest。
+核心原则：原生结构优先，`mac96 → 当前对话在线视觉模型 → Apple Vision OCR` 只补文字层缺口；复杂图必须保留视觉证据；落盘文件名使用稳定英文 `file_name`，中文语义放在 `display_name`，稳定 ID、来源出现记录与哈希放入 manifest。
+
+已有读者层 Markdown 的页面修复采用独立页面单元覆盖层：先处理第 1 页并独立验收，
+再开放第 2–5 页小批量；第 2–5 页人工复核通过后，才允许第 6–100 页。页面合并按固定页序
+确定性执行，`document-temp.md` 只是可审阅派生预览，不替代最终 `index.md`。
 
 详见：
 
@@ -90,6 +96,9 @@ B1 Markdown 内容选择
 当前根目录保存 Workflow 规格、契约、Skill 路由和验证层；Workflow A 的单文件 runner
 按单一来源分派格式，多个来源由 `adapters/workflow_a_batch.py` 串行优先编排，fixture 的
 固定页码不能外推为生产范围。
+
+当前页面修复试运行只覆盖第 1 页：第 1 页独立验收和人工可读性检查已通过，但关系状态仍为
+`needs-review`。第 2–5 页和第 6–100 页均未处理；不得把第 1 页证据外推为其他页面通过。
 
 ```text
 L1 规格静态校验：已具备

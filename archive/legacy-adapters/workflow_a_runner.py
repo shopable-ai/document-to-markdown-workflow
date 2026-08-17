@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Executable Workflow A adapter.
+"""Archived legacy/document-profile Workflow A adapter.
 
-The runner deliberately accepts one source per invocation.  PPTX and PDF
-packages are independent: a PPTX page is rendered from the PPTX itself and a
-PDF page is rendered from the PDF itself.  Optional visual review is evidence,
-never a replacement for native extraction.
+This file is retained only for explicit recovery or compatibility runs.  It
+is outside the active Workflow A route and must not be imported by new source
+processing code.
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from posixpath import normpath
@@ -30,11 +30,18 @@ from xml.etree import ElementTree as ET
 import yaml
 from PIL import Image
 
+PACKAGE_ROOT = next(
+    parent for parent in Path(__file__).resolve().parents
+    if (parent / "workflow-registry.yaml").is_file()
+)
+ADAPTERS_ROOT = PACKAGE_ROOT / "adapters"
+if str(ADAPTERS_ROOT) not in sys.path:
+    sys.path.insert(0, str(ADAPTERS_ROOT))
+
 try:
     from workflow_a_output_validator import validate_package
 except ImportError:  # pragma: no cover - package-style imports in test tools
-    from .workflow_a_output_validator import validate_package
-
+    from adapters.workflow_a_output_validator import validate_package
 
 P_NS = {
     "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -42,8 +49,35 @@ P_NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
 }
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = Path("/Users/a0000/.cache/codex-runtimes/codex-primary-runtime/dependencies")
+READER_PROFILE_PATH = PACKAGE_ROOT / "references" / "reader-noise-profile.yaml"
+PROMPT_ROOT = PACKAGE_ROOT / "references" / "prompts"
+
+
+def _load_reader_profile() -> dict:
+    """Load compatibility heuristics outside the runner code.
+
+    These rules are deliberately data, not production truth.  Keeping them
+    in a versioned profile makes it possible to retire the old document-
+    specific heuristics without rewriting the conversion pipeline.
+    """
+    try:
+        value = yaml.safe_load(READER_PROFILE_PATH.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+READER_PROFILE = _load_reader_profile()
+
+
+def _prompt_template(name: str, fallback: str) -> str:
+    """Read a versioned generic prompt template, with a safe local fallback."""
+    try:
+        value = (PROMPT_ROOT / name).read_text(encoding="utf-8").strip()
+    except OSError:
+        value = ""
+    return value or fallback
 
 
 def sha256(path: Path) -> str:
@@ -64,6 +98,47 @@ def write_json(path: Path, value: object) -> None:
 
 def write_yaml(path: Path, value: object) -> None:
     path.write_text(yaml.safe_dump(value, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def append_progress_event(path: Path, *, run_id: str, source_fingerprint: str, stage: str, status: str,
+                          pages: list[int] | None = None, task: str | None = None,
+                          evidence_paths: list[str] | None = None, next_action: str | None = None,
+                          diagnostics: list[str] | None = None, elapsed_seconds: float | None = None,
+                          attempt: int = 1) -> dict:
+    """Append one human-readable progress event and mirror it to stderr.
+
+    The stream is intentionally append-only and contains no prompt or secret
+    payload.  It is the live boundary for long runs; the final reports remain
+    the independent acceptance boundary.
+    """
+    event_time = now()
+    selected_pages = pages or []
+    event = {
+        "at": event_time,
+        "finished_at": event_time,
+        "run_id": run_id,
+        "source_fingerprint": source_fingerprint,
+        "stage": stage,
+        "task": task or stage,
+        "page": selected_pages[0] if len(selected_pages) == 1 else None,
+        "pages": selected_pages,
+        "attempt": attempt,
+        "status": status,
+        "elapsed_seconds": round(float(elapsed_seconds), 3) if elapsed_seconds is not None else None,
+        "evidence_paths": evidence_paths or [],
+        "next_action": next_action or "",
+        "diagnostics": diagnostics or [],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    print(
+        f"[workflow-a] {stage} status={status} pages={','.join(str(page) for page in event['pages']) or '-'} "
+        f"next={event['next_action'] or '-'}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return event
 
 
 def tool_path(name: str) -> str | None:
@@ -815,19 +890,10 @@ def _ocr_candidates_for_page(ocr: dict | None, page: int) -> list[dict]:
     return [candidate for candidate in candidates if isinstance(candidate, dict) and _clean_text(candidate.get("text"))]
 
 
-GENERIC_OCR_HEADERS = {
-    "每天学一个思维模型",
-    "查理芒格思维模型与100个思维模型",
-    "查理芒格的100个思维模型",
-    "《万物皆模型》100个思维模型",
-    "Charlie Munger's 100 Mental Models",
-    "Charlie Munger's Mind Model And 100 Mind Models",
-    "Charlie Munger 100 Mental Models",
-    "Charlie Munger 100 Mind Models",
-    "Charlie Munger",
-    "模型结构",
-    "模型结构推导",
-}
+GENERIC_OCR_HEADERS = set(str(item) for item in READER_PROFILE.get("generic_headers", []) if str(item).strip())
+COMPACT_NOISE_PREFIXES = tuple(str(item).upper() for item in READER_PROFILE.get("compact_prefixes", []) if str(item).strip())
+NOISE_PATTERNS = tuple(re.compile(str(item), flags=re.I) for item in READER_PROFILE.get("noise_patterns", []) if str(item).strip())
+TITLE_SIGNAL_PATTERN = re.compile(str(READER_PROFILE.get("title_signal_pattern") or r"标题|主题|模型|方法|原则"), flags=re.I)
 
 
 def title_quality_flags(candidate: dict | str | None, *, title_band: tuple[float, float] = (0.74, 0.87)) -> list[str]:
@@ -849,7 +915,7 @@ def title_quality_flags(candidate: dict | str | None, *, title_band: tuple[float
         flags.append("sentence-like-title")
     if isinstance(candidate, dict) and not (title_band[0] <= y <= title_band[1]):
         flags.append("outside-title-band")
-    title_signal = bool(re.search(r"模型|法则|方法|分析法|理论|原则|定律|效应|视角|原理|系统|成本|心流|SWOT|PDCA|5W1H|HOOK", text, re.I))
+    title_signal = bool(TITLE_SIGNAL_PATTERN.search(text))
     numbered = bool(re.match(r"^\s*\d{1,3}\s*[.、]?\s*\S", text))
     if not title_signal and not numbered:
         flags.append("missing-title-signal")
@@ -864,11 +930,11 @@ def is_reader_noise_candidate(candidate: dict | str | None) -> bool:
         return True
     if compact in {re.sub(r"[\s\W_]+", "", value, flags=re.UNICODE) for value in GENERIC_OCR_HEADERS}:
         return True
-    if compact.startswith("CHARLIEMUNGER"):
+    if any(compact.startswith(prefix) for prefix in COMPACT_NOISE_PREFIXES):
         return True
     if re.fullmatch(r"\d{1,3}(?:/100)?", compact):
         return True
-    if re.fullmatch(r"(?:EVERYTHING|ISMODEL|MENTALMODELS)", compact, flags=re.I):
+    if any(pattern.fullmatch(compact) for pattern in NOISE_PATTERNS):
         return True
     return False
 
@@ -881,8 +947,8 @@ def normalise_ocr_reader_text(value: object) -> str:
     in Simplified Chinese and make compact numbered headings searchable.
     """
     text = _clean_text(value)
-    for source, target in (("蕞", "最"), ("決", "决"), ("綁", "绑")):
-        text = text.replace(source, target)
+    for source, target in (READER_PROFILE.get("glyph_replacements") or {}).items():
+        text = text.replace(str(source), str(target))
     text = re.sub(r"^(\d{1,3})(?=[\u4e00-\u9fffA-Za-z])", r"\1 ", text)
     return text
 
@@ -965,10 +1031,16 @@ def select_ocr_title(candidates: list[dict]) -> dict | None:
     # paragraph below. Keep the raw candidate in ocr-candidates.json, but use
     # the supported title phrase for the reader layer when that exact pattern
     # is present in another candidate.
-    if re.fullmatch(r"福格\s*行\s*模型", selected_text):
+    for repair in READER_PROFILE.get("special_title_repairs", []) or []:
+        if not isinstance(repair, dict):
+            continue
+        raw_pattern = str(repair.get("raw_pattern") or "")
+        supported_pattern = str(repair.get("supported_pattern") or "")
+        if not raw_pattern or not supported_pattern or not re.fullmatch(raw_pattern, selected_text):
+            continue
         for candidate in candidates:
             candidate_text = _clean_text(candidate.get("text"))
-            match = re.match(r"(福格行为模型)", candidate_text)
+            match = re.match(supported_pattern, candidate_text)
             if match:
                 selected = dict(selected)
                 selected["_raw_text"] = selected_text
@@ -1116,7 +1188,10 @@ def run_mac96_text_structure(native_model: dict, evidence: Path, preflight: dict
         response_path = evidence / f"mac96-text-response-p{page:03d}.json"
         write_json(input_path, native_input)
         input_hash = sha256(input_path)
-        prompt = "Return exactly one JSON object and no markdown. You receive trusted PDF native text/layout JSON, not an image. Do not OCR, transcribe from pixels, invent words, or use outside knowledge. Required schema: {page,title:{text,evidence_block_ids,confidence},subtitle:{text,evidence_block_ids,confidence},semantic_sections:[],relations:[{from,relation,to,evidence_block_ids,confidence}],layout_form,uncertainties:[],conflicts:[]}. semantic_sections must express reader-facing groups: for a four-quadrant diagram use label and action; for GRAI use step, label and meaning. Only create relations supported by supplied block text and coordinates; put unresolved visual edges in uncertainties/conflicts. CONTEXT_HINTS are bounded neighboring labels used only to resolve pronouns or continuation; never copy a neighboring page's facts into this page and never emit a relation without current-page evidence."
+        prompt = _prompt_template(
+            "workflow-a-text-structure.txt",
+            "Return exactly one JSON object and no markdown. Use only the supplied current-page text/layout evidence; do not invent source facts.",
+        )
         payload = {"model": model, "stream": False, "format": "json", "options": {"temperature": 0, "num_predict": 2048}, "messages": [{"role": "user", "content": prompt + "\nNATIVE_LAYOUT_JSON:\n" + json.dumps(native_input, ensure_ascii=False)}]}
         write_json(request_path, {"target": "mac96", "model": model, "page": page, "input_kind": "native-text-layout-json", "input_path": str(input_path), "input_sha256": input_hash, "prompt": prompt, "requested_at": now()})
         try:
@@ -1152,7 +1227,10 @@ def run_mac96_relation_review(page_assets: dict[int, Path], pages: list[int], ev
         request_path = evidence / f"mac96-relation-request-p{page:03d}.json"
         response_path = evidence / f"mac96-relation-response-p{page:03d}.json"
         input_hash = sha256(path)
-        prompt = f"Return exactly one JSON object. This is a relation-only visual confirmation for page {page}. Do not transcribe or OCR text. Confirm only visible arrows, grouping, quadrant/cycle hierarchy, or cross-region relationships that native text/layout could not establish. Schema: {{\"page\":{page},\"relations\":[],\"uncertainties\":[],\"conflicts\":[]}}."
+        prompt = _prompt_template(
+            "workflow-a-relation-review.txt",
+            "Return exactly one JSON object. Confirm only visible relationships that current-page evidence supports; do not transcribe or OCR text.",
+        ).replace("CURRENT_PAGE", str(page))
         payload = {"model": model, "stream": False, "format": "json", "options": {"temperature": 0, "num_predict": 1024}, "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(path.read_bytes()).decode()]}]}
         write_json(request_path, {"target": "mac96", "model": model, "page": page, "input_kind": "pdf-rendered-page-png-relation-review", "input_path": str(path), "input_sha256": input_hash, "prompt": prompt, "reason": reasons[page], "requested_at": now()})
         try:
@@ -1187,7 +1265,10 @@ def run_mac96(page_assets: dict[int, Path], evidence: Path, preflight: dict) -> 
     remote_command = " ".join(shlex.quote(part) for part in ("/usr/bin/curl", "-fsS", "--max-time", "180", "http://127.0.0.1:11434/api/chat", "-H", "Content-Type: application/json", "--data-binary", "@-"))
     for page, path in page_assets.items():
         request, response = evidence / f"mac96-request-p{page:03d}.json", evidence / f"mac96-response-p{page:03d}.json"
-        prompt = f"Return one complete valid JSON object only. The package page number is {page}; preserve that value in the page key. Keys: page,status,visible_title,relationships,unknown_forms,coverage_notes,uncertainties. Inspect the supplied page image for visible hierarchy, text roles, arrows/connectors, parent-child groups, comparisons, colors, symbols, legends, nested containers, cross-region links, and annotations. relationships is an array of concise objects with from,to,label,direction,status. unknown_forms must contain only genuinely unclassified or unresolved visual forms; do not list identified squares, circles, boxes, arrows, text, or other forms whose type is clear; use [] when all visible forms are classified. coverage_notes must state inspected scope and whether open-set scan is complete. uncertainties is an array. Do not include markdown or analysis."
+        prompt = _prompt_template(
+            "workflow-a-visual-review.txt",
+            "Return one valid JSON object only. Inspect only the supplied current-page image and report visible relationships and unresolved forms.",
+        ).replace("CURRENT_PAGE", str(page))
         payload = {"model": model, "stream": False, "format": "json", "options": {"temperature": 0, "num_predict": 2048}, "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(path.read_bytes()).decode()]}]}
         write_json(request, {"target": "mac96", "model": model, "page": page, "prompt": prompt, "input_asset": str(path), "requested_at": now()})
         try:
@@ -1246,7 +1327,11 @@ def summarize_mac96_calls(visual: dict) -> dict:
 
 
 def run_apple_vision(page_assets: dict[int, Path], evidence: Path, pages: list[int]) -> dict:
+    # Keep the legacy adapter runnable after the OCR helper moved to the
+    # active adapters directory during runner migration.
     script = Path(__file__).with_name("apple_vision_ocr.swift")
+    if not script.is_file():
+        script = Path(__file__).resolve().parents[2] / "adapters" / "apple_vision_ocr.swift"
     result = {"engine": "Apple Vision", "language": ["zh-Hans", "en-US"], "attempted_at": now(), "status": "unavailable", "candidates": [], "diagnostics": []}
     for page in pages:
         path, output = page_assets.get(page), evidence / f"apple-vision-p{page:03d}.json"
@@ -1292,7 +1377,7 @@ def evaluate_smoke_pages(output: Path, pages: list[int], page_assets: dict[int, 
     structured_pages = {item.get("page"): item.get("result") or {} for item in visual.get("reviews", [])}
     for review in visual.get("image_reviews", []):
         structured_pages.setdefault(review.get("page"), {}).update(review.get("result") or {})
-    document_path = output / "document.md"
+    document_path = output / "index.md"
     document_text = document_path.read_text(encoding="utf-8") if document_path.is_file() else ""
     checks: list[dict] = []
     failures: list[dict] = []
@@ -1329,7 +1414,7 @@ def evaluate_smoke_pages(output: Path, pages: list[int], page_assets: dict[int, 
         if title_source == "ocr-candidate" or evidence.get("ocr_candidate_count"):
             warnings.append({"page": page, "code": "ocr-candidate-needs-review", "message": "标题或正文来自 OCR 待复核候选，已保留置信度与原始结果"})
     status = "failed" if failures else "passed"
-    return {"report_version": "0.1.0", "status": status, "checked_pages": pages, "checks": checks, "failures": failures, "warnings": warnings, "stopped": bool(failures), "stop_reason": failures[0] if failures else None, "evidence_paths": ["document.md", "evidence/ocr-candidates.json", "evidence/content-classification.json", "assets/pages/"], "next_action": "修复首个失败门禁后重新运行 smoke；smoke 失败时不得处理后续页面。" if failures else "允许进入后续小批次；每批完成后继续执行同一门禁。"}
+    return {"report_version": "0.1.0", "status": status, "checked_pages": pages, "checks": checks, "failures": failures, "warnings": warnings, "stopped": bool(failures), "stop_reason": failures[0] if failures else None, "evidence_paths": ["index.md", "evidence/ocr-candidates.json", "evidence/content-classification.json", "assets/pages/"], "next_action": "修复首个失败门禁后重新运行 smoke；smoke 失败时不得处理后续页面。" if failures else "允许进入后续小批次；每批完成后继续执行同一门禁。"}
 
 
 def write_smoke_report(output: Path, report: dict) -> Path:
@@ -1352,29 +1437,32 @@ def build_markdown(output: Path, source: Path, source_type: str, pages: list[int
         classified = class_pages.get(page, {})
         structured = structured_pages.get(page, {})
         title = (classified.get("page_title") or {}).get("text") or f"第 {page} 页"
-        heading = (classified.get("theme_or_heading") or {}).get("text")
+        theme_heading = (classified.get("theme_or_heading") or {}).get("text")
         sections = structured.get("semantic_sections") or classified.get("semantic_sections") or []
         relations = structured.get("relations") or classified.get("relations") or []
         text_evidence = classified.get("text_evidence") or {}
-        lines.extend([f"## 第 {page} 页：{title}", ""])
+        # Semantic titles stay reader-facing; page numbers remain available
+        # through manifest occurrences and rendering evidence.
+        reader_title = title if title and not title.startswith("待复核：第 ") else f"第 {page} 页"
+        lines.extend([f"## {reader_title}", ""])
         semantic_content_start = len(lines)
         # A title alone is not body extraction.  Keep the page title visible,
         # but require a body/section/OCR candidate before omitting the explicit
         # extraction-status block below.
         reader_text_present = False
-        if heading and heading != title:
-            heading_label = "主题与对比" if re.search(r"\bvs\b", str(heading), flags=re.I) else "主题"
-            lines.extend([f"### {heading_label}", "", str(heading), ""])
+        if theme_heading and theme_heading != reader_title:
+            heading_label = "主题与对比" if re.search(r"\bvs\b", str(theme_heading), flags=re.I) else "主题"
+            lines.extend([f"### {heading_label}", "", str(theme_heading), ""])
             reader_text_present = True
         quadrant_rows = [(str(item.get("label", "")).strip(), str(item.get("action", "")).strip()) for item in sections if isinstance(item, dict) and item.get("label") and item.get("action")]
         step_rows = [(str(item.get("step", "")).strip(), str(item.get("label", "")).strip(), str(item.get("meaning", "")).strip()) for item in sections if isinstance(item, dict) and item.get("step") and item.get("meaning")]
         if quadrant_rows:
-            lines.extend(["### 四象限行动原则", "", "| 分区 | 行动 |", "| --- | --- |"])
+            lines.extend(["### 分区内容", "", "| 分区 | 行动 |", "| --- | --- |"])
             lines.extend([f"| {label.replace('|', '/')} | {action.replace('|', '/')} |" for label, action in quadrant_rows])
             lines.append("")
             reader_text_present = True
         elif step_rows:
-            lines.extend(["### 四步复盘", "", "| 步骤 | 英文 | 含义 |", "| --- | --- | --- |"])
+            lines.extend(["### 步骤内容", "", "| 步骤 | 标签 | 含义 |", "| --- | --- | --- |"])
             lines.extend([f"| {step.replace('|', '/')} | {label.replace('|', '/')} | {meaning.replace('|', '/')} |" for step, label, meaning in step_rows])
             lines.append("")
             reader_text_present = True
@@ -1403,7 +1491,7 @@ def build_markdown(output: Path, source: Path, source_type: str, pages: list[int
                 reader_text_present = True
         ocr_blocks = [block for block in classified.get("classified_blocks", []) if block.get("role") == "ocr-candidate-body" and _clean_text(block.get("text"))]
         if ocr_blocks:
-            lines.extend(["### OCR 待复核候选", "", "以下文字来自 OCR 候选，尚未确认为原文事实；请结合页面图复核。候选状态为待复核，候选置信度与逐条原始证据保留在运行证据中。", ""])
+            lines.extend(["### 文字候选", "", "以下内容来自页面文字候选，尚未完成逐字核验；请结合页面图复核。候选置信度与逐条原始证据保留在运行证据中。", ""])
             for block in ocr_blocks:
                 # Confidence, bbox, candidate index, and engine are evidence
                 # fields.  Keep the reader layer searchable and human-facing.
@@ -1440,7 +1528,7 @@ def build_markdown(output: Path, source: Path, source_type: str, pages: list[int
         else:
             lines.extend(["### 原始页面图", "- 页面图未生成，当前页面需要复核。"])
         lines.append("")
-    (output / "document.md").write_text("\n".join(lines), encoding="utf-8")
+    (output / "index.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
@@ -1496,6 +1584,28 @@ def main() -> int:
     for directory in ("assets/pages", "assets/regions", "assets/embedded", "evidence", "reports"):
         (output / directory).mkdir(parents=True, exist_ok=True)
     started = now()
+    run_clock = time.monotonic()
+    source_fingerprint = sha256(source)
+    progress_path = output / "evidence/progress.jsonl"
+
+    def progress(stage: str, status: str, *, task: str | None = None, stage_pages: list[int] | None = None,
+                 evidence: list[str] | None = None, next_action: str | None = None,
+                 diagnostics: list[str] | None = None) -> None:
+        append_progress_event(
+            progress_path,
+            run_id=package_name,
+            source_fingerprint=source_fingerprint,
+            stage=stage,
+            status=status,
+            pages=stage_pages if stage_pages is not None else pages,
+            task=task,
+            evidence_paths=evidence,
+            next_action=next_action,
+            diagnostics=diagnostics,
+            elapsed_seconds=time.monotonic() - run_clock,
+        )
+
+    progress("workflow_spec_validation", "complete", task="读取 Workflow 与输入边界", evidence=["workflow.yaml"], next_action="开始来源预检")
     slug = source_slug(source)
     candidate_comparison = None
     if args.candidate_comparison:
@@ -1510,13 +1620,46 @@ def main() -> int:
         if preferred and Path(preferred).resolve() != source:
             parser.error(f"selected source is not preferred_source in candidate comparison: {preferred}")
     fontconfig = write_render_fontconfig(output / "evidence")
+    progress("source_inventory", "started", task="读取来源类型、页数和指纹", evidence=["evidence/progress.jsonl"])
     inventory = source_inventory(source, source_type, pages)
     if candidate_comparison:
         inventory["source_selection"] = "preferred-source-after-candidate-comparison"
         inventory["candidate_comparison"] = "evidence/candidate-comparison.json"
     write_json(output / "evidence/source-inventory.json", inventory)
+    progress(
+        "source_inventory",
+        inventory.get("status", "needs-review"),
+        task="来源预检与授权范围",
+        evidence=["evidence/source-inventory.json"],
+        next_action="继续原生提取" if inventory.get("status") == "complete" else "停止并修复来源预检",
+        diagnostics=[str(item) for item in inventory.get("diagnostics", [])],
+    )
+    if inventory.get("status") != "complete":
+        # Do not start extraction, rendering, OCR, or model scripts after a
+        # failed input gate.  The evidence-only package remains for diagnosis.
+        progress("run", "stopped", task="来源门禁未通过", evidence=["evidence/source-inventory.json"], next_action="修复来源后使用新的 package-name 重试")
+        summary = {
+            "status": "failed",
+            "runner_status": "failed",
+            "validation_status": "failed",
+            "output": str(output),
+            "source": str(source),
+            "source_type": source_type,
+            "pages_requested": len(requested_pages),
+            "pages_processed": 0,
+            "pages_parsed": 0,
+            "pages_rendered": 0,
+            "smoke_status": "not-run",
+            "progress_stream": "evidence/progress.jsonl",
+            "next_action": "查看 evidence/source-inventory.json，修复来源预检后重新运行。",
+        }
+        print(json.dumps(summary, ensure_ascii=False))
+        return 1
+    progress("native_extraction", "started", task="提取当前来源的原生文字和结构")
     native_model = pptx_native_model(source, pages, fontconfig) if source_type == "pptx" else pdf_layout_model(source, pages) if source_type == "pdf" else {"source_fingerprint": sha256(source), "status": "complete", "pages": [{"page": 1, "source_location": str(source), "text_blocks": [], "nodes": [], "relations": [], "coordinates": []}], "text_blocks": [], "nodes": [], "relations": [], "coordinates": [], "source_locations": [str(source)], "diagnostics": []}
     write_json(output / "evidence/native-content-model.json", native_model)
+    progress("native_extraction", native_model.get("status", "needs-review"), task="原生文字/结构提取", evidence=["evidence/native-content-model.json"], next_action="保留页面图并决定视觉/OCR 路径")
+    progress("source_rendering", "started", task="保存原始页面图和可复核资产")
     write_json(output / "evidence/context-policy.json", {"requested_mode": args.context_mode, "window_pages": args.context_window, "scope": "per-page native text/layout request", "independent_page_calls": True, "cross_page_hints_are_not_facts": True})
     preflight = mac96_preflight(output / "evidence")
     rendered, render_evidence = render_source(source, source_type, output / "assets/pages", output / "evidence", pages, slug, fontconfig)
@@ -1524,8 +1667,12 @@ def main() -> int:
     if candidate_comparison:
         shutil.copy2(args.candidate_comparison.expanduser().resolve(), output / "evidence/candidate-comparison.json")
     write_json(output / "evidence/rendering.json", render_evidence)
+    progress("source_rendering", render_evidence.get("status", "needs-review"), task="原始页面图/截图保存", evidence=["assets/pages/", "evidence/rendering.json"], next_action="开始视觉复核或 OCR 降级")
     embedded = extract_embedded_for_pages(source, output / "assets/embedded", pages, slug, package_name)
-    visual = run_mac96_text_structure(native_model, output / "evidence", preflight, args.context_mode, args.context_window) if (native_model.get("pages") or native_model.get("slides")) else {"status": "unavailable", "reviews": [], "image_reviews": [], "diagnostics": [{"reason": "no native pages available for text structure"}], "model": preflight.get("selected_model"), "context_policy": {"requested_mode": args.context_mode, "window_pages": args.context_window}}
+    progress("text_structure_or_relation_review_or_fallback", "started", task="视觉结构复核；不可用时进入 Apple Vision OCR", evidence=["evidence/mac96-preflight.json"])
+    native_page_records = native_model.get("pages") or native_model.get("slides") or []
+    native_has_any_text = any(native_page_has_text(item) for item in native_page_records)
+    visual = run_mac96_text_structure(native_model, output / "evidence", preflight, args.context_mode, args.context_window) if native_page_records and native_has_any_text else {"status": "unavailable", "reviews": [], "image_reviews": [], "diagnostics": [{"reason": "native text layer is empty; skip native-text mac96 route and use OCR candidates"}], "model": preflight.get("selected_model"), "context_policy": {"requested_mode": args.context_mode, "window_pages": args.context_window}}
     relation_reasons = {item.get("page"): "native text structure left relation uncertainty" for item in visual.get("reviews", []) if item.get("status") != "complete" or (item.get("result") or {}).get("uncertainties") or (item.get("result") or {}).get("conflicts")}
     image_review = run_mac96_relation_review(rendered, pages, output / "evidence", preflight, relation_reasons) if rendered else {"status": "not-needed", "reviews": [], "diagnostics": []}
     visual["image_reviews"] = image_review.get("reviews", [])
@@ -1542,8 +1689,25 @@ def main() -> int:
     ocr = run_apple_vision(rendered, output / "evidence", fallback_pages) if fallback_pages and rendered else {"status": "not-needed" if not fallback_pages else "unavailable", "candidates": [], "diagnostics": []}
     write_json(output / "evidence/mac96-visual-review.json", visual)
     write_json(output / "evidence/ocr-candidates.json", ocr)
+    progress("text_structure_or_relation_review_or_fallback", "complete" if visual.get("status") == "complete" or ocr.get("status") in {"complete", "not-needed"} else "needs-review", task="视觉模型/OCR 候选路径完成", evidence=["evidence/mac96-visual-review.json", "evidence/ocr-candidates.json"], next_action="生成 Markdown 和修复候选")
     classification = classify_content(native_model, visual, ocr, visual)
     write_json(output / "evidence/content-classification.json", classification)
+    progress("markdown_assembly", "started", task="组装语义 Markdown、页面图链接和未决项", evidence=["evidence/content-classification.json"])
+    # The language-repair adapter is intentionally not implicit.  Until an
+    # authorized model or human review writes a current-source draft and
+    # diff, the package may contain extracted candidates but cannot claim that
+    # its text has been optimized.
+    language_repair = {
+        "status": "planned",
+        "source": "current-run",
+        "raw_inputs": ["evidence/native-content-model.json", "evidence/ocr-candidates.json", "evidence/content-classification.json"],
+        "draft": None,
+        "diff": None,
+        "diagnostics": ["语言质量修复适配器尚未实现；当前 Markdown 只代表原生/候选提取结果，不能声称文字已优化。"],
+        "next_action": "接入已授权的语言模型或人工复核，生成 evidence/language-repair-draft.json 后重新审计。",
+    }
+    write_json(output / "evidence/language-repair-draft.json", language_repair)
+    progress("language_quality_repair", "needs-review", task="语言质量修复未执行", evidence=["evidence/language-repair-draft.json"], next_action=language_repair["next_action"], diagnostics=language_repair["diagnostics"])
     visual_results = [item.get("result") for item in visual.get("reviews", []) if item.get("result")]
     visual_results.extend(item.get("result") for item in visual.get("image_reviews", []) if item.get("result"))
     unknown_forms = []
@@ -1571,7 +1735,19 @@ def main() -> int:
     visibility_ok = render_evidence.get("text_visibility", {}).get("status") in {"complete", "not-applicable"}
     render_ok = len(rendered) == len(pages) and render_evidence.get("status") == "complete" and visibility_ok
     native_ok = native_model.get("status") in {"complete", "partial"} and len((native_model.get("pages") or native_model.get("slides") or [])) == len(pages)
-    package_status = "complete" if render_ok and native_ok and classification["status"] == "complete" and reconciliation_status == "complete" else "needs-review"
+    language_repair_status = language_repair.get("status")
+    quality_audit = {
+        "status": "planned",
+        "scope": "current-source-selected-pages",
+        "selected_pages": pages,
+        "score": None,
+        "diagnostics": ["独立语义/视觉质量审计尚未执行；runner 不自行填充 95/97 分。"],
+        "next_action": "执行当前 source 的审计、局部修复和 post-edit re-audit。",
+    }
+    write_json(output / "evidence/quality-audit.json", quality_audit)
+    progress("semantic_visual_quality_audit", "needs-review", task="独立语义/视觉质量审计未执行", evidence=["evidence/quality-audit.json"], next_action=quality_audit["next_action"], diagnostics=quality_audit["diagnostics"])
+    quality_audit_status = quality_audit.get("status")
+    package_status = "complete" if render_ok and native_ok and classification["status"] == "complete" and reconciliation_status == "complete" and language_repair_status == "complete" and quality_audit_status == "complete" else "needs-review"
     evidence_level = "L3-remote-visual" if visual.get("status") == "complete" else "L2-local-runtime"
     invocation = shlex.join(sys.argv)
     stage_evidence = [
@@ -1579,7 +1755,7 @@ def main() -> int:
         stage_evidence_item("A2", "complete" if native_ok else "needs-review", "L2-local-runtime", ["evidence/native-content-model.json", "evidence/content-classification.json"], native_model.get("diagnostics", []), [], invocation),
         stage_evidence_item("A3", "complete" if render_ok else "needs-review", "L2-local-runtime", ["assets/pages/", "assets/regions/", "assets/embedded/", "evidence/rendering.json"], [] if render_ok else ["page renderer did not produce every requested page"], ["assets/regions/ kept empty because no region crop was required"] if not (output / "assets/regions").iterdir() else [], invocation),
         stage_evidence_item("A4", "complete" if reconciliation_status == "complete" else "needs-review", evidence_level, ["evidence/mac96-preflight.json", "evidence/mac96-visual-review.json", "evidence/ocr-candidates.json", "evidence/reconciliation.json", "evidence/context-policy.json"], reconciliation.get("diagnostics", []), unknown_forms, invocation),
-        stage_evidence_item("A5", "complete" if package_status == "complete" else "needs-review", "L2-local-runtime", ["document.md", "evidence/smoke-report.json"], [] if package_status == "complete" else ["上游渲染、A4 或 smoke 未决项已保留"], [], invocation),
+        stage_evidence_item("A5", "complete" if package_status == "complete" else "needs-review", "L2-local-runtime", ["index.md", "evidence/language-repair-draft.json", "evidence/smoke-report.json"], [] if package_status == "complete" else ["上游渲染、A4、语言质量修复或 smoke 未决项已保留"], [], invocation),
         stage_evidence_item("A6", "complete", "L2-local-runtime", ["manifest.yaml"], [], [], invocation),
         stage_evidence_item("A7", "complete" if package_status == "complete" else "needs-review", "L2-local-runtime", ["reports/processing-report.yaml", "reports/acceptance-report.yaml", "reports/failure-report.yaml", "reports/quality-report.yaml"], ["独立业务包验收器需在 runner 之后单独运行"], [], invocation),
     ]
@@ -1592,48 +1768,57 @@ def main() -> int:
         failures.append({"failure_id": "a4-visual-review-unavailable", "stage_id": "A4", "code": "visual-review-unavailable", "severity": "P1", "retryable": True, "status": "open", "message": "mac96 视觉复核未对全部页面返回可解析 JSON；已记录 OCR 或 needs-review。", "evidence_paths": ["evidence/mac96-preflight.json", "evidence/mac96-visual-review.json", "evidence/ocr-candidates.json"], "remediation": "修复 mac96/模型调用后重试，或完成页面人工复核。", "resolved_evidence_paths": [], "diagnostics": visual.get("diagnostics", [])})
     if unknown_forms:
         failures.append({"failure_id": "a4-open-set-unknown-forms", "stage_id": "A4", "code": "unknown-form-unresolved", "severity": "P1", "retryable": False, "status": "open", "message": "视觉模型报告了未裁决的形式。", "evidence_paths": ["evidence/reconciliation.json"], "remediation": "逐项复核 unknown_forms 后再验收。", "resolved_evidence_paths": [], "diagnostics": unknown_forms})
+    if language_repair_status != "complete":
+        failures.append({"failure_id": "language-quality-repair-not-run", "stage_id": "A5", "code": "review-failed", "severity": "P1", "retryable": True, "status": "open", "message": "原生/OCR 文字尚未经过当前来源的语言质量修复和差异复核，不能声称文字已优化。", "evidence_paths": ["evidence/language-repair-draft.json", "evidence/native-content-model.json", "evidence/ocr-candidates.json"], "remediation": language_repair.get("next_action"), "resolved_evidence_paths": [], "diagnostics": language_repair.get("diagnostics", [])})
+    if quality_audit_status != "complete":
+        failures.append({"failure_id": "semantic-visual-audit-not-run", "stage_id": "A7", "code": "review-failed", "severity": "P1", "retryable": True, "status": "open", "message": "当前 source 尚未执行独立语义/视觉质量审计，不能自动声称达到 95+。", "evidence_paths": ["evidence/quality-audit.json", "reports/quality-report.yaml"], "remediation": quality_audit.get("next_action"), "resolved_evidence_paths": [], "diagnostics": quality_audit.get("diagnostics", [])})
     failure_report = {"status": "none" if not failures else "needs-review", "evidence_level": evidence_level, "failures": failures, "warnings": [item["message"] for item in failures], "diagnostics": ["失败、fallback 与未决项由本次真实运行生成；未执行能力不写成成功。"]}
     page_sections = []
     class_pages = {item.get("page"): item for item in classification.get("pages", [])}
     for page in pages:
         item = class_pages.get(page, {})
         page_sections.append({"section_id": f"page-{page}", "title": (item.get("page_title") or {}).get("text") or f"第 {page} 页", "body": "\n".join(block.get("text", "") for block in item.get("classified_blocks", []) if block.get("role") != "page-title"), "source_occurrences": [f"{package_name}-p{page:03d}"], "visual_asset_ids": [f"page-p{page:03d}"] if page in rendered else [], "confidence": "high" if item.get("status") == "complete" else "medium", "reader_order": "semantic-before-visual", "unknown_forms": [value for value in unknown_forms if value.get("page") == page], "unresolved": [value for value in unresolved if value.get("page") == page]})
-    quality_gate = {"score_scope": "per-page-or-affected-region", "minimum_total": 95, "target_total": 97, "expert_score": 97 if package_status == "complete" else None, "status": "passed" if package_status == "complete" else "needs-review", "blocked_by": [] if package_status == "complete" else ["rendering", "visual-review", "classification"], "reference": "references/quality-targets.zh.md", "report": "reports/quality-report.yaml"}
+    quality_gate = {"score_scope": "per-page-or-affected-region", "minimum_total": 95, "target_total": 97, "expert_score": None, "status": "needs-review", "blocked_by": ["rendering", "visual-review", "classification", "language-quality-repair", "semantic-visual-audit"], "reference": "references/quality-targets.zh.md", "report": "reports/quality-report.yaml"}
+    text_response_evidence = [str(path.relative_to(output)) for path in sorted((output / "evidence").glob("mac96-text-response-p*.json"))]
+    relation_response_evidence = [str(path.relative_to(output)) for path in sorted((output / "evidence").glob("mac96-relation-response-p*.json"))]
     quality_report = {
         "report_version": "0.1.0",
-        "status": "accepted" if package_status == "complete" else "needs-review",
-        "score_scope": "pages 3,4 only; evidence-backed semantic and visual review",
-        "total": 97 if package_status == "complete" else None,
+        "status": "needs-review",
+        "score_scope": f"current source selected pages: {pages}",
+        "total": None,
         "minimum": 95,
         "target": 97,
-        "assessment_basis": "native PDF text/layout, mac96 text structure, bounded relation image review, independent package validators; validator pass is not used as the sole quality proof",
+        "assessment_basis": "未执行当前 source 的独立语义/视觉评分；native/OCR/visual evidence 不能自动推导 95/97 分",
         "dimensions": [
-            {"id": "source_traceability", "name": "来源保护与证据可追溯", "score": 10, "max": 10, "evidence": ["evidence/source-inventory.json", "evidence/native-content-model.json", "manifest.yaml"]},
-            {"id": "structure_mapping", "name": "页面与章节结构映射", "score": 13, "max": 14, "evidence": ["evidence/content-classification.json", "document.md", "evidence/reconciliation.json"]},
-            {"id": "content_completeness", "name": "内容完整性与原意保留", "score": 22, "max": 23, "evidence": ["evidence/native-content-model.json", "evidence/mac96-text-response-p003.json", "evidence/mac96-text-response-p004.json", "document.md"]},
-            {"id": "graphic_fidelity", "name": "图形结构保真", "score": 22, "max": 23, "evidence": ["evidence/mac96-relation-response-p003.json", "evidence/mac96-relation-response-p004.json", "assets/pages/"]},
-            {"id": "provenance_uncertainty", "name": "来源与不确定性边界", "score": 10, "max": 10, "evidence": ["evidence/reconciliation.json", "evidence/ocr-candidates.json", "reports/failure-report.yaml"]},
-            {"id": "visual_asset_traceability", "name": "视觉资产与链接追溯", "score": 10, "max": 10, "evidence": ["evidence/rendering.json", "manifest.yaml", "reports/validation-result.json"]},
-            {"id": "unknown_form_coverage", "name": "未知形式与覆盖完整性", "score": 5, "max": 5, "evidence": ["evidence/reconciliation.json", "evidence/mac96-visual-review.json"]},
-            {"id": "repair_reaudit_recovery", "name": "修复复核、测试与局部恢复", "score": 5, "max": 5, "evidence": ["evidence/workflow-execution.json", "reports/validation-result.json", "reports/acceptance-report.yaml"]},
+            {"id": "source_traceability", "name": "来源保护与证据可追溯", "score": None, "max": 10, "evidence": ["evidence/source-inventory.json", "evidence/native-content-model.json", "manifest.yaml"]},
+            {"id": "structure_mapping", "name": "页面与章节结构映射", "score": None, "max": 14, "evidence": ["evidence/content-classification.json", "index.md", "evidence/reconciliation.json"]},
+            {"id": "content_completeness", "name": "内容完整性与原意保留", "score": None, "max": 23, "evidence": ["evidence/native-content-model.json", *text_response_evidence, "index.md"]},
+            {"id": "graphic_fidelity", "name": "图形结构保真", "score": None, "max": 23, "evidence": [*relation_response_evidence, "assets/pages/"]},
+            {"id": "provenance_uncertainty", "name": "来源与不确定性边界", "score": None, "max": 10, "evidence": ["evidence/reconciliation.json", "evidence/ocr-candidates.json", "reports/failure-report.yaml"]},
+            {"id": "visual_asset_traceability", "name": "视觉资产与链接追溯", "score": None, "max": 10, "evidence": ["evidence/rendering.json", "manifest.yaml", "reports/validation-result.json"]},
+            {"id": "unknown_form_coverage", "name": "未知形式与覆盖完整性", "score": None, "max": 5, "evidence": ["evidence/reconciliation.json", "evidence/mac96-visual-review.json"]},
+            {"id": "repair_reaudit_recovery", "name": "修复复核、测试与局部恢复", "score": None, "max": 5, "evidence": ["evidence/quality-audit.json", "reports/validation-result.json", "reports/acceptance-report.yaml"]},
         ],
-        "hard_gates": {"content_completeness": "22/23", "graphic_fidelity": "22/23", "unknown_form_coverage": "5/5", "p0_issues": 0, "post_edit_reaudit": "present", "page_recovery": "available"},
-        "unknowns": [] if package_status == "complete" else ["package is not independently accepted"],
+        "hard_gates": {"content_completeness": "not-scored", "graphic_fidelity": "not-scored", "unknown_form_coverage": "not-scored", "p0_issues": "unknown", "post_edit_reaudit": "missing", "page_recovery": "not-audit-evidence"},
+        "unknowns": ["package is not independently accepted", "language quality repair is not evidenced", "semantic/visual audit is not evidenced"],
     }
     execution_path = "mac96" if visual.get("status") == "complete" else "apple-vision-ocr" if ocr.get("status") == "complete" else "needs-review"
     comparison_ref = "evidence/candidate-comparison.json" if candidate_comparison else None
     selection_label = "preferred-source-after-candidate-comparison" if candidate_comparison else "single-source"
     model_calls = visual.get("token_usage") or summarize_mac96_calls(visual)
     context_policy = {"requested_mode": args.context_mode, "window_pages": args.context_window, "scope": "per-page native text/layout request", "independent_page_calls": True, "cross_page_hints_are_not_facts": True, "evidence": "evidence/context-policy.json"}
-    manifest = {"manifest_version": "0.7.0", "package_id": package_name, "kind": "markdown-asset-package", "status": package_status, "source": {"path": str(source), "path_label": source.name, "media_type": media_type_for(source), "source_fingerprint": sha256(source), "selected_pages": pages, "total_pages": total, "source_selection": "single-source", "candidate_comparison": comparison_ref}, "markdown": {"path": "document.md", "sections": page_sections}, "assets_manifest": {"path": "manifest.yaml", "type": "source-visual-asset-manifest"}, "assets": assets, "processing": {"native_extraction": "complete" if native_ok else "partial", "ocr_used": bool(ocr.get("candidates")), "visual_review": "complete" if visual.get("status") == "complete" else "partial" if visual.get("reviews") else "unavailable", "execution_path": execution_path, "fallback_reason": None if visual.get("status") == "complete" else "mac96 unavailable, see preflight/review evidence", "status": package_status, "stage_evidence": stage_evidence, "stage_evidence_contract": "contracts/stage-evidence.yaml", "failure_report": "reports/failure-report.yaml", "model_calls": model_calls, "context_policy": context_policy}, "validation": {"validator_version": "real-runner-0.7.0", "status": "passed" if package_status == "complete" else "needs-review", "checks": ["required files/directories", "source fingerprint", "native extraction", "source-owned rendering", "content classification", "visual/OCR evidence", "asset hashes", "markdown links"]}, "quality_gate": quality_gate, "quality_report": "reports/quality-report.yaml"}
-    processing = {"status": package_status, "evidence_level": evidence_level, "run_id": package_name, "started_at": started, "finished_at": now(), "real_business_result_package": str(output), "input": {"source": str(source), "source_type": source_type, "sha256": sha256(source), "pages": pages, "total_pages": total}, "source_selection": selection_label, "candidate_comparison": comparison_ref, "stage_evidence_contract": "contracts/stage-evidence.yaml", "stage_evidence": stage_evidence, "stages": [{"id": item["stage_id"], "status": item["status"], "evidence": item["evidence_paths"]} for item in stage_evidence], "tools": {"native-parser": native_model.get("parser", {}).get("tool"), "office-page-renderer": render_evidence.get("office_renderer"), "pdf-page-renderer": render_evidence.get("page_renderer"), "mac96-vision-endpoint": "evidence/mac96-preflight.json + evidence/mac96-visual-review.json", "system-ocr": "adapters/apple_vision_ocr.swift", "markdown-writer": "adapters/workflow_a_runner.py", "manifest-writer": "adapters/workflow_a_runner.py"}, "model_calls": model_calls, "font_diagnostics": native_model.get("font_diagnostics") or native_model.get("font_inventory"), "not_called": ["gpt-image-2", "Workflow B"], "asset_policy": {"embedded_count": len(embedded), "regions_count": len(list((output / "assets/regions").iterdir()))}, "context_policy": context_policy, "repair_tasks": [], "reaudit": {"status": "not-required", "required_after_edit": False}, "recovery": {"scope": "page-or-region", "previous_valid_result": None, "status": "available"}, "quality_gate": quality_gate}
-    acceptance = {"status": "passed" if package_status == "complete" else "needs-review", "evidence_level": evidence_level, "real_business_result_package": str(output), "checks": [{"id": "required-files-and-directories", "status": "passed"}, {"id": "source-read", "status": "passed" if inventory["status"] == "complete" else "needs-review", "evidence": "evidence/source-inventory.json"}, {"id": "native-extraction", "status": "passed" if native_ok else "needs-review", "evidence": "evidence/native-content-model.json"}, {"id": "source-owned-rendering", "status": "passed" if render_ok else "needs-review", "evidence": "evidence/rendering.json"}, {"id": "content-classification", "status": "passed" if classification["status"] == "complete" else "needs-review", "evidence": "evidence/content-classification.json"}, {"id": "visual-review", "status": "passed" if visual.get("status") == "complete" else "needs-review", "evidence": "evidence/mac96-visual-review.json"}, {"id": "asset-integrity", "status": "passed"}, {"id": "markdown-links", "status": "passed" if assets else "needs-review"}], "failures": [item["failure_id"] for item in failures], "warnings": [item["message"] for item in failures], "stage_evidence": stage_evidence, "repair_tasks": [], "reaudit": {"status": "not-required", "required_after_edit": False}, "recovery": {"scope": "page-or-region", "previous_valid_result": None, "status": "available"}, "quality_gate": quality_gate, "failure_report": "reports/failure-report.yaml", "diagnostics": {"generated_by": "adapters/workflow_a_runner.py", "real_business_result_package": str(output)}}
+    manifest = {"manifest_version": "0.7.0", "package_id": package_name, "kind": "markdown-asset-package", "status": package_status, "source": {"path": str(source), "path_label": source.name, "media_type": media_type_for(source), "source_fingerprint": sha256(source), "selected_pages": pages, "total_pages": total, "source_selection": "single-source", "candidate_comparison": comparison_ref}, "markdown": {"path": "index.md", "sections": page_sections}, "assets_manifest": {"path": "manifest.yaml", "type": "source-visual-asset-manifest"}, "assets": assets, "processing": {"native_extraction": "complete" if native_ok else "partial", "ocr_used": bool(ocr.get("candidates")), "visual_review": "complete" if visual.get("status") == "complete" else "partial" if visual.get("reviews") else "unavailable", "execution_path": execution_path, "fallback_reason": None if visual.get("status") == "complete" else "mac96 unavailable, see preflight/review evidence", "status": package_status, "stage_evidence": stage_evidence, "stage_evidence_contract": "contracts/stage-evidence.yaml", "failure_report": "reports/failure-report.yaml", "model_calls": model_calls, "context_policy": context_policy}, "validation": {"validator_version": "real-runner-0.7.0", "status": "passed" if package_status == "complete" else "needs-review", "checks": ["required files/directories", "source fingerprint", "native extraction", "source-owned rendering", "content classification", "visual/OCR evidence", "asset hashes", "markdown links"]}, "quality_gate": quality_gate, "quality_report": "reports/quality-report.yaml"}
+    manifest["processing"]["language_quality_repair"] = language_repair
+    manifest["processing"]["quality_audit"] = quality_audit
+    processing = {"status": package_status, "evidence_level": evidence_level, "run_id": package_name, "started_at": started, "finished_at": now(), "real_business_result_package": str(output), "input": {"source": str(source), "source_type": source_type, "sha256": sha256(source), "pages": pages, "total_pages": total}, "source_selection": selection_label, "candidate_comparison": comparison_ref, "progress_stream": "evidence/progress.jsonl", "language_quality_repair": language_repair, "quality_audit": quality_audit, "stage_evidence_contract": "contracts/stage-evidence.yaml", "stage_evidence": stage_evidence, "stages": [{"id": item["stage_id"], "status": item["status"], "evidence": item["evidence_paths"]} for item in stage_evidence], "tools": {"native-parser": native_model.get("parser", {}).get("tool"), "office-page-renderer": render_evidence.get("office_renderer"), "pdf-page-renderer": render_evidence.get("page_renderer"), "mac96-vision-endpoint": "evidence/mac96-preflight.json + evidence/mac96-visual-review.json", "system-ocr": "adapters/apple_vision_ocr.swift", "markdown-writer": "archive/legacy-adapters/workflow_a_runner.py", "manifest-writer": "archive/legacy-adapters/workflow_a_runner.py"}, "model_calls": model_calls, "font_diagnostics": native_model.get("font_diagnostics") or native_model.get("font_inventory"), "not_called": ["gpt-image-2", "Workflow B"], "asset_policy": {"embedded_count": len(embedded), "regions_count": len(list((output / "assets/regions").iterdir()))}, "context_policy": context_policy, "repair_tasks": [], "reaudit": {"status": "not-required", "required_after_edit": False}, "recovery": {"scope": "page-or-region", "previous_valid_result": None, "status": "available"}, "quality_gate": quality_gate}
+    acceptance = {"status": "passed" if package_status == "complete" else "needs-review", "evidence_level": evidence_level, "real_business_result_package": str(output), "checks": [{"id": "required-files-and-directories", "status": "passed"}, {"id": "source-read", "status": "passed" if inventory["status"] == "complete" else "needs-review", "evidence": "evidence/source-inventory.json"}, {"id": "native-extraction", "status": "passed" if native_ok else "needs-review", "evidence": "evidence/native-content-model.json"}, {"id": "source-owned-rendering", "status": "passed" if render_ok else "needs-review", "evidence": "evidence/rendering.json"}, {"id": "content-classification", "status": "passed" if classification["status"] == "complete" else "needs-review", "evidence": "evidence/content-classification.json"}, {"id": "visual-review", "status": "passed" if visual.get("status") == "complete" else "needs-review", "evidence": "evidence/mac96-visual-review.json"}, {"id": "asset-integrity", "status": "passed"}, {"id": "markdown-links", "status": "passed" if assets else "needs-review"}], "failures": [item["failure_id"] for item in failures], "warnings": [item["message"] for item in failures], "stage_evidence": stage_evidence, "repair_tasks": [], "reaudit": {"status": "not-required", "required_after_edit": False}, "recovery": {"scope": "page-or-region", "previous_valid_result": None, "status": "available"}, "quality_gate": quality_gate, "failure_report": "reports/failure-report.yaml", "diagnostics": {"generated_by": "archive/legacy-adapters/workflow_a_runner.py", "real_business_result_package": str(output)}}
     write_yaml(output / "manifest.yaml", manifest)
     write_yaml(output / "reports/quality-report.yaml", quality_report)
     write_yaml(output / "reports/processing-report.yaml", processing)
     write_yaml(output / "reports/acceptance-report.yaml", acceptance)
     write_yaml(output / "reports/failure-report.yaml", failure_report)
     build_markdown(output, source, source_type, pages, rendered, native_model, classification, visual, reconciliation, ocr)
+    progress("markdown_assembly", "complete", task="Markdown 和图片链接已生成", evidence=["index.md", "manifest.yaml"], next_action="执行 smoke 门禁")
 
     # An explicit --smoke-pages selector is also the per-batch verification
     # scope.  Previously --no-smoke-gate silently reduced this to pages[:2],
@@ -1667,9 +1852,16 @@ def main() -> int:
     # is the user-visible acceptance gate and re-reads the finished package.
     validation = validate_package(output)
     write_json(output / "reports/validation-result.json", validation)
+    progress(
+        "independent_validation",
+        validation.get("status", "failed"),
+        task="独立验收器重读当前 package",
+        evidence=["reports/validation-result.json"],
+        next_action="可使用当前 package" if validation.get("status") == "passed" else "查看失败报告后只修复当前页/区域",
+    )
     final_status = validation.get("status", "needs-review")
     next_action = (
-        "可阅读 document.md，并将 assets/ 作为已验收来源资产使用。"
+        "可阅读 index.md，并将 assets/ 作为已验收来源资产使用。"
         if final_status == "passed"
         else "请先查看 reports/validation-result.json、reports/acceptance-report.yaml 和 evidence/，完成复核后再使用。"
     )
@@ -1691,6 +1883,7 @@ def main() -> int:
         "validation_report": "reports/validation-result.json",
         "smoke_status": smoke_report.get("status"),
         "smoke_report": "evidence/smoke-report.json",
+        "progress_stream": "evidence/progress.jsonl",
         "smoke_failures": smoke_report.get("failures", []),
         "stopped_before_pages": smoke_report.get("stopped_before_pages", []),
         "next_action": next_action,

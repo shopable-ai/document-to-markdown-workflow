@@ -31,13 +31,14 @@ except ModuleNotFoundError:  # pragma: no cover - useful error is emitted below
 
 
 REQUIRED_FILES = (
-    "document.md",
+    "index.md",
     "manifest.yaml",
     "reports/processing-report.yaml",
     "reports/acceptance-report.yaml",
     "reports/failure-report.yaml",
 )
-REQUIRED_DIRECTORIES = ("assets/pages", "assets/regions", "assets/embedded")
+REQUIRED_DIRECTORIES = ("assets",)
+LEGACY_ASSET_DIRECTORIES = ("assets/pages", "assets/regions", "assets/embedded")
 STAGE_IDS = tuple(f"A{i}" for i in range(1, 8))
 STAGE_STATUSES = {"complete", "needs-review", "unavailable", "failed", "not-run"}
 EVIDENCE_LEVELS = {
@@ -72,7 +73,28 @@ FAILURE_CODES = {
 FAILURE_SEVERITIES = {"P0", "P1", "P2", "info"}
 FORBIDDEN_REPORT_FIELDS = {"api_key", "authorization", "cookie", "secret", "subscription_url"}
 IMAGE_LINK_RE = re.compile(r"!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^) \t]+))")
+FLAT_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:-\d{2})?\.[a-z0-9]+$")
+FLAT_NAME_FORBIDDEN_RE = re.compile(
+    r"page-render|original-page|source-media|"
+    r"embedded-media|complex-region|__|o\d{2}(?:\.|$)"
+)
 HEADING_RE = re.compile(r"^#{1,2}\s+\S.*$", re.MULTILINE)
+SECTION_HEADING_RE = re.compile(r"^##\s+([^\n]+)$", re.MULTILINE)
+PAGE_ONLY_TITLE_RE = re.compile(r"^(?:待复核[：:]\s*)?第\s*\d+\s*页(?:\s*[：:].*)?$")
+READER_FORBIDDEN_MARKERS = (
+    "待复核",
+    "原文疑似",
+    "来源页",
+    "A4 状态",
+    "来源与原图",
+    "OCR 待复核",
+    "OCR 解释",
+    "OCR 语义",
+    "建议结合原图复核",
+    "审核状态",
+    "source_occurrence",
+    "visual_asset_id",
+)
 
 
 def _load(path: Path) -> Any:
@@ -132,8 +154,10 @@ class _Validator:
         self.documents: dict[str, Any] = {}
         self.occurrence_ids: set[str] = set()
         self.asset_ids: set[str] = set()
+        self.section_ids: set[str] = set()
         self.asset_by_path: dict[str, dict[str, Any]] = {}
         self.asset_by_id: dict[str, dict[str, Any]] = {}
+        self.flat_layout = False
 
     def error(self, code: str, message: str) -> None:
         self.errors.append(f"{code}: {message}")
@@ -199,6 +223,7 @@ class _Validator:
         if data is None:
             self.error("manifest.invalid", "manifest.yaml must contain a mapping")
             return
+        self.validate_asset_layout(data)
         for key in ("package_id", "source", "markdown", "assets", "processing", "validation"):
             if key not in data:
                 self.error("manifest.required", f"manifest missing {key}")
@@ -219,8 +244,11 @@ class _Validator:
         if status is not None and not isinstance(status, str):
             self.error("manifest.status", "manifest status must be a string when present")
         self.validate_assets(data.get("assets"), package_id, source)
+        self.validate_reconstruction_profiles(data.get("visual_reconstruction_profiles"))
         self.validate_markdown(data.get("markdown"), package_id)
         self.validate_processing(data.get("processing"), status)
+        self.validate_page_output_pairs(data, source, _mapping(data.get("processing")))
+        self.validate_execution_evidence(data, source)
         validation = _mapping(data.get("validation"))
         if validation is None:
             self.error("manifest.validation", "validation must be a mapping")
@@ -230,6 +258,155 @@ class _Validator:
                     self.error("manifest.validation", f"validation missing {key}")
             if validation.get("status") not in {"passed", "needs-review", "failed", "fixture-contract-only"}:
                 self.error("manifest.validation", "validation.status is not a recognized state")
+
+    def validate_asset_layout(self, manifest: dict[str, Any]) -> None:
+        """Require flat assets for new packages while keeping old packages readable."""
+        self.flat_layout = manifest.get("output_layout") == "flat-assets-v1"
+        if not self.flat_layout:
+            self.warning("asset-layout", "legacy asset layout; new runs must use output_layout=flat-assets-v1")
+            return
+        for relative in LEGACY_ASSET_DIRECTORIES:
+            if (self.root / relative).exists():
+                self.error("asset-layout", f"flat package must not contain legacy directory: {relative}/")
+        assets_root = self.root / "assets"
+        if assets_root.is_dir():
+            nested = [path.relative_to(self.root).as_posix() for path in assets_root.rglob("*") if path.is_dir()]
+            if nested:
+                self.error("asset-layout", f"flat package contains nested asset directories: {nested}")
+
+    def validate_execution_evidence(self, manifest: dict[str, Any], source: dict[str, Any] | None) -> None:
+        """Check the active runner's cross-stage evidence without upgrading its quality state."""
+        evidence = _mapping(manifest.get("evidence"))
+        if evidence is None:
+            # Older fixture/legacy packages predate the active source-runner
+            # evidence map.  Keep them structurally reviewable, but make the
+            # boundary visible instead of silently treating them as current.
+            self.warning("execution-evidence", "manifest has no active-runner evidence map; fixture/legacy boundary is unverified")
+            return
+        active_keys = {"source_inventory", "capability_probe", "smoke_report", "progress"}
+        if not active_keys.intersection(evidence):
+            self.warning("execution-evidence", "manifest evidence contains only optional/legacy records; active-runner boundary is unverified")
+            return
+        required = {
+            "source_inventory": "evidence/source-inventory.json",
+            "capability_probe": "evidence/capability-probe.json",
+            "smoke_report": "evidence/smoke-report.json",
+            "progress": "evidence/progress.jsonl",
+        }
+        resolved: dict[str, Path] = {}
+        for key, fallback in required.items():
+            value = evidence.get(key, fallback)
+            path = self.package_path(value, f"manifest.evidence.{key}")
+            if path is not None:
+                resolved[key] = path
+
+        source_fingerprint = source.get("source_fingerprint") if source else None
+        inventory_path = resolved.get("source_inventory")
+        if inventory_path is not None:
+            try:
+                inventory = _load(inventory_path)
+            except Exception as exc:
+                self.error("execution-evidence", f"source inventory is not valid JSON/YAML: {exc}")
+                inventory = None
+            if not isinstance(inventory, dict):
+                self.error("execution-evidence", "source inventory must be a mapping")
+            else:
+                for key in ("source_fingerprint", "media_type", "status", "page_count_or_dimensions", "text_layer", "image_layer", "readability", "diagnostics"):
+                    if key not in inventory:
+                        self.error("execution-evidence", f"source inventory missing {key}")
+                if source_fingerprint and inventory.get("source_fingerprint") != source_fingerprint:
+                    self.error("status-consistency", "source inventory fingerprint differs from manifest source fingerprint")
+                self.validate_forbidden_fields(inventory, "source-inventory")
+
+        for key in ("capability_probe", "smoke_report"):
+            path = resolved.get(key)
+            if path is None or path.suffix == ".jsonl":
+                continue
+            try:
+                payload = _load(path)
+            except Exception as exc:
+                self.error("execution-evidence", f"{key} is not valid JSON/YAML: {exc}")
+                continue
+            if not isinstance(payload, dict):
+                self.error("execution-evidence", f"{key} must be a mapping")
+                continue
+            if source_fingerprint and payload.get("source_fingerprint") not in {None, source_fingerprint}:
+                self.error("status-consistency", f"{key} fingerprint differs from manifest source fingerprint")
+            if payload.get("status") not in {"not-run", "passed", "needs-review", "failed", "complete"}:
+                self.error("execution-evidence", f"{key} has an invalid status")
+            self.validate_forbidden_fields(payload, key)
+
+        progress_path = resolved.get("progress")
+        if progress_path is not None:
+            stages: set[str] = set()
+            try:
+                lines = progress_path.read_text(encoding="utf-8").splitlines()
+            except OSError as exc:
+                self.error("execution-evidence", f"progress stream cannot be read: {exc}")
+                lines = []
+            for index, line in enumerate(lines, 1):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    self.error("execution-evidence", f"progress line {index} is not valid JSON: {exc}")
+                    continue
+                if not isinstance(event, dict):
+                    self.error("execution-evidence", f"progress line {index} must be a mapping")
+                    continue
+                stage = event.get("stage")
+                if isinstance(stage, str):
+                    stages.add(stage)
+                for key in ("run_id", "source_fingerprint", "stage", "task", "attempt", "status", "elapsed_seconds", "evidence_paths", "next_action"):
+                    if key not in event:
+                        self.error("execution-evidence", f"progress line {index} missing {key}")
+                if source_fingerprint and event.get("source_fingerprint") != source_fingerprint:
+                    self.error("status-consistency", f"progress line {index} fingerprint differs from manifest source fingerprint")
+                if not isinstance(event.get("evidence_paths"), list):
+                    self.error("execution-evidence", f"progress line {index} evidence_paths must be a list")
+                else:
+                    for evidence_path in event["evidence_paths"]:
+                        if isinstance(evidence_path, str) and evidence_path.strip():
+                            self.package_path(evidence_path, f"progress line {index} evidence")
+                self.validate_forbidden_fields(event, f"progress[{index}]")
+            required_stages = {"execution_preflight", "source_inventory", "native_extraction", "source_rendering", "markdown_assembly", "independent_validation"}
+            missing = sorted(required_stages - stages)
+            if missing:
+                self.error("execution-evidence", f"progress stream missing stages: {', '.join(missing)}")
+
+    def validate_reconstruction_profiles(self, profiles: Any) -> None:
+        if profiles is None:
+            return
+        if not isinstance(profiles, list):
+            self.error("reconstruction-profile", "visual_reconstruction_profiles must be a list")
+            return
+        required = ("profile_id", "source", "reconstruction", "canvas", "composition", "visual_elements", "text_fidelity", "style", "evidence", "uncertainty", "status")
+        for index, profile in enumerate(profiles):
+            item = _mapping(profile)
+            if item is None:
+                self.error("reconstruction-profile", f"profiles[{index}] must be a mapping")
+                continue
+            for key in required:
+                if key not in item:
+                    self.error("reconstruction-profile", f"profiles[{index}] missing {key}")
+            source = _mapping(item.get("source"))
+            if source is None:
+                self.error("reconstruction-profile", f"profiles[{index}].source must be a mapping")
+            else:
+                asset_id = source.get("asset_id")
+                if asset_id not in self.asset_ids:
+                    self.error("reconstruction-profile", f"profiles[{index}] references unknown asset_id {asset_id}")
+                asset_path = self.package_path(source.get("asset_path"), f"profiles[{index}].source.asset_path")
+                declared_sha = source.get("asset_sha256")
+                if asset_path is not None and isinstance(declared_sha, str) and re.fullmatch(r"[0-9a-fA-F]{64}", declared_sha):
+                    if _sha256(asset_path).lower() != declared_sha.lower():
+                        self.error("reconstruction-profile", f"profiles[{index}] asset SHA-256 does not match source asset")
+                elif not isinstance(declared_sha, str):
+                    self.error("reconstruction-profile", f"profiles[{index}] source.asset_sha256 is required")
+            if item.get("status") not in {"available", "needs-review", "not-applicable", "unavailable"}:
+                self.error("reconstruction-profile", f"profiles[{index}] has invalid status")
+            if item.get("status") == "needs-review" and not item.get("uncertainty"):
+                self.error("reconstruction-profile", f"profiles[{index}] needs uncertainty entries")
+            self.validate_forbidden_fields(item, f"visual-reconstruction-profiles[{index}]")
 
     def validate_assets(self, assets: Any, package_id: Any, source: dict[str, Any] | None) -> None:
         if not isinstance(assets, list) or not assets:
@@ -268,6 +445,9 @@ class _Validator:
                 if normalized in self.asset_by_path:
                     self.error("asset.path-duplicate", f"multiple assets point to {normalized}")
                 self.asset_by_path[normalized] = item
+                if self.flat_layout:
+                    if file_path.parent != self.root / "assets":
+                        self.error("asset.path", f"{asset_id} must be stored directly under assets/: {normalized}")
             filename = item.get("file_name")
             if isinstance(filename, str):
                 if "/" in filename or "\\" in filename:
@@ -276,6 +456,11 @@ class _Validator:
                     filename.encode("ascii")
                 except UnicodeEncodeError:
                     self.error("asset.filename", f"{asset_id}.file_name must be ASCII")
+                if self.flat_layout:
+                    if not FLAT_NAME_RE.fullmatch(filename):
+                        self.error("asset.filename", f"{asset_id}.file_name must be a short semantic slug")
+                    if FLAT_NAME_FORBIDDEN_RE.search(filename):
+                        self.error("asset.filename", f"{asset_id}.file_name leaks page or engineering fields")
             if item.get("asset_kind") not in ASSET_KINDS:
                 self.error("asset.kind", f"{asset_id}.asset_kind is invalid")
             status = item.get("status")
@@ -381,12 +566,12 @@ class _Validator:
         path = self.package_path(data.get("path"), "markdown.path")
         if path is None:
             return
-        if path.name != "document.md":
-            self.error("markdown.path", "markdown.path must point to document.md")
+        if path.name != "index.md":
+            self.error("markdown.path", "markdown.path must point to index.md")
         try:
             text = path.read_text(encoding="utf-8")
         except Exception as exc:
-            self.error("markdown.read", f"cannot read document.md: {exc}")
+            self.error("markdown.read", f"cannot read index.md: {exc}")
             return
         sections = data.get("sections")
         if not isinstance(sections, list):
@@ -412,7 +597,32 @@ class _Validator:
                 self.error("broken-link", f"Markdown links unavailable asset: {target}")
             self.validate_reader_order(text, match.start())
         if not links and self.asset_by_id:
-            self.warning("markdown.links", "document.md contains no image links")
+            self.warning("markdown.links", "index.md contains no image links")
+        self.validate_reader_semantics(text)
+
+    def validate_reader_semantics(self, text: str) -> None:
+        """Reject page-only headings and relation/image-only sections."""
+        leaked = [marker for marker in READER_FORBIDDEN_MARKERS if marker in text]
+        if leaked:
+            self.error("reader-layer-separation", f"index.md exposes engineering or unresolved repair markers: {leaked}")
+        page_headings = [line.strip() for line in text.splitlines() if re.match(r"^#{1,6}\s+", line) and PAGE_ONLY_TITLE_RE.search(line.lstrip("# "))]
+        if page_headings:
+            self.error("reader-semantic-content", f"section heading uses source page placeholder: {page_headings}")
+        sections = list(SECTION_HEADING_RE.finditer(text))
+        for index, match in enumerate(sections):
+            title = match.group(1).strip()
+            end = sections[index + 1].start() if index + 1 < len(sections) else len(text)
+            section = text[match.end():end]
+            before_image = re.split(r"(?m)^!\[", section, maxsplit=1)[0]
+            semantic_lines = [
+                line.strip()
+                for line in before_image.splitlines()
+                if line.strip() and not line.lstrip().startswith(("#", "```"))
+            ]
+            if PAGE_ONLY_TITLE_RE.fullmatch(title):
+                self.error("reader-semantic-content", f"section heading is page-only: {title}")
+            if not semantic_lines:
+                self.error("reader-semantic-content", f"section has no reader semantic body: {title}")
 
     def validate_section(self, index: int, section: Any) -> None:
         data = _mapping(section)
@@ -422,6 +632,11 @@ class _Validator:
         for key in ("section_id", "title", "body", "source_occurrences", "visual_asset_ids", "confidence", "reader_order", "unknown_forms"):
             if key not in data:
                 self.error("markdown.section", f"sections[{index}] missing {key}")
+        section_id = data.get("section_id")
+        if not isinstance(section_id, str) or not section_id.strip():
+            self.error("markdown.section", f"sections[{index}] has invalid section_id")
+        else:
+            self.section_ids.add(section_id)
         if data.get("reader_order") not in {"semantic-before-visual", "needs-review"}:
             self.error("markdown.section", f"sections[{index}] has invalid reader_order")
         if not isinstance(data.get("source_occurrences"), list):
@@ -447,7 +662,78 @@ class _Validator:
             if line.strip() and not line.lstrip().startswith(("#", "!", "```"))
         ]
         if not semantic_lines:
+            # Image-only pages are an explicit needs-review output when no
+            # text layer exists; the source image remains the evidence.
+            non_image_lines = [line for line in before.splitlines() if line.strip() and not line.lstrip().startswith("!")]
+            if not headings and not non_image_lines:
+                return
             self.error("reader-order", "Markdown image appears before semantic section content")
+
+    def validate_markdown_content_repair(self) -> None:
+        path = self.root / "reviews" / "markdown-content-repair.yaml"
+        if not path.exists():
+            return
+        try:
+            data = _load(path)
+        except Exception as exc:
+            self.error("markdown-content-repair", f"cannot parse reviews/markdown-content-repair.yaml: {exc}")
+            return
+        if not isinstance(data, dict):
+            self.error("markdown-content-repair", "reviews/markdown-content-repair.yaml must be a mapping")
+            return
+        if data.get("contract") != "markdown-content-repair":
+            self.error("markdown-content-repair", "review contract must be markdown-content-repair")
+        if data.get("status") not in {"applied", "rejected", "deferred"}:
+            self.error("markdown-content-repair", "review status is invalid")
+        items = data.get("items")
+        if not isinstance(items, list):
+            self.error("markdown-content-repair", "review items must be a list")
+            return
+        operations = {
+            "none",
+            "join-split-text",
+            "restore-sentence-break",
+            "restore-paragraph-break",
+            "restore-list-structure",
+            "restore-heading-structure",
+            "restore-text-order",
+            "local-punctuation",
+            "remove-duplicate-fragment",
+            "page-unit-structure-repair",
+        }
+        bases = {"markdown-context", "extracted-text", "cross-source-agreement", "human-confirmation", "none"}
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                self.error("markdown-content-repair", f"items[{index}] must be a mapping")
+                continue
+            for key in ("id", "kind", "section_id", "source_text", "candidate_text", "proposed_text", "status"):
+                if key not in item:
+                    self.error("markdown-content-repair", f"items[{index}] missing {key}")
+            if item.get("kind") not in {"heading", "paragraph", "list", "table", "punctuation", "duplicate-fragment"}:
+                self.error("markdown-content-repair", f"items[{index}] has invalid kind")
+            if item.get("status") not in {"applied", "rejected", "deferred"}:
+                self.error("markdown-content-repair", f"items[{index}] has invalid status")
+            source_occurrence = item.get("source_occurrence")
+            if source_occurrence is not None and source_occurrence not in self.occurrence_ids:
+                self.error("markdown-content-repair", f"items[{index}] references unknown source_occurrence")
+            if item.get("section_id") not in self.section_ids:
+                self.error("markdown-content-repair", f"items[{index}] references unknown section_id")
+            repair = item.get("repair")
+            if repair is None:
+                continue
+            if not isinstance(repair, dict):
+                self.error("markdown-content-repair", f"items[{index}].repair must be a mapping")
+                continue
+            operation = repair.get("operation")
+            if operation not in operations:
+                self.error("markdown-content-repair", f"items[{index}].repair has invalid operation")
+            if repair.get("basis") not in bases:
+                self.error("markdown-content-repair", f"items[{index}].repair has invalid basis")
+            if operation != "none":
+                if not isinstance(item.get("proposed_text"), str) or not item["proposed_text"].strip():
+                    self.error("markdown-content-repair", f"items[{index}].repair needs proposed_text")
+                if not isinstance(repair.get("before"), str) or not isinstance(repair.get("after"), str):
+                    self.error("markdown-content-repair", f"items[{index}].repair needs before and after")
 
     def validate_processing(self, processing: Any, manifest_status: Any) -> None:
         data = _mapping(processing)
@@ -465,6 +751,66 @@ class _Validator:
         else:
             self.package_path(report_path, "processing.failure_report")
         self.validate_stage_evidence(data.get("stage_evidence"), "manifest.processing.stage_evidence")
+
+    def validate_page_output_pairs(
+        self,
+        manifest: dict[str, Any],
+        source: dict[str, Any] | None,
+        processing: dict[str, Any] | None,
+    ) -> None:
+        """Require the active mac96 page runner's JSON/Markdown triplets."""
+
+        if not processing or processing.get("execution_path") != "mac96-direct-vision":
+            return
+        selected_pages = (source or {}).get("selected_pages") or (source or {}).get("selected_original_pages")
+        if not isinstance(selected_pages, list) or not selected_pages:
+            self.error("page-output-contract", "mac96-direct-vision requires source.selected_pages")
+            return
+        declared_status = manifest.get("status")
+        for raw_page in selected_pages:
+            if not isinstance(raw_page, int) or raw_page < 1:
+                self.error("page-output-contract", f"invalid selected page: {raw_page}")
+                continue
+            analysis_path = self.root / "evidence" / f"vision-page-analysis-p{raw_page:03d}.json"
+            transcription_path = self.root / "evidence" / f"vision-text-transcription-p{raw_page:03d}.json"
+            unit_path = self.root / "page-units" / f"p{raw_page:03d}.md"
+            for path in (analysis_path, transcription_path, unit_path):
+                if not path.is_file():
+                    self.error("page-output-contract", f"page {raw_page} missing required projection: {path.relative_to(self.root)}")
+            if not analysis_path.is_file() or not transcription_path.is_file() or not unit_path.is_file():
+                continue
+            try:
+                analysis = _load(analysis_path)
+                transcription = _load(transcription_path)
+                unit_text = unit_path.read_text(encoding="utf-8")
+            except Exception as exc:
+                self.error("page-output-contract", f"page {raw_page} projection cannot be read: {exc}")
+                continue
+            if not isinstance(analysis, dict) or not isinstance(transcription, dict):
+                self.error("page-output-contract", f"page {raw_page} JSON projections must be mappings")
+                continue
+            expected_asset_id = f"page-p{raw_page:03d}"
+            asset = self.asset_by_id.get(expected_asset_id)
+            if analysis.get("input_asset_id") != expected_asset_id:
+                self.error("page-output-contract", f"page {raw_page} analysis input_asset_id is inconsistent")
+            if transcription.get("input_asset_id") != expected_asset_id:
+                self.error("page-output-contract", f"page {raw_page} transcription input_asset_id is inconsistent")
+            if source and analysis.get("source_fingerprint") != source.get("source_fingerprint"):
+                self.error("page-output-contract", f"page {raw_page} analysis source fingerprint is inconsistent")
+            if source and transcription.get("source_fingerprint") != source.get("source_fingerprint"):
+                self.error("page-output-contract", f"page {raw_page} transcription source fingerprint is inconsistent")
+            if asset:
+                asset_path = self.package_path(asset.get("file_path"), f"page {raw_page} source image")
+                image_hash = analysis.get("image_sha256")
+                if asset_path is not None and isinstance(image_hash, str) and image_hash != _sha256(asset_path):
+                    self.error("page-output-contract", f"page {raw_page} analysis image hash differs from source asset")
+            if declared_status == "complete":
+                if analysis.get("status") != "complete" or analysis.get("pass_strategy_used") != "dual" or analysis.get("model_call_count") != 2:
+                    self.error("page-output-contract", f"complete package page {raw_page} lacks complete dual-pass analysis")
+                if transcription.get("status") != "complete" or not str(transcription.get("candidate_markdown") or "").strip():
+                    self.error("page-output-contract", f"complete package page {raw_page} lacks complete text transcription")
+            if not unit_text.strip() or f"../assets/page-{raw_page:03d}.png" not in unit_text:
+                self.error("page-output-contract", f"page {raw_page} Markdown unit is empty or missing its page image link")
 
     def validate_stage_evidence(self, stages: Any, label: str) -> dict[str, dict[str, Any]]:
         if not isinstance(stages, list):
@@ -661,6 +1007,7 @@ class _Validator:
         declared_status = manifest.get("status") if isinstance(manifest, dict) else None
         if manifest is not None:
             self.validate_manifest(manifest)
+            self.validate_markdown_content_repair()
         if manifest is not None or processing is not None or acceptance is not None or failure is not None:
             self.validate_reports(manifest, processing, acceptance, failure)
         return ValidationResult(self.root, self.errors, self.warnings, declared_status)

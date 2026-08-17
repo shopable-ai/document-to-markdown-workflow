@@ -1,0 +1,114 @@
+contract: workflow-a-preflight
+version: 0.1.0
+purpose: 在 Workflow A 的 A1 来源预检和任何转换/模型调用前，阻断可廉价确定的执行风险。
+scope: cross-cutting-before-A1
+required: [contract, preflight_version, checked_at, status, can_start, source, output, selected_pages, checks, failures, warnings, next_action, policy]
+audit_metadata:
+  required: [risk_catalog, human_reference, evidence_boundary, execution_boundary]
+  evidence_boundary: enum[preflight-only, source-run, fixture, production]
+  execution_boundary: enum[before-A1, after-A1, post-assembly]
+statuses: [passed, needs-review, failed]
+check:
+  required: [check_id, stage_id, status, severity, blocking, message, remediation, evidence_paths, risk_ids, detectability, evidence_class, next_action]
+  statuses: [passed, needs-review, failed]
+  severities: [P0, P1, P2]
+  detectability: enum[preflight-deterministic, stage-required, human-review, production-only]
+  evidence_class: enum[spec-known, code-inferred, fixture-covered, observed, unknown, historical-compatibility]
+rules:
+  - id: governance-files
+    prevents: [workflow-spec-drift, missing-known-failure-reference]
+    stage: cross-cutting
+    risk_ids: [K-009, K-013]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: source-readable
+    prevents: [source-invalid, empty-source, permission-error]
+    stage: A1
+    risk_ids: [K-013]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: authorization-policy
+    prevents: [unauthorized-online-model, untracked-cost, privacy-boundary-drift]
+    stage: cross-cutting
+    risk_ids: [K-005, K-006]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: source-format-supported
+    prevents: [unsupported-format, spec-runtime-mismatch]
+    stage: A1
+    risk_ids: [K-013]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: page-scope-valid
+    prevents: [invalid-page-selector, out-of-range-page]
+    stage: A1
+    risk_ids: [K-010]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: smoke-scope-valid
+    prevents: [smoke-bypass, selected-page-drift]
+    stage: cross-cutting
+    risk_ids: [K-010, K-012]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: source-container-integrity
+    prevents: [corrupt-pptx-container, missing-native-package]
+    stage: A1
+    risk_ids: [K-003, K-013]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: required-render-tools
+    prevents: [native-tool-missing, render-tool-missing, doomed-A2-A3-run]
+    stage: A2-A3
+    risk_ids: [K-012]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: output-root
+    prevents: [output-permission-error]
+    stage: cross-cutting
+    risk_ids: [K-008, K-010]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: output-collision
+    prevents: [evidence-overwrite, non-idempotent-retry]
+    stage: cross-cutting
+    risk_ids: [K-008, K-010]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: candidate-comparison
+    prevents: [candidate-misassociation, silent-source-merge]
+    stage: A1
+    risk_ids: [K-007]
+    detectability: preflight-deterministic
+    default_action: block-when-declared
+  - id: candidate-fingerprint
+    prevents: [candidate-report-drift, replaced-candidate-source]
+    stage: A1
+    risk_ids: [K-007, K-009]
+    detectability: preflight-deterministic
+    default_action: block-when-declared
+  - id: source-inventory
+    prevents: [missing-source-fingerprint, page-count-unknown, source-selection-drift]
+    stage: A1
+    risk_ids: [K-007, K-009, K-013]
+    detectability: preflight-deterministic
+    default_action: block
+  - id: source-page-inventory
+    prevents: [binary-ppt-page-count-unknown]
+    stage: A1
+    risk_ids: [K-010, K-013]
+    detectability: stage-required
+    default_action: continue
+  - id: external-route-policy
+    prevents: [unauthorized-ssh, unauthorized-ocr, secret-log-leak]
+    stage: cross-cutting
+    risk_ids: [K-005, K-006]
+    detectability: preflight-deterministic
+    default_action: block
+invariants:
+  - blocking check means can_start must be false
+  - failed preflight must not invoke native extraction, rendering, OCR, or model calls
+  - preflight evidence is diagnostic and never substitutes for independent package validation
+  - every check must name its risk_ids, detectability and evidence_class; missing metadata is a contract error
+  - preflight-deterministic checks may only inspect paths, metadata, hashes, configuration and tool availability
+  - stage-required, human-review and production-only risks must remain visible as needs-review/unknown; they cannot be converted to passed by preflight

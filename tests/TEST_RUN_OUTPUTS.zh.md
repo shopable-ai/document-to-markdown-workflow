@@ -8,16 +8,13 @@ Workflow A 真正成功时，结果必须写入用户指定的 `output_root`，�
 
 ```text
 <output_root>/<package-name>/
-├── document.md
+├── index.md
 ├── manifest.yaml
 ├── reports/
 │   ├── processing-report.yaml
 │   ├── acceptance-report.yaml
 │   └── failure-report.yaml
-└── assets/
-    ├── pages/
-    ├── regions/
-    └── embedded/
+└── assets/                 # 扁平保存所有实际生成的视觉资产
 ```
 
 只有这类目录才是“PPT/PDF → Markdown + 视觉资产”的业务结果。契约见 `contracts/workflow-a-output-layout.yaml`。

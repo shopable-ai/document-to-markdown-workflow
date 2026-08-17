@@ -57,6 +57,6 @@ pytest -q tests/test_fixture_contract.py
 ## 不包含在本夹具中的内容
 
 - 不把 GPT-image-2 调用作为本地单元测试；它应由独立的在线适配器测试覆盖。
-- 本夹具契约测试不自动连接 SSH/mac96，也不运行 Apple Vision OCR；它只能验证输入范围和预期目录契约。真实运行必须按“原生结构 → SSH/mac96 → Apple Vision OCR → needs-review”记录执行路径。
+- 本夹具契约测试不自动连接 SSH/mac96，也不运行当前对话在线视觉模型或 Apple Vision OCR；它只能验证输入范围和预期目录契约。真实运行必须按“原生结构 → SSH/mac96 → 当前对话在线视觉模型 → Apple Vision OCR”记录执行路径，传输失败不自动写成 `needs-review`。
 - 不用封面或目录作为“解析成功”的唯一证据。
 - 当前测试是 fixture/契约层证据，不等同于完整解析器、OCR 或在线模型 E2E 证据。

@@ -1,61 +1,332 @@
 id: document-to-markdown-assets
-version: 0.4.0
+version: 0.6.0
 title: 文档资产化与 Markdown 转换
 purpose: 将来源文档转换为可检索 Markdown，并保留可追溯的来源视觉资产。
 independent: true
+engineering_task_tree: ../../EXECUTION-TASK-TREE.zh.md
+execution_slice: ET1-single-page-vertical-slice
+scale_overlays: [ET2-single-file-pages, ET3-multi-file-batch]
+page_unit_contract: ../../contracts/page-markdown-unit.yaml
+page_unit_skill: ../../skills/page-markdown-unit/SKILL.md
+page_unit_adapter: ../../adapters/page_markdown_units.py
+page_unit_execution:
+  principle: 单页独立处理，先通过第1页，再解锁第2-5页小批量，最后才允许第6-100页全量。
+  stage_order: [single-page-1, small-batch-2-5, full-batch-6-100]
+  fail_closed: true
+  forbidden:
+    - 未通过前一阶段页面结构守卫就启动下一阶段
+    - 为修复一页读取全部页面正文
+    - 修改原始 OCR JSON、bbox、置信度、逐页 Vision JSON、页面图或原始 manifest.yaml
+    - 将 document-temp.md 当作 index.md 或新的事实来源
+  split:
+    command: python3 adapters/page_markdown_units.py split --source-document <index.md> --pages <explicit-pages> --output-dir <page-units>
+    one_page_command: python3 adapters/page_markdown_units.py split --source-document <index.md> --pages 1 --output <page-units/p001.md>
+    output_rule: 只写选定页面单元；页面图链接逐字继承来源 Markdown。
+  repair:
+    input: selected-page-unit-and-selected-page-image-only
+    output: selected-page-unit
+    no_ocr_or_vision_calls: true
+    post_split_language_repair:
+      stage: A5
+      skill: ../../skills/markdown-content-repair/SKILL.md
+      adapter: ../../adapters/markdown_content_repair.py
+      contract: ../../contracts/markdown-content-repair.yaml
+      prompt: ../../references/prompts/markdown-content-repair-lan.zh.txt
+      input: one-current-page-unit-only
+      image_input: false
+      route_order: [lan-language-model, conversation-online-language-model]
+      online_fallback: explicit-current-task-only
+      local_success_stops_fallback: true
+  merge:
+    command: python3 adapters/page_markdown_units.py merge --unit <p001.md> --output <document-temp.md>
+    ordering: ascending-page-number
+    deterministic: true
+    may_reinfer_or_rewrite_source_text: false
+  preview:
+    path: document-temp.md
+    role: derived-review-preview
+    replaces_final_document: false
+  gates:
+    single_page:
+      pages: [1]
+      exit: page_scope_structural_guard_passed
+    small_batch:
+      pages: [2, 3, 4, 5]
+      requires: [single_page_page_scope_structural_guard_passed, human_review]
+      exit: page_scope_structural_guard_passed_and_human_review
+    full_batch:
+      pages: 6-100
+      requires: [small_batch_page_scope_structural_guard_passed, human_review]
+      exit: page_scope_structural_guard_passed_and_human_review
+quality_audit_reference: ../../references/markdown-quality-audit.zh.md
+naming_policy_reference: ../../references/naming-policy.zh.md
+markdown_asset_copy_skill: ../../skills/markdown-asset-copy/SKILL.md
+markdown_collection_output_contract: ../../contracts/markdown-collection-output-layout.yaml
+asset_extraction_strategy_reference: ../../references/asset-extraction-strategy.zh.md
+asset_extraction_strategy_contract: ../../contracts/asset-extraction-strategy.yaml
+visual_asset_pruning_reference: ../../skills/semantic-visual-asset-pruning/SKILL.md
+visual_asset_pruning_contract: ../../contracts/visual-asset-pruning.yaml
+visual_asset_classification_contract: ../../contracts/visual-asset-classification.yaml
+visual_reconstruction_profile_reference: ../../references/visual-reconstruction-profile.zh.md
+visual_reconstruction_profile_contract: ../../contracts/visual-reconstruction-profile.yaml
 execution_policy:
   principle: 原生结构提取始终先行；长文档默认先处理前 1-2 页 smoke，标题、正文/OCR、页面图、Markdown 链接、relation-only 和空语义占位任一关键门禁失败即停止；smoke 通过后按小批次处理并在每批后复核。
   input_policy: native-pdf-text-and-layout-json-first
-  image_review_policy: relation-only-after-native-uncertainty; max-one-per-page
+  runner_boundary:
+    active: adapters/workflow_a_source_runner.py
+    contract: ../../contracts/workflow-a-source-runner.yaml
+    profile: ../../references/profiles/source-runner-generic.yaml
+    default_mode: plan-only
+    execute_status: design-only;not-promoted
+    legacy_entrypoint: archive/legacy-adapters/workflow_a_runner.py
+    legacy_status: legacy/document-profile
+    no_real_source_this_round: true
+    fixture_tests_run_this_round: true
+    production_proof_this_round: false
+  execution_preflight:
+    stage: before-A1
+    adapter: ../../adapters/workflow_a_preflight.py
+    contract: ../../contracts/workflow-a-preflight.yaml
+    human_reference: ../../references/execution-preflight.zh.md
+    report: evidence/preflight.json
+    fail_closed: true
+    scope: cheap-deterministic-only
+    blocks: [native_extraction, source_rendering, text_structure_or_relation_review_or_fallback, markdown_assembly]
+    does_not_claim: [conversion_success, independent_validation, language_quality_repair]
+  capability_probe:
+    stage: after-execution-preflight-before-A1
+    evidence: evidence/capability-probe.json
+    mode: read-only
+    failure_route: conversation-online-vision-page-analysis
+    does_not_claim: [visual-review-complete, text-correction-complete]
+  stage_gate_policy:
+    fail_closed: true
+    rule: 前一阶段没有明确终态和证据时，不启动后续脚本；只启动声明过的下一条降级路径。needs-review 只表示真实未裁决问题，不是默认 fallback。
+    required_before: [source_inventory, native_extraction, source_rendering, text_structure_or_relation_review_or_fallback, markdown_assembly, independent_validation]
+    progress_stream: evidence/progress.jsonl
+  legacy_code_policy:
+    reference: ../../references/legacy-code-status.zh.md
+    production_entrypoints: [adapters/workflow_a_source_runner.py]
+    migration_pending: [adapters/workflow_a_dispatcher.py, adapters/workflow_a_batch.py]
+    compatibility_entrypoints: [archive/legacy-adapters/workflow_a_runner.py]
+    recovery_only: [adapters/workflow_a_reclassify.py]
+    fixture_only: [tests/scripts/materialize_workflow_a_smoke_inputs.py]
+  prompt_templates:
+    profile: ../../references/reader-noise-profile.yaml
+    profile_scope: legacy/document-profile-only
+    visual_structure: ../../references/prompts/workflow-a-text-structure.txt
+    relation_review: ../../references/prompts/workflow-a-relation-review.txt
+    open_set_visual_review: ../../references/prompts/workflow-a-visual-review.txt
+  image_review_policy: unified-page-analysis; full-single-default; dual-only-for-explicit-high-risk
+  visual_asset_policy:
+    name: semantic-visual-asset-pruning
+    stage: A5-before-A6
+    default: preview-only
+    apply_requires: explicit-page-decision-and-apply
+    preserve: [source-fingerprint, source-rendering-evidence, rejected-asset-hashes, source-assets, manifest-assets, source-occurrences]
+    apply_effect: reader-links-and-section-bindings-only
+    exclude_examples: [cover, table-of-contents, text-covered-page]
+    retain_examples: [diagram, table, flow, relation-dense-layout, color-coded-structure]
+  asset_extraction:
+    principle: 先成功，再降本；确定性资产提取与视觉内容理解分开，不用模型输出覆盖原始资产
+    reference: ../../references/asset-extraction-strategy.zh.md
+    contract: ../../contracts/asset-extraction-strategy.yaml
+    source_formats:
+      ppt_or_pptx:
+        deterministic: [embedded-lossless, office-render, complex-region-or-object-evidence]
+        visual_understanding_input: page-render-or-region-crop
+      pdf:
+        deterministic: [embedded-lossless, pdf-render, complex-region-or-object-evidence]
+        visual_understanding_input: page-render-or-region-crop
+      image:
+        deterministic: [original-preserved, region-crop-when-needed]
+        visual_understanding_input: original-or-region-crop
+    route_order:
+      - id: high-quality-online-baseline
+        role: calibration-only
+        authorization: explicit-only
+        status: planned;not-run-this-round
+        scope: smoke-or-representative-assets
+        required_before_local: [same_input_sha256, same_crop, same_schema, same_prompt_version, rubric]
+      - id: local-vision-calibration
+        role: candidate-low-cost
+        authorization: local-resource
+        status: planned;not-run-this-round
+        required_evidence: [asset-quality-comparison, asset-quality-audit, repeatability, cost-and-latency]
+        promotion_gate: quality_and_traceability_passed
+      - id: budget-online-fallback
+        role: fallback-only
+        authorization: explicit-only
+        status: planned;not-run-this-round
+        required_before_use: [baseline_rubric, local_unavailable_or_below_gate]
+      - id: needs-review
+        role: terminal-uncertainty
+        authorization: not-required
+    comparison_dimensions: [image_completeness, text_readability, graphic_relation_fidelity, crop_boundary, naming_and_provenance, prompt_schema_coverage, repeatability, latency, cost]
+    evidence:
+      strategy: evidence/asset-extraction-strategy.yaml
+      comparison: evidence/asset-quality-comparison.json
+      audit: evidence/asset-quality-audit.json
+    reconstruction_profile:
+      contract: ../../contracts/visual-reconstruction-profile.yaml
+      reference: ../../references/visual-reconstruction-profile.zh.md
+      output: evidence/visual-reconstruction-profile.yaml
+      required_when: [complex-region, relation-dense, explicit-image-recreation-intent]
+      status_if_not_applicable: not-applicable
+      no_quality_claim_from: [generic-summary, prompt-without-source-spans]
+    no_quality_claim_from: [http-200, queue-accepted, model-list, response-length]
+    current_round: "仅完成策略与 runner 边界设计；不调用在线模型、本地视觉模型、OCR 或真实 source。"
   same_logical_document_candidates: 同名且页数一致的 PPTX/PDF 候选先以 PPTX XML 作为语义/数字资产来源，再比较 PPTX Office 渲染与 PDF 页面截图；视觉差异达到阈值或 PPTX 渲染异常时，PDF 页面图作为主视觉证据，PPTX 渲染与 XML 仍作为独立候选证据保留。
   ordered_fallback:
     - id: native-structure-extraction
       stages: [A1, A2]
       required: true
       evidence: evidence/native-content-model.json
-    - id: mac96-ssh-visual-review
+    - id: mac96-vision-page-analysis
       stage: A4
-      required: true_for_visual_content
+      required: true_for_image_understanding
       transport: ssh
       target: mac96
-      input_kind_first: native-text-layout-json
-      image_input_kind: pdf-rendered-page-png-relation-review
-      evidence: evidence/mac96-visual-review.json
-      on_unavailable: apple-vision-ocr
+      model_default: qwen3-vl:30b-a3b-instruct
+      input_kind: current-page-render-or-current-region-crop
+      modes: [text, layout, full]
+      default_mode: full
+      default_pass_strategy: single
+      dual_pass_when: [relation-dense, chart-or-table-heavy, color-or-spatial-encoding-is-semantic, explicit-high-confidence-request]
+      prompt_skill: ../../skills/vision-page-analysis/SKILL.md
+      contract: ../../contracts/vision-page-analysis.yaml
+      adapter: ../../adapters/mac96_vision_page_analysis.py
+      evidence: evidence/vision-page-analysis.json
+      on_text_unavailable: conversation-online-vision-page-analysis
+      on_visual_unavailable: failed
+    - id: conversation-online-vision-page-analysis
+      stage: A4
+      required: fallback_when_mac96_text_or_full_unavailable
+      provider: current-conversation
+      authorization: current-task-explicit
+      transport: conversation
+      target: current-conversation
+      adapter: none-direct-current-vision-model
+      input_kind: current-page-render-or-current-region-crop
+      modes: [text, layout, full]
+      prompt_skill: ../../skills/vision-page-analysis/SKILL.md
+      contract: ../../contracts/vision-page-analysis.yaml
+      evidence: evidence/vision-page-analysis.json
+      on_text_unavailable: apple-vision-ocr
+      on_visual_unavailable: failed
     - id: apple-vision-ocr
       stage: A4
-      required: fallback_when_mac96_unavailable
+      required: fallback_when_mac96_and_conversation_text_unavailable
       evidence: evidence/ocr-candidates.json
-      on_unavailable: needs-review
-    - id: needs-review
-      stage: A4
-      terminal_for_unresolved_visual_content: true
-      evidence: evidence/review-required.json
+      on_unavailable: failed
+      on_unparseable: failed
   no_silent_skip: true
   smoke_gate:
     default_pages: 1-2
     explicit_parameter: --smoke-pages
     report: evidence/smoke-report.json
+    dedicated_run_required: true
+    no_follow_on_before_verdict: true
+    max_elapsed_seconds: 900
     fail_closed: true
     required_checks: [title-not-fallback, body-or-ocr-nonempty, page-image, markdown-image-link, no-relation-only, no-placeholder-only]
+  progress_observability:
+    status: stage-boundary-events-implemented; live-heartbeat-not-verified
+    event_stream: evidence/progress.jsonl
+    terminal_stream: stderr
+    heartbeat_seconds: 15
+    heartbeat_claim: not-established-by-deterministic-source-runner
+    required_fields: [run_id, source_fingerprint, page, stage, task, attempt, status, elapsed_seconds, evidence_paths, next_action]
+    omission_check: selected_pages_minus_evidence_pages
+  language_quality_repair:
+    status: available-via-lan-first-adapter
+    required_before_content_claim: true
+    raw_layer_immutable: true
+    output: evidence/markdown-content-repair-p<page-3-digits>.json
+    review_output: reviews/markdown-content-repair.yaml
+    adapter: ../../adapters/markdown_content_repair.py
+    contract: ../../contracts/markdown-content-repair.yaml
+    prompt: ../../references/prompts/markdown-content-repair-lan.zh.txt
+    primary_route: lan-language-model
+    primary_target: mac96
+    primary_model_default: qwen3.6:latest
+    primary_input_scope: one-current-page-unit-only
+    online_model: explicit-fallback-only-after-lan-failure
+    verification:
+      mode: inline-structural-guard
+      separate_test_stage: false
+      human_review: stage-gate-only
+      checks: [nonempty-markdown, page-image-link, page-boundary, reader-atom-boundary, current-page-write-scope]
   batch_checkpoint:
-    entrypoint: python3 adapters/workflow_a_batch.py --batch-size 8
+    entrypoint: python3 adapters/workflow_a_batch.py --batch-size 8 --legacy-compat
     report: checkpoint.json
     resume: --resume-pages <checkpoint.json>
     immutable_prior_packages: true
   review_status_policy:
     complete: 原生或已确认文字层完整，页面图和关系证据可追溯；关系复核不能单独满足文字门禁。
-    needs-review: OCR 候选、真实引擎失败、超时、输出不可解析、存在冲突或明确未裁决候选；OCR 候选可检索但不能写成 confirmed。
+    needs-review: 真实冲突、关系未裁决或需要人工判断的候选；mac96、当前对话在线视觉模型与 Apple Vision OCR 的传输/解析失败走 failed 或 unavailable，不自动改写成 needs-review。
     not_a_blocker: 未执行开放集合扫描、模型未返回可选 unknown_forms 字段、或整页图已覆盖复杂区域，不能单独制造 needs-review。
-  online_visual_model: explicit-authorization-only
+  online_visual_model:
+    current_conversation:
+      policy: fallback-after-mac96-only
+      authorization: current-task-explicit
+      input_scope: one-current-page-or-region-image-only
+      adapter: none-direct-current-vision-model
+    external_provider:
+      policy: explicit-authorization-only
+  vision_page_analysis:
+    status: available-via-mac96-ssh-with-current-conversation-fallback
+    role: primary-image-text-and-visual-analysis
+    default_transport: ssh
+    target: mac96
+    model_default: qwen3-vl:30b-a3b-instruct
+    input_scope: one-current-page-or-region-image-only
+    modes: [text, layout, full]
+    default_mode: full
+    default_pass_strategy: single
+    contract: ../../contracts/vision-page-analysis.yaml
+    prompt_skill: ../../skills/vision-page-analysis/SKILL.md
+    adapter: ../../adapters/mac96_vision_page_analysis.py
+    evidence: evidence/vision-page-analysis.json
+    fallback_order: [mac96-vision-page-analysis, conversation-online-vision-page-analysis, apple-vision-ocr]
+    text_fallback: apple-vision-ocr
+    visual_fallback: failed
+    terminal_on_all_failures: failed
+    does_not_replace: [native-content-model, independent-validation]
+  page_output_contract:
+    status: required-for-every-page
+    adapter_outputs:
+      - evidence/vision-page-analysis-p<page-3-digits>.json
+      - evidence/vision-text-transcription-p<page-3-digits>.json
+      - page-units/p<page-3-digits>.md
+    completion_rule: all-three-current-page-projections-must-exist-before-progress-complete
+    markdown_source: text.markdown-from-current-page-mac96
+    page_image_link: ../assets/page-<page-3-digits>.png
+    resume:
+      complete_page_requires: [dual-pass-vision-json, text-transcription-json, page-unit-markdown]
+      missing_markdown_action: rebuild-from-existing-vision-json-without-model-call
+      missing_or_invalid_vision_action: retry-current-page-only
+      index_assembly: all-selected-pages-in-ascending-order
+      preserve_existing_pages: true
+    post_generation_repair:
+      stage: A5
+      required: true
+      input: page-units/p<page-3-digits>.md
+      output: page-units/p<page-3-digits>.md
+      evidence: evidence/markdown-content-repair-p<page-3-digits>.json
+      review: reviews/markdown-content-repair.yaml
+      route: lan-language-model-first
+      online_fallback: explicit-only-after-lan-failure
 entrypoint:
-  recommended: python3 adapters/workflow_a_dispatcher.py --workflow document-to-markdown-assets --source <absolute-file> --candidate-comparison <comparison-json> --output-root <absolute-directory> --pages <explicit-pages>
-  batch: python3 adapters/workflow_a_batch.py --source <absolute-file-1> --source <absolute-file-2> --output-root <absolute-directory> --pages all
-  page_batch: python3 adapters/workflow_a_batch.py --source <long-pdf> --output-root <absolute-directory> --pages all --batch-size 8
+  source_runner: python3 adapters/workflow_a_source_runner.py --source <absolute-file> --output-root <absolute-directory> --pages <selector> --plan-only
+  recommended: python3 adapters/workflow_a_source_runner.py --source <absolute-file> --output-root <absolute-directory> --pages <selector> --plan-only
+  execute_pending: python3 adapters/workflow_a_dispatcher.py --workflow document-to-markdown-assets --source <absolute-file> --candidate-comparison <comparison-json> --output-root <absolute-directory> --pages <explicit-pages>
+  batch: python3 adapters/workflow_a_batch.py --source <absolute-file-1> --source <absolute-file-2> --output-root <absolute-directory> --pages all --legacy-compat
+  page_batch: python3 adapters/workflow_a_batch.py --source <long-pdf> --output-root <absolute-directory> --pages all --batch-size 8 --legacy-compat
   candidate_comparison: python3 adapters/workflow_a_candidate_compare.py --source-a <pptx> --source-b <pdf> --pages 3,4 --output <comparison-json>
   compatibility:
-    - python3 adapters/workflow_a_runner.py --pptx <absolute-file> --output-root <absolute-directory> --pages all
-    - python3 adapters/workflow_a_runner.py --pdf <absolute-file> --output-root <absolute-directory> --pages all
+    - python3 archive/legacy-adapters/workflow_a_runner.py --pptx <absolute-file> --output-root <absolute-directory> --pages all
+    - python3 archive/legacy-adapters/workflow_a_runner.py --pdf <absolute-file> --output-root <absolute-directory> --pages all
   source_isolation: one-source-per-run
   batch_source_isolation: one-independent-package-per-source
   batch_contract: ../../contracts/workflow-a-batch.yaml
@@ -69,14 +340,15 @@ entrypoint:
   candidate_comparison: only-when-explicitly-declared-same-logical-document; pptx-xml-semantic-first; pdf-visual-fallback-on-large-difference
   page_selector: all|N|N-M|N,M
   dispatcher: ../../adapters/workflow_a_dispatcher.py
-  runner: ../../adapters/workflow_a_runner.py
+  runner: ../../adapters/workflow_a_source_runner.py
+  legacy_runner: ../../archive/legacy-adapters/workflow_a_runner.py
   trigger_keyword: 文档转 Markdown
   daily_trigger: 文档转 Markdown
-  prompt_inputs: [source, output_root, pages]
+  prompt_inputs: [source, output_root, pages, profile, config]
   prompt_does_not_repeat: [output_layout, report_schema, stage_contracts]
 execution_observability:
-  before_run: [workflow_id, workflow_version, source_path, media_type, sha256, total_pages, selected_pages, source_selection]
-  progress_stages: [workflow_spec_validation, smoke_gate, source_inventory, native_extraction, source_rendering, text_structure_or_relation_review_or_fallback, markdown_assembly, batch_checkpoint, independent_validation]
+  before_run: [workflow_id, workflow_version, source_path, media_type, sha256, total_pages, selected_pages, source_selection, preflight_status, preflight_report]
+  progress_stages: [runner_plan, execution_preflight, capability_probe, workflow_spec_validation, smoke_gate, candidate_comparison, source_inventory, native_extraction, source_rendering, asset_registration, text_structure_or_relation_review_or_fallback, language_quality_repair, markdown_assembly, semantic_visual_quality_audit, batch_checkpoint, independent_validation]
   execution_evidence: evidence/workflow-execution.json
   final_report: reports/validation-result.json
   status_meanings:
@@ -91,12 +363,14 @@ skill_registry: ../../skill-registry.yaml
 tool_registry: ../../tool-registry.yaml
 run_record: ../../contracts/workflow-run-record.yaml
 stage_evidence_contract: ../../contracts/stage-evidence.yaml
+execution_preflight_contract: ../../contracts/workflow-a-preflight.yaml
+source_runner_contract: ../../contracts/workflow-a-source-runner.yaml
 handoff_exports:
   - contract: ../../contracts/workflow-handoff.yaml
     consumer: markdown-to-gpt-image
 inputs:
   - name: source_document
-    types: [pptx, pdf, docx, png, jpg, jpeg]
+    types: [ppt, pptx, pdf, png, jpg, jpeg]
     required: true
   - name: output_root
     types: [directory]
@@ -109,6 +383,8 @@ outputs:
   secondary:
     - type: source-visual-asset
       contract: ../../contracts/source-visual-asset.yaml
+    - type: visual-reconstruction-profile
+      contract: ../../contracts/visual-reconstruction-profile.yaml
     - type: processing-report
     - type: failure-report
       contract: ../../contracts/failure-report.yaml
@@ -158,10 +434,11 @@ stages:
     name: 原生内容提取
     reader_name: 把原文件里的文字和结构取出来
     user_problem: 只依赖已有 OCR/错误文本会让换一个文件就不可用，且会丢掉 PPTX 图表和布局关系。
-    success_signal: PPTX XML、PDF 布局或 DOCX OOXML 已按来源页保存文字、节点、关系、坐标和定位。
+    success_signal: PPTX XML 或 PDF 布局已按来源页保存文字、节点、关系、坐标和定位；DOCX 仍属未接入 active runner 的扩展路线。
     failure_visible_as: extract-timeout、contract-invalid 或字段级 Unknown；不能用固定示例文本填充其他来源。
     type: stage
-    skills: [pptx-xml-extraction, pdf-layout-extraction, docx-structure-extraction]
+    skills: [pptx-xml-extraction, pdf-layout-extraction]
+    deferred_skills: [docx-structure-extraction]
     route: local-code
     output: evidence/native-content-model.json
     evidence: [evidence/native-content-model.json]
@@ -178,27 +455,29 @@ stages:
     type: stage
     skills: [embedded-media-extraction, page-rendering, complex-region-detection, region-cropping]
     route: local-code
-    output: assets/pages/, assets/regions/, assets/embedded/
-    evidence: [assets/pages/, assets/regions/, assets/embedded/]
-    gate: 页面图可打开且与来源位置绑定；仅当整页图不足以支持复核时才生成复杂区域图，整页图已足够时 assets/regions/ 保持为空目录并在报告中记录原因
+    output: assets/
+    evidence: [assets/, evidence/rendering.json, evidence/regions.json]
+    gate: 页面图可打开且与来源位置绑定；页面图、嵌入媒体和按需复杂区域图统一落在扁平 assets/，类型和来源位置由 manifest.asset_kind 与 source_occurrences 区分；没有区域裁剪需求时不创建空目录
     required_fields: [assets, coverage, renderer, status, diagnostics]
     score_dimensions: [visual-fidelity, coverage, provenance, integrity]
   - id: A4
-    name: OCR 与结构复核
+    name: 页面视觉理解
     reader_name: 核对看得见的文字和图示关系
-    user_problem: 原生结构与页面视觉可能冲突，且 OCR/视觉复核不可用时用户不知道哪些内容仍不确定。
-    success_signal: 原生事实、候选文字、视觉关系和未决项分层记录，复核路径可回放。
-    failure_visible_as: ocr-unavailable、visual-review-unavailable、冲突或 needs-review；OCR 候选不能升级为 confirmed。
+    user_problem: 原生结构与页面视觉可能冲突；同一张图片既可能需要 Markdown 文字，也可能需要图表和关系信息。
+    success_signal: 默认一次视觉请求即可分层记录文字、视觉结构、OCR 候选和未决项；高风险页面可回放两次专门请求。
+    failure_visible_as: visual-analysis-unavailable、conversation-vision-unavailable、ocr-unavailable、analysis-failed、冲突或 needs-review；文字 OCR 不能替代视觉结构。
     type: stage
-    skills: [mac96-visual-review, local-ocr, text-source-reconciliation, layout-relation-reconciliation]
+    skills: [vision-page-analysis, local-ocr, text-source-reconciliation, layout-relation-reconciliation]
+    optional_skills: [visual-reconstruction-profile]
     fallback_skills: [local-ocr]
-    route: ssh-mac96-first-apple-ocr-fallback
-    output: evidence/reconciliation.json
-    evidence: [evidence/reconciliation.json]
+    route: mac96-vision-page-analysis-full-single-default
+    output: evidence/reconciliation.json, evidence/vision-page-analysis.json, evidence/visual-reconstruction-profile.yaml (when applicable)
+    evidence: [evidence/reconciliation.json, evidence/vision-page-analysis.json]
+    conditional_evidence: [evidence/vision-page-analysis.json, evidence/visual-reconstruction-profile.yaml]
     contract: ../../contracts/reconciliation.yaml
-    gate: 原生文本优先；默认先通过 SSH 调用 mac96 复核视觉结构，mac96 不可用时调用 Apple Vision OCR；真实失败、冲突或关系未裁决时才 needs-review，不得把缺少可选 unknown_forms 字段当作失败
+    gate: 原生结构先行；默认用一次 full 请求同时提取 Markdown 和视觉结构，mac96 任一层不可用时先进入当前对话视觉，文字层仍不可用时才进入 Apple Vision OCR，视觉层不可用保持 unavailable/failed；关系密集或明确要求高置信度时才使用 dual；只有真实冲突或关系未裁决时才 needs-review；复杂结构或明确重建意图时同时生成 profile，不得把缺少可选 unknown_forms 字段当作失败
     required_fields: [native_input, ocr_input, reconciled_items, conflicts, unresolved, unknown_forms, coverage_notes, status, diagnostics]
-    score_dimensions: [source-separation, conflict-safety, relation-fidelity, reviewability]
+    score_dimensions: [source-separation, conflict-safety, relation-fidelity, reconstruction-traceability, reviewability]
   - id: A5
     name: Markdown 组装
     reader_name: 组装成读者能读、能检索的 Markdown
@@ -206,25 +485,27 @@ stages:
     success_signal: 页面/章节语义完整，文字与关系先于视觉链接，来源与不确定性以读者可理解方式表达。
     failure_visible_as: markdown-section-missing、reader-semantic-content 失败或断链；不输出只剩关系表/占位标题的页面。
     type: stage
-    skills: [markdown-structure-builder, source-asset-linker, uncertainty-marking]
-    route: local-code
-    output: document.md
-    evidence: [document.md]
-    gate: 页面/章节结构、表格、关系和视觉链接可读；有语义标题时不得在标题前拼接源文件名、页码或内部定位字段；每个 section 先输出文字与关系，再输出需保留的视觉资产；A4 明确返回的未知形式候选必须分层登记，不能写入读者-facing Markdown
+    skills: [markdown-structure-builder, page-markdown-unit, markdown-content-repair, source-asset-linker, uncertainty-marking, semantic-visual-asset-pruning]
+    optional_skills: []
+    route: local-lan-language-model-first-then-explicit-conversation-fallback
+    output: page-units/p<page-3-digits>.md, index.md
+    evidence: [page-units/, index.md, evidence/markdown-content-repair-p<page-3-digits>.json, evidence/visual-asset-pruning.json]
+    conditional_evidence: [reviews/markdown-content-repair.yaml]
+    gate: 页面单元生成后先由局域网语言模型修复当前页 Markdown；局域网成功后不得调用在线模型；局域网不可用、超时、不可解析或未通过结构守卫时保持原文件不变，只有明确授权才允许当前在线模型回退一次。修复必须保留页面编号、原始页面图链接和 Unknown/needs-review 关系边界；通过后再按单页→小批量→全量阶段门合并 index.md。页面/章节结构、表格、关系和视觉链接可读；有语义标题时不得在标题前拼接源文件名、页码或内部定位字段；每个 section 先输出文字与关系，再输出经过语义筛选且仍有增量价值的视觉资产；封面、目录和已被可靠文字覆盖的页面图只有在 pruning report 明确记录后才能从读者层移除；pruning 只更新读者层图片链接和 section 绑定，不删除 assets/、manifest.assets 或 source_occurrences；A4 明确返回的未知形式候选必须分层登记，不能写入读者-facing Markdown
     required_fields: [source_package_id, sections, links, unresolved, unknown_forms, reader_order, status]
     score_dimensions: [retrievability, semantic-structure, link-integrity, uncertainty-preservation]
   - id: A6
     name: 命名与来源登记
     reader_name: 给素材稳定名字并登记出处
     user_problem: 中文原文件名、同名资源和重复运行会造成覆盖，后续无法知道资产来自哪一页哪一次出现。
-    success_signal: 稳定 ASCII 文件名、中文显示名、source_occurrence_id、来源指纹和 SHA-256 一致。
+    success_signal: 短稳定 ASCII 语义文件名、中文显示名、source_occurrence_id、来源指纹和 SHA-256 一致。
     failure_visible_as: provenance-missing、dedup 冲突或 integrity-check-failed；不以目录中“有文件”代替登记。
     type: stage
-    skills: [semantic-asset-naming, source-occurrence-registration, asset-deduplication]
+    skills: [semantic-asset-naming, source-occurrence-registration, asset-deduplication, semantic-visual-asset-pruning]
     route: local-code
     output: manifest.yaml
-    evidence: [manifest.yaml]
-    gate: file_name 使用稳定英文格式、display_name 保留中文语义；稳定 ID、来源指纹、哈希和 source_occurrences 进入 manifest，命名不得依赖原始文件名
+    evidence: [manifest.yaml, evidence/visual-asset-pruning.json]
+    gate: file_name 使用 references/naming-policy.zh.md 的短语义格式、display_name 保留中文语义；稳定 ID、来源指纹、哈希、asset kind、用途、ordinal 和 source_occurrences 进入 manifest，命名不得依赖原始文件名或随机前缀；pruning 后仍须保留被移除读者链接对应的来源资产登记和哈希
     required_fields: [manifest_version, package_id, source, assets, status, diagnostics]
     score_dimensions: [naming-stability, occurrence-traceability, dedup-safety, integrity]
   - id: A7
@@ -238,7 +519,7 @@ stages:
     route: local-code
     output: reports/processing-report.yaml, reports/acceptance-report.yaml, reports/failure-report.yaml, reports/validation-result.json
     evidence: [reports/processing-report.yaml, reports/acceptance-report.yaml, reports/failure-report.yaml, reports/validation-result.json]
-    gate: 通过 workflows/document-to-markdown-assets/ACCEPTANCE.zh.md
+    gate: 通过 workflows/document-to-markdown-assets/ACCEPTANCE.zh.md；存在复杂结构或重建意图时，profile 的结构/提示词/来源证据也必须通过独立重读
     required_fields: [status, evidence_level, checks, failures, warnings, stage_evidence, repair_tasks, reaudit, recovery, diagnostics]
     score_dimensions: [contract-completeness, cross-stage-consistency, failure-safety, evidence-honesty]
 profiles:

@@ -1,0 +1,56 @@
+id: markdown-collection-output-layout
+version: 0.1.0
+scope: reader_collection
+description: 多个页面单元整理为中文读者层集合时的文件命名、链接和迁移契约。
+not_workflow_a_package: true
+
+source_contract:
+  canonical_markdown: index.md
+  page_units: page-units/p<page-3-digits>.md
+  assets: assets/
+  rules:
+    - Workflow A 工程包中的 index.md 仍表示转换后的完整读者正文，不得全局改名为 total.md。
+    - collection_merge 只读取明确提供的 page-units/ 和 assets/。
+    - 不读取或复制 document-temp.md、manifest.yaml、evidence/、reports/、.shopme 或其他工程文件。
+
+output_contract:
+  index:
+    path: index.md
+    role: navigation_index
+    title_suffix: "｜索引"
+  total:
+    path: total.md
+    role: merged_full_text
+    title_suffix: "｜合并全文"
+  single_page_content:
+    directory: 单页内容/
+    filename: p<page-3-digits>.md
+    role: preserved_reader_copy
+  assets:
+    directory: assets/
+    filename: page-<page-3-digits>.png
+    naming_policy: preserve_page_render_names
+
+link_contract:
+  index_to_total: total.md#model-<page-3-digits>
+  index_to_single_page: 单页内容/p<page-3-digits>.md
+  single_page_to_asset: ../assets/page-<page-3-digits>.png
+  total_to_asset: assets/page-<page-3-digits>.png
+
+legacy_migration:
+  previous_collection_layout:
+    index.md: merged_full_text
+    page_units: page-units/
+  current_collection_layout:
+    index.md: navigation_index
+    total.md: merged_full_text
+    single_page_content: 单页内容/
+  rule: 旧集合包必须从原始 page-units/ 和 assets/ 重新生成，不得把旧 index.md 直接当作新索引。
+
+invariants:
+  - index.md 和 total.md 的标题必须使用不同的 title_suffix。
+  - total.md 按页码升序包含每个选定页面一次。
+  - 单页内容/ 下的 Markdown 内容和其原始相对图片链接保持不变。
+  - total.md 的图片链接必须相对于 total.md 可解析。
+  - index.md 的所有导航链接必须指向存在的 total.md 锚点或单页内容文件。
+  - 目标集合根目录不得出现未声明文件；桌面工作区已创建的 .shopme 和 .docsignore 只允许保留。

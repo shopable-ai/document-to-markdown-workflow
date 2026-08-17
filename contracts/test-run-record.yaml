@@ -14,7 +14,7 @@ optional_fields:
   - outputs.classification
   - outputs.real_business_result_package
 forbidden_claims:
-  - 将 test-report.yaml 当作 document.md
+  - 将 test-report.yaml 当作 index.md
   - 将测试摘要当作 markdown-asset-package
   - 用 fixture 断言通过宣称 PPTX/PDF 解析器已完成
 invariants:

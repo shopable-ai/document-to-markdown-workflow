@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Rebuild reader Markdown from an existing Workflow A evidence package.
+"""DEPRECATED recovery-only adapter: rebuild reader Markdown from old evidence.
 
 This is deliberately a local, no-model recovery path.  It keeps the original
 run directory untouched, reuses native/OCR/visual JSON already on disk, and
 only reruns classification, Markdown generation, smoke checks, and validation.
+It is not a general conversion entrypoint.  A source package must already have
+passed its smoke and independent package gates before this script is allowed
+to run; otherwise the caller must start a new bounded Workflow A run.
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "adapters"))
 
 from workflow_a_output_validator import validate_package  # noqa: E402
-from workflow_a_runner import (  # noqa: E402
+from workflow_a_legacy_loader import (  # noqa: E402
     build_markdown,
     classify_content,
     evaluate_smoke_pages,
@@ -39,6 +42,22 @@ def read_json(path: Path) -> dict:
 
 def page_assets(package: Path, pages: list[int]) -> dict[int, Path]:
     result: dict[int, Path] = {}
+    manifest_path = package / "manifest.yaml"
+    if manifest_path.is_file():
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        for asset in manifest.get("assets", []) or []:
+            if not isinstance(asset, dict) or asset.get("asset_kind") not in {"page-render", "input-image"}:
+                continue
+            relative = asset.get("file_path")
+            candidate = package / relative if isinstance(relative, str) else None
+            if not candidate or not candidate.is_file():
+                continue
+            for occurrence in ((asset.get("source") or {}).get("source_occurrences") or []):
+                page = occurrence.get("page") if isinstance(occurrence, dict) else None
+                if isinstance(page, int) and page in pages:
+                    result[page] = candidate
+        if result:
+            return result
     for path in (package / "assets/pages").glob("*.png"):
         match = re.search(r"__p(\d{3})__", path.name)
         if match and int(match.group(1)) in pages:
@@ -52,6 +71,28 @@ def package_pages(package: Path) -> list[int]:
     return [int(page) for page in pages]
 
 
+def assert_recovery_prerequisites(package: Path) -> None:
+    """Fail closed when a recovery script would hide an unfinished stage."""
+    required = [
+        package / "manifest.yaml",
+        package / "evidence/native-content-model.json",
+        package / "evidence/mac96-visual-review.json",
+        package / "evidence/ocr-candidates.json",
+        package / "evidence/reconciliation.json",
+        package / "evidence/smoke-report.json",
+        package / "reports/validation-result.json",
+    ]
+    missing = [str(path.relative_to(package)) for path in required if not path.is_file()]
+    if missing:
+        raise ValueError(f"legacy recovery prerequisites missing; refusing to run: {', '.join(missing)}")
+    smoke = read_json(package / "evidence/smoke-report.json")
+    validation = read_json(package / "reports/validation-result.json")
+    if smoke.get("status") != "passed":
+        raise ValueError("legacy recovery requires a passed smoke report; start a new bounded run instead")
+    if validation.get("status") != "passed":
+        raise ValueError("legacy recovery requires an independently passed package; do not repair an unverified source")
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -59,6 +100,7 @@ def now() -> str:
 def reclassify_package(source_package: Path, target_package: Path, original_run: Path) -> dict:
     if target_package.exists():
         raise FileExistsError(f"refusing to overwrite existing target: {target_package}")
+    assert_recovery_prerequisites(source_package)
     shutil.copytree(source_package, target_package)
     evidence = target_package / "evidence"
     native = read_json(evidence / "native-content-model.json")
@@ -82,7 +124,7 @@ def reclassify_package(source_package: Path, target_package: Path, original_run:
     write_smoke_report(target_package, smoke)
     manifest.setdefault("recovery", {})["reclassified_from"] = str(original_run)
     manifest.setdefault("recovery", {})["model_calls_reused"] = True
-    manifest.setdefault("markdown", {})["path"] = "document.md"
+    manifest.setdefault("markdown", {})["path"] = "index.md"
     classified_pages = {item.get("page"): item for item in classification.get("pages", [])}
     manifest["markdown"]["sections"] = []
     package_id = str(manifest.get("package_id") or target_package.name)
@@ -113,7 +155,7 @@ def reclassify_package(source_package: Path, target_package: Path, original_run:
         "source_package": str(source_package),
         "target_package": str(target_package),
         "model_calls_reused": True,
-        "changed_layers": ["evidence/content-classification.json", "document.md", "evidence/smoke-report.json", "manifest.yaml", "reports/validation-result.json"],
+        "changed_layers": ["evidence/content-classification.json", "index.md", "evidence/smoke-report.json", "manifest.yaml", "reports/validation-result.json"],
         "old_document_sha256": None,
         "new_smoke_status": smoke.get("status"),
         "new_validation_status": validation.get("status"),
@@ -127,7 +169,7 @@ def audit_reader_pages(target_run: Path, results: list[dict]) -> dict:
     for result in results:
         package = Path(result["package"])
         classification = read_json(package / "evidence/content-classification.json")
-        document = (package / "document.md").read_text(encoding="utf-8")
+        document = (package / "index.md").read_text(encoding="utf-8")
         pages = classification.get("pages", [])
         for item in pages:
             page = int(item.get("page"))
@@ -137,7 +179,7 @@ def audit_reader_pages(target_run: Path, results: list[dict]) -> dict:
             end = document.find("## 第 ", start + 1) if start >= 0 else -1
             section = document[start:end if end >= 0 else None] if start >= 0 else ""
             reader_section = section.split("### 原始页面图", 1)[0]
-            body_present = bool(re.search(r"^### (?:主要内容|核心内容|OCR 待复核候选|主题|四象限行动原则|四步复盘)\s*$", reader_section, re.MULTILINE))
+            body_present = bool(re.search(r"^### (?:主要内容|核心内容|OCR 待复核候选|主题|分区内容|步骤内容|四象限行动原则|四步复盘)\s*$", reader_section, re.MULTILINE))
             engineering_leak = bool(re.search(r"置信度\s*[:：]\s*0\.\d|bbox|candidate[_ ]?index|模型请求|Apple Vision", section))
             rows.append({
                 "page": page,

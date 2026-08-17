@@ -13,6 +13,7 @@ required:
     section_id: string
     content_digest: string
   visual_assets: array
+  reconstruction_profiles: array
   provenance:
     manifest_path: string
     generated_by_workflow: string
@@ -27,5 +28,6 @@ forbidden_fields:
 invariants:
   - generated_by_workflow=document-to-markdown-assets
   - visual_assets 中的每个 asset_id 必须能在 manifest_path 找到
+  - reconstruction_profiles 中的每个 profile_id 必须能在 manifest_path 或 profile path 找到，并且 source.asset_id 必须属于 visual_assets
   - status=available 时 markdown.path 和 manifest_path 必须存在
   - handoff 不授予复制来源版式或注册通用模板的权限

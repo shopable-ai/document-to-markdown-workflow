@@ -22,7 +22,7 @@ OCR、视觉复核、Markdown 组装或 ledger 流程。当前唯一的执行主
 ## 边界
 
 - 这个入口不创建新的 Workflow，也不加入 A1-A7 的 `stages` 列表。
-- `document.md`、`manifest.yaml`、`assets/` 和 `reports/` 的正式布局以 Workflow A 契约为准；知识地图批处理的 `_过程文件/` 与 `运行记录/` 只能是额外过程层。
+- `index.md`、`manifest.yaml`、`assets/` 和 `reports/` 的正式布局以 Workflow A 契约为准；知识地图批处理的 `_过程文件/` 与 `运行记录/` 只能是额外过程层。
 - ZIP/RAR/7z 是来源发现容器，不代表当前 Workflow A 已提供安全解压实现。未完成安全解压时先停在 `needs-review` 或显式失败态。
 - 不调用 GPT-image-2，不把来源图自动升级为生成模板。
 

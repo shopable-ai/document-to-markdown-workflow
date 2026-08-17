@@ -71,6 +71,13 @@ def main() -> int:
         "workflow-a-output-layout.yaml",
         "workflow-b-output-layout.yaml",
         "knowledge-map-profile.yaml",
+        "visual-reconstruction-profile.yaml",
+        "visual-asset-classification.yaml",
+        "markdown-content-repair.yaml",
+        "vision-page-analysis.yaml",
+        "vision-text-transcription.yaml",
+        "workflow-a-preflight.yaml",
+        "markdown-collection-output-layout.yaml",
     ):
         assert (ROOT / "contracts" / contract_name).is_file(), contract_name
     assert (ROOT / "references/audit-rubric.zh.md").is_file()
@@ -110,6 +117,10 @@ def main() -> int:
             assert skill_id in workflow_entries[target_workflow].get("aliases", []), f"Workflow registry missing alias: {skill_id}"
             profile = entry.get("profile")
             assert profile and (ROOT / profile).is_file(), f"compatibility Skill missing profile: {skill_id}"
+        if entry.get("kind") == "compatibility-alias":
+            target = entry.get("alias_of")
+            assert target in skills, f"compatibility Skill alias points to unknown Skill: {skill_id}"
+            assert target != skill_id, f"compatibility Skill alias cannot point to itself: {skill_id}"
 
     tools = {entry["id"]: entry for entry in tool_registry["tools"]}
     assert len(tools) == len(tool_registry["tools"]), "duplicate Tool IDs"
@@ -129,6 +140,8 @@ def main() -> int:
         assert workflow["stage_type"] == "phase-gate"
         assert (workflow_path.parent / workflow["run_record"]).resolve().is_file()
         assert (workflow_path.parent / workflow["stage_evidence_contract"]).resolve().is_file()
+        if workflow["id"] == "document-to-markdown-assets":
+            assert (workflow_path.parent / workflow["execution_preflight_contract"]).resolve().is_file()
         for handoff in workflow.get("handoff_exports", []) + workflow.get("handoff_inputs", []):
             assert (workflow_path.parent / handoff["contract"]).resolve().is_file()
         assert len(workflow["stages"]) == 7
@@ -170,7 +183,13 @@ def main() -> int:
             assert profile_data["stage_policy"]["no_independent_stages"] is True
             assert profile_data["stage_policy"]["canonical_stage_order"] == ["A1", "A2", "A3", "A4", "A5", "A6", "A7"]
         if workflow["id"] == "document-to-markdown-assets":
+            collection_contract = (workflow_path.parent / workflow["markdown_collection_output_contract"]).resolve()
+            assert collection_contract == ROOT / "contracts/markdown-collection-output-layout.yaml"
+            assert collection_contract.is_file()
             registry_entry = workflow_entries[workflow["id"]]
+            assert registry_entry["reader_collection_contract"] == "contracts/markdown-collection-output-layout.yaml"
+            assert registry_entry["reader_collection_scope"] == "downstream-reader-export;does-not-rename-workflow-a-index"
+            assert (ROOT / registry_entry["reader_collection_contract"]).is_file()
             assert registry_entry["trigger_keywords"] == ["文档转 Markdown"]
             assert registry_entry["daily_trigger"] == "文档转 Markdown"
             observability = registry_entry["execution_observability"]
@@ -178,7 +197,11 @@ def main() -> int:
             assert observability["statuses"] == ["passed", "needs-review", "failed"]
             assert workflow["entrypoint"]["daily_trigger"] == registry_entry["daily_trigger"]
             assert workflow["entrypoint"]["trigger_keyword"] == "文档转 Markdown"
-            assert workflow["entrypoint"]["prompt_inputs"] == ["source", "output_root", "pages"]
+            assert (workflow_path.parent / workflow["visual_asset_classification_contract"]).resolve().is_file()
+            prompt_inputs = workflow["entrypoint"]["prompt_inputs"]
+            assert prompt_inputs[:3] == ["source", "output_root", "pages"]
+            assert set(prompt_inputs[3:]).issubset({"profile", "config"})
+            assert len(prompt_inputs) == len(set(prompt_inputs))
             assert workflow["execution_observability"]["final_report"] == observability["final_report"]
             quality_gate = workflow.get("quality_gate")
             assert quality_gate["minimum_total"] == 95
@@ -189,37 +212,53 @@ def main() -> int:
             assert output_layout.is_file(), output_layout
             layout = load(output_layout)
             assert set(layout["required_files"]) == {
-                "document.md",
+                "index.md",
                 "manifest.yaml",
                 "reports/processing-report.yaml",
                 "reports/acceptance-report.yaml",
                 "reports/failure-report.yaml",
             }
             assert set(layout["required_directories"]) == {
-                "assets/pages/",
-                "assets/regions/",
-                "assets/embedded/",
+                "assets/",
             }
             assert "reports/validation-result.json" in layout["optional_files"]
             stages = {stage["id"]: stage for stage in workflow["stages"]}
             assert stages["A4"]["skills"] == [
-                "mac96-visual-review",
+                "vision-page-analysis",
                 "local-ocr",
                 "text-source-reconciliation",
                 "layout-relation-reconciliation",
             ]
+            assert stages["A4"]["optional_skills"] == ["visual-reconstruction-profile"]
             assert stages["A4"]["fallback_skills"] == ["local-ocr"]
-            assert stages["A4"]["route"] == "ssh-mac96-first-apple-ocr-fallback"
+            assert stages["A4"]["route"] == "mac96-vision-page-analysis-full-single-default"
+            vision_contract = (workflow_path.parent / workflow["execution_policy"]["vision_page_analysis"]["contract"]).resolve()
+            assert vision_contract.is_file()
+            vision_policy = load(vision_contract)
+            assert vision_policy["transport"]["primary"]["target"] == "mac96"
+            assert vision_policy["transport"]["text_fallback"]["target"] == "apple-vision-ocr"
+            assert vision_policy["policy"]["single_pass_default"] == "full-mode-one-request"
+            assert vision_policy["policy"]["dual_pass_order"] == ["text", "layout"]
+            assert "mac96-vision-page-analysis" in tools
+            assert tools["mac96-vision-page-analysis"]["implementation"] == "available"
+            assert tools["language-quality-repair-adapter"]["implementation"] == "available"
+            assert tools["language-quality-repair-adapter"]["target"] == "mac96"
+            assert tools["language-quality-repair-adapter"]["input_scope"] == "one-current-page-unit-only"
             assert stages["A5"]["skills"] == [
                 "markdown-structure-builder",
+                "page-markdown-unit",
+                "markdown-content-repair",
                 "source-asset-linker",
                 "uncertainty-marking",
+                "semantic-visual-asset-pruning",
             ]
-            assert stages["A5"]["output"] == "document.md"
+            assert stages["A5"]["route"] == "local-lan-language-model-first-then-explicit-conversation-fallback"
+            assert stages["A5"]["output"] == "page-units/p<page-3-digits>.md, index.md"
             assert stages["A6"]["skills"] == [
                 "semantic-asset-naming",
                 "source-occurrence-registration",
                 "asset-deduplication",
+                "semantic-visual-asset-pruning",
             ]
             assert stages["A6"]["output"] == "manifest.yaml"
             assert stages["A7"]["skills"] == ["asset-package-validation"]
@@ -240,6 +279,21 @@ def main() -> int:
     forbidden = {"api_key", "authorization", "cookie", "secret", "subscription_url"}
     request_contract = load(ROOT / "contracts/gpt-image-generation-request.yaml")
     assert forbidden.issubset(set(request_contract["forbidden_fields"]))
+
+    preflight_contract = load(ROOT / "contracts/workflow-a-preflight.yaml")
+    assert set(preflight_contract["audit_metadata"]["required"]) == {
+        "risk_catalog", "human_reference", "evidence_boundary", "execution_boundary"
+    }
+    rule_ids = {item["id"] for item in preflight_contract["rules"]}
+    assert {"source-inventory", "external-route-policy"}.issubset(rule_ids)
+    check_required = set(preflight_contract["check"]["required"])
+    assert {"risk_ids", "detectability", "evidence_class", "next_action"}.issubset(check_required)
+    known_failures = (ROOT / "references/known-failures.zh.md").read_text(encoding="utf-8")
+    preflight_reference = (ROOT / "references/execution-preflight.zh.md").read_text(encoding="utf-8")
+    omitted_gates = (ROOT / "references/omitted-gates.zh.md").read_text(encoding="utf-8")
+    assert "证据类别" in known_failures and "最早检测点" in known_failures
+    assert "机器规则映射" in preflight_reference and "risk_ids" in preflight_reference
+    assert "风险目录中不可前移的项目" in omitted_gates
 
     print(f"PASS: {len(skills)} Skills, {len(tools)} Tools, 2 Workflows")
     print("PASS: every Workflow Skill/Tool reference resolves")

@@ -1,0 +1,20 @@
+contract: visual-asset-pruning
+version: 0.1.0
+description: 读者层视觉资产语义筛选的页级报告，区分保留来源证据与不再提供增量信息的页面图。
+required: [schema, version, status, mode, source_fingerprint, selected_pages, excluded_pages, kept_pages, rule, assets, synchronization, diagnostics]
+status: enum[complete, needs-review, failed]
+mode: enum[preview, apply]
+asset:
+  required: [asset_id, page, file_path, sha256, reason_code, confidence, evidence_paths]
+  confidence: enum[high, medium, low, unknown]
+  reason_code: enum[cover, table-of-contents, text-covered, user-approved-page-selection, needs-review]
+invariants:
+  - source_fingerprint 必须与 manifest.yaml.source.source_fingerprint 相等
+  - excluded_pages 与 assets[].page 一一对应，不得静默丢失候选
+  - sha256 必须是应用前实际文件哈希；应用后文件不存在时仍保留该证据
+  - apply 只有在所有 assets 文件可读且没有 diagnostics 时才允许更新读者层
+  - apply 不得删除或移出 assets/ 中的来源资产、manifest.assets、media.sha256 或 source_occurrences
+  - apply 后每个被筛 asset 的来源文件仍必须存在，且其 manifest 登记与哈希必须保持不变
+  - 未确认复杂关系、布局编码或重建价值时不得设置为 excluded
+  - evidence_paths 至少包含 index.md、manifest.yaml 和一个内容/视觉复核证据
+  - 报告只描述读者层资产裁剪，不替代 A3 来源渲染证据或 A7 独立验收

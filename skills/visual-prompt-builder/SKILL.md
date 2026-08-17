@@ -13,7 +13,9 @@ order: 10
 
 ## 输入与输出
 
-输入：selected unit、visual plan、references。输出：generation-request。规则：不把整份 Markdown 原样塞入提示词；不写入秘密。
+输入：selected unit、visual plan、references，以及可选的 visual-reconstruction-profile。输出：generation-request。
+规则：优先从 profile 的结构字段组装复杂图片提示词，保留 profile_id、prompt/schema 版本和来源
+字段；不把整份 Markdown 原样塞入提示词，不把 profile 中的 Unknown/候选改写成 confirmed，不写入秘密。
 
 ## 边界
 

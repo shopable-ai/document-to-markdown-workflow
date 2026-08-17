@@ -13,7 +13,9 @@ order: 10
 
 ## 输入与输出
 
-输入：reference_assets、visual-structure-plan。输出：selected-references。规则：参考图是证据或风格输入，不自动成为复制模板。
+输入：reference_assets、visual-structure-plan，以及可选的 visual-reconstruction-profile。输出：selected-references。
+规则：参考图和 profile 是证据或结构输入，不自动成为复制模板；选择 profile 时必须保留
+profile_id、来源资产、用途、版本和未决项。
 
 ## 边界
 

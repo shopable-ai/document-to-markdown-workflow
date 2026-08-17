@@ -1,0 +1,80 @@
+contract: visual-reconstruction-profile
+version: 0.1.0
+description: 复杂视觉资产的结构化重建信息与可复用图像模型提示词契约。
+purpose: 在保留原图的同时，保存足以指导后续图像模型重建的可核对结构、文字、样式和提示词。
+required:
+  profile_id: string
+  source:
+    package_id: string
+    source_fingerprint: string
+    asset_id: string
+    source_occurrence_id: string
+    asset_path: string
+    asset_sha256: string
+  reconstruction:
+    mode: enum[structure-and-prompt, structure-only, prompt-only, insufficient-evidence]
+    prompt: string|null
+    prompt_language: enum[zh-CN, en, mixed, unknown]
+    prompt_version: string
+    negative_constraints: array
+  canvas:
+    width: integer|null
+    height: integer|null
+    aspect_ratio: string|null
+    orientation: enum[portrait, landscape, square, unknown]
+    background: string|null
+  composition:
+    layout_type: enum[flow, hierarchy, matrix, timeline, comparison, concept-map, table, collage, mixed, unknown]
+    reading_direction: string|null
+    zones: array
+    hierarchy: array
+    relations: array
+  visual_elements: array
+  text_fidelity:
+    exact_visible_strings: array
+    language: string|null
+    typography: array
+    unreadable_or_uncertain: array
+  style:
+    palette: array
+    visual_style: string|null
+    linework: string|null
+    texture_or_material: string|null
+    lighting_or_depth: string|null
+  evidence:
+    source_assets: array
+    source_regions: array
+    source_spans: array
+    extraction_route: string
+    schema_version: string
+  uncertainty: array
+  status: enum[available, needs-review, not-applicable, unavailable]
+optional:
+  - model_notes
+  - derivation_notes
+  - generated_image_reference
+forbidden_fields:
+  - api_key
+  - authorization
+  - cookie
+  - secret
+  - subscription_url
+zone:
+  required: [zone_id, role, description, bounds, evidence, confidence]
+  confidence: enum[high, medium, low, unknown]
+element:
+  required: [element_id, kind, description, role, bounds, evidence, confidence]
+  confidence: enum[high, medium, low, unknown]
+relation:
+  required: [relation_id, from, to, type, direction, evidence, confidence]
+  confidence: enum[high, medium, low, unknown]
+invariants:
+  - source.asset_sha256 必须与 asset_path 的实际 SHA-256 一致；profile 不能替代原图或裁剪图
+  - 每个 zones、visual_elements、relations 和 exact_visible_strings 项必须带 evidence 或明确的 Unknown
+  - prompt 只能由当前资产的可见事实、已确认结构和显式不确定性组成，不得凭空补造内容
+  - mode=structure-and-prompt 时 prompt、composition 和 visual_elements 不得为空
+  - mode=structure-only 时不得声称已有可直接调用的完整 prompt
+  - mode=insufficient-evidence 或 status=needs-review 时，prompt 可以为 null，但 uncertainty 不能为空
+  - prompt_version、evidence.extraction_route 和 evidence.schema_version 必须可追溯
+  - profile 不证明任何生成图片与来源像素等价；它只提供可复核的重建输入
+  - 不得包含 api_key、authorization、cookie、secret 或 subscription_url

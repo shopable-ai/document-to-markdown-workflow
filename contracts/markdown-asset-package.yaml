@@ -18,16 +18,25 @@ required:
     native_extraction: enum[complete, partial, unavailable]
     ocr_used: boolean
     visual_review: enum[not-requested, attempted, complete, partial, unavailable]
-    execution_path: enum[native-only, mac96, apple-vision-ocr, needs-review]
+    execution_path: enum[native-only, mac96, conversation-online, apple-vision-ocr, needs-review]
     fallback_reason: string|null
     status: enum[complete, needs-review, failed]
     stage_evidence: array
     stage_evidence_contract: string
     failure_report: string
+  evidence:
+    source_inventory: string
+    capability_probe: string
+    smoke_report: string
+    progress: string
   validation:
     validator_version: string
     status: enum[passed, needs-review, failed]
     checks: array
+optional:
+  - visual_reconstruction_profiles
+  - markdown_content_repair: reviews/markdown-content-repair.yaml
+  - visual_asset_pruning: evidence/visual-asset-pruning.json
 section_item:
   required: [section_id, title, body, source_occurrences, visual_asset_ids, confidence, reader_order, unknown_forms]
   confidence: enum[high, medium, low, unknown]
@@ -40,12 +49,19 @@ invariants:
   - 每个 visual_asset_id 必须存在于 manifest.yaml 的 assets 列表
   - source_fingerprint 只能用于追溯，不写入用户可见文件名
   - unresolved 和明确返回的 unknown_forms 不得被静默删除；没有候选时允许为空数组
-  - assets/regions/ 是按需目录；整页来源图足够时允许为空，但 A3 报告必须记录该判断
+  - complex-region/crop 是按需资产类型；整页来源图足够时不生成对应文件，但 A3 报告必须记录该判断
   - validation.status=passed 时不得存在断链或缺失 manifest 记录
   - processing.status=complete 且 validation.status=passed 时，native_extraction、visual_review、ocr_used 和 stage evidence 必须与 processing-report 一致
   - processing.stage_evidence 的每项必须满足 contracts/stage-evidence.yaml，且覆盖 A1–A7
   - processing.failure_report 必须指向同一输出包中的 failure-report.yaml
   - 任一必需阶段 evidence 缺失、status=not-run 或 evidence_level 不足时，不得将 package status 写为 complete
+  - A1 stage evidence 必须包含 evidence/source-inventory.json；其 status=complete 只表示来源元数据可读，不表示内容质量通过
+  - active source-runner manifest 的 evidence 必须指向 source-inventory.json、capability-probe.json、smoke-report.json 和 progress.jsonl；旧 fixture/legacy 包若缺少该映射只能保留为历史/夹具边界
+  - deterministic execute 若未执行 capability probe、smoke gate、视觉/OCR或质量审计，必须保留对应 evidence 文件并将相关阶段标为 needs-review/not-run
+  - evidence/progress.jsonl 必须记录至少 execution_preflight、source_inventory、native_extraction、source_rendering、markdown_assembly 和 independent_validation 的状态
   - needs-review 只能由真实失败、冲突、未裁决关系或明确未知形式触发；缺少可选 unknown_forms 字段本身不构成失败
-  - document.md 只保留读者层语义和必要页面图链接；工程证据字段必须进入 evidence/、manifest.yaml 或 reports/
+  - index.md 只保留读者层语义和必要页面图链接；工程证据字段必须进入 evidence/、manifest.yaml 或 reports/
+  - 若执行视觉资产语义筛选，manifest.evidence.visual_asset_pruning 必须指向满足 contracts/visual-asset-pruning.yaml 的报告；被移除读者层引用对应的来源资产、哈希、source_occurrences 和理由不得从 manifest 或报告中消失
+  - 存在 reviews/markdown-content-repair.yaml 时必须符合 contracts/markdown-content-repair.yaml；`deferred` 和 `rejected` 的提取文字候选、页码或审核状态不得回写 index.md
+  - visual_reconstruction_profiles 中的每个 profile 必须满足 contracts/visual-reconstruction-profile.yaml，并且 source.asset_id 必须存在于 manifest.yaml
   - 同源候选比较后只能生成一个业务 package；未选来源只能作为候选比较和差异证据保存

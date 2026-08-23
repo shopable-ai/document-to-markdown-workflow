@@ -6,21 +6,27 @@ schema:
   implementation_values: [planned, optional, available]
   planned_is_not_production_ready: true
 tools:
+  - id: pdf-background-task-manager
+    kind: local-detached-process-orchestrator
+    used_by: [document-asset-extraction]
+    implementation: available
+    path: adapters/pdf_background_task.py
+    contract: contracts/long-task-interaction.yaml
+    commands: [start, status, cancel, resume]
+    resume_support: [native-pdf, native-pdf-batch, hybrid-pdf, visual-pdf]
+    task_type_selection: explicit-no-implicit-route-change
+    stdout: one-compact-json-per-explicit-command
+    worker_output: <task-root>/run.log
   - id: workflow-a-source-runner
     kind: local-deterministic-orchestrator
     used_by: [document-asset-extraction]
-    implementation: planned
-    status: active-design
-    contract: contracts/workflow-a-source-runner.yaml
-    default_mode: plan-only
-    execute_promotion: planned
-    source_profiles: [references/profiles/source-runner-generic.yaml]
-  - id: workflow-a-legacy-runner
-    kind: local-compatibility-adapter
-    used_by: [document-asset-extraction]
     implementation: available
-    status: legacy/document-profile
-    path: archive/legacy-adapters/workflow_a_runner.py
+    status: active-deterministic-execute
+    contract: contracts/workflow-a-source-runner.yaml
+    default_mode: execute
+    plan_mode: explicit-diagnostic
+    execute_promotion: promoted-for-deterministic-stages
+    source_profiles: [references/profiles/source-runner-generic.yaml]
   - id: pptx-xml-parser
     kind: local-deterministic
     used_by: [pptx-xml-extraction]
@@ -93,6 +99,27 @@ tools:
     raw_layer_immutable: true
     output: evidence/markdown-content-repair-p<page-3-digits>.json
     contract: contracts/markdown-content-repair.yaml
+  - id: page-markdown-noise-cleanup-adapter
+    kind: local-deterministic
+    used_by: [clean-page-markdown-noise, document-asset-extraction]
+    implementation: available
+    path: adapters/page_markdown_noise_cleanup.py
+    input_scope: selected-page-unit-markdown-boundary-lines-and-current-files
+    image_input: false
+    default_mode: scan
+    apply_mode: explicit --apply or registered mac96 runner pre-repair gate
+    output: evidence/page-markdown-noise-cleanup.json
+    contract: contracts/page-markdown-noise-cleanup.yaml
+  - id: ebook-page-pruning-adapter
+    kind: local-deterministic
+    used_by: [prune-low-value-ebook-pages]
+    implementation: available
+    path: skills/prune-low-value-ebook-pages/scripts/prune_ebook_pages.py
+    input_scope: one-complete-page-unit-directory-and-explicit-page-selection
+    default_mode: preview
+    apply_mode: exact-hash-locked-plan-only
+    output: operator-selected-plan-path
+    contract: contracts/ebook-page-pruning.yaml
   - id: markdown-writer
     kind: local-deterministic
     used_by: [markdown-structure-builder, source-asset-linker]

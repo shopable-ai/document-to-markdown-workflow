@@ -1,0 +1,54 @@
+contract: ebook-page-pruning
+version: 1.0.0
+description: 电子书页面单元全部生成并汇合后、知识库导入前的可选整页低价值内容清洗契约。
+status: active-optional
+scope: post-complete-page-unit-merge-pre-knowledge-base-export
+implementation: skills/prune-low-value-ebook-pages/scripts/prune_ebook_pages.py
+skill: skills/prune-low-value-ebook-pages/SKILL.md
+workflow_relation:
+  stage: downstream-reader-or-knowledge-base-export
+  required_for_workflow_a: false
+  changes_workflow_a_acceptance_status: false
+  preferred_input: copied-knowledge-base-page-units-working-directory
+preconditions:
+  - 所有页面生产者、复制分组和并发任务已经完成并汇合。
+  - expected_page_count 与当前 pNNN.md 文件总数一致。
+  - 删除页码和理由已经逐页或逐范围明确批准。
+  - 现有合并文件将在清洗后由保留页面重新生成。
+inputs:
+  required: [page_units_directory, explicit_page_selector, expected_page_count, reason_for_every_selected_page, plan_path_outside_page_units]
+  forbidden_as_deletion_targets: [source_document, page_images, OCR_JSON, bbox_or_confidence, vision_JSON, manifest, reports]
+candidate_policy:
+  delete_candidate_reason_codes:
+    - promotion-or-cta
+    - table-of-contents
+    - copyright-or-publication
+    - publisher-catalog-or-recommendation
+    - duplicate-cover-or-title
+    - blank-or-decoration
+    - user-approved-low-relevance
+  review_by_default: [preface, foreword, introduction, acknowledgements, glossary, appendix, references, subject-index]
+  retain_by_default: [body-content, chapter-content, chapter-boundary-needed-for-classification, examples-and-definitions, formulas-and-tables, visual-relations, unknown-or-needs-review]
+execution:
+  order: [candidate-review, preview-plan, explicit-approval, apply-plan, verify, rebuild-downstream-reader-files]
+  default_mode: preview
+  preview: {writes: hash-locked-plan, deletes: nothing}
+  apply:
+    input: exact-preview-plan
+    classification_or_inference: forbidden
+    pre_write_guard: full-page-unit-inventory-sha256-must-match
+    mutation: delete-only-the-planned-pNNN-md-files
+    postcondition: retained-file-hashes-and-post-inventory-must-match-plan
+plan_evidence:
+  format: JSON
+  stores_page_body: false
+  required: [schema, version, status, mode, page_units, expected_page_count, inventory, selected_pages, retained_page_count, files, expected_post_inventory_sha256, checks]
+  per_file: [file, page, input_sha256, size_bytes, line_count, reason_code]
+statuses:
+  ready: 预览计划已生成，尚未删除。
+  applied: 计划页已删除，保留文件和目录快照通过复核。
+  failed: 输入、理由、页数、哈希、路径或删除后完整性检查失败。
+exit_codes: {0: ready-or-applied, 2: input-plan-or-integrity-error}
+claim_boundary:
+  proves: selected-whole-page-pruning-in-one-page-unit-directory
+  does_not_prove: [workflow-a-acceptance, page-semantic-correctness, visual-relation-correctness, downstream-index-rebuilt]

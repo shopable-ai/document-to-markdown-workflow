@@ -71,7 +71,7 @@ Requirement → Chain → Spec → Task → Workflow → Skill/Tool → Run → 
 - **症状**：报告写“已完成 mac96/视觉复核”，但没有连接方式、目标、模型、请求时间、输入资产、结构化响应和失败状态；或仅凭本机无法访问就断言局域网资源不存在。
 - **影响**：局域网资源是否可用、是否真正参与判断、失败后是否正确降级都无法验证。
 - **检测证据**：`capability-probe.json`、`vision-page-analysis`、`evidence/vision-page-analysis.json`、`workflow-execution` 和当前 source 指纹；历史运行中的 `mac96-visual-review` 仅作为兼容别名保留。远端查找应先从 `ssh mac96` 的已知工作目录开始，不能把本机路径当成远端缺失。
-- **期望处理**：局域网视觉模型是当前优先资源；SSH 只是现有 transport，未来可替换为其他受控本地网络调用。每次尝试必须记录文字层和视觉层证据；文字层不可达时才转当前对话视觉模型或 Apple Vision OCR，视觉层不能由 OCR 替代，未决关系才进入 `needs-review`。
+- **期望处理**：局域网视觉模型是候选资源；SSH 只是现有 transport，未来可替换为其他受控本地网络调用。每次尝试必须记录文字层、结构层、视觉层、耗时和资源证据；Apple Vision OCR 加结构重建、小视觉模型和 30B 的主次由同页真实基准决定，视觉层不能由 OCR 替代，未决关系才进入 `needs-review`。
 - **状态**：`spec-known`；当前网络、模型和能力必须在每次 Run 中重新验证。
 
 ## K-006 未授权或过度使用在线视觉模型
@@ -126,7 +126,7 @@ Requirement → Chain → Spec → Task → Workflow → Skill/Tool → Run → 
 
 - **症状**：终端长时间没有可读进度，结束时只显示一个总状态；无法知道当前页/阶段、调用路径、已处理页、未开始页或哪个环节被跳过。
 - **影响**：人无法及时停止错误运行，也无法判断“三小时运行”究竟完成了什么；后续重跑容易重复消耗并继续掩盖遗漏。
-- **检测证据**：`progress.jsonl`/workflow execution ledger、逐页 stage evidence、smoke report、checkpoint、selected-pages 与 evidence-pages 差集。
+- **检测证据**：`progress-current.json`、`progress.jsonl` 阶段账本、对应页的 `progress-pNNN.json`、逐页 stage evidence、smoke report、checkpoint、selected-pages 与 evidence-pages 差集。
 - **期望处理**：smoke 必须是独立、限时、可见的 Run；每个阶段开始/完成/失败/降级都输出事件和下一步；无进展或超时立即停止并保留证据，未有 smoke Verdict 不得继续后续页。
 - **状态**：`spec-known`；现有 runner 有 smoke 参数和最终报告，但实时心跳、硬预算和遗漏差集仍需实际验证。
 

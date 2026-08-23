@@ -1,0 +1,114 @@
+contract: page-markdown-noise-cleanup
+version: 1.0.0
+description: page-unit 生成后、语言模型内容修复前的确定性页眉页脚与边界噪声清洗契约。
+status: active
+scope: post-page-unit-pre-language-repair
+implementation: adapters/page_markdown_noise_cleanup.py
+skill: skills/clean-page-markdown-noise/SKILL.md
+default_profile: references/reader-noise-profile.yaml
+inputs:
+  required:
+    - page_units_directory
+    - explicit_page_selector
+  optional:
+    - source_specific_profile
+  forbidden:
+    - page_images
+    - OCR_JSON
+    - bbox_or_confidence
+    - vision_JSON
+    - manifest
+    - unrelated_page_body_as_model_context
+execution:
+  order: [scan, review-profile-or-suspects, apply, verify, markdown-content-repair]
+  default_mode: scan
+  apply_flag: --apply
+  concurrency_guard:
+    - 记录每个输入文件 SHA-256。
+    - 在任何写入前重新检查全部选定文件哈希；发现漂移时不写任何文件。
+    - 每个文件写入前再次检查自己的输入哈希。
+  write_policy:
+    - 只重写确有允许删除行的文件。
+    - 使用同目录临时文件原子替换。
+    - 不从旧快照恢复或覆盖当前文件。
+profile:
+  version: 1.0.0
+  header_rule_kinds: [exact, regex, fuzzy]
+  zones:
+    header_nonempty_lines: positive-integer
+    footer_nonempty_lines: positive-integer
+    adjacent_line_window: positive-integer
+  discovery:
+    basis: repeated-normalized-boundary-lines
+    fuzzy_attachment: low-frequency-variant-to-confirmed-repeated-template-only
+    never_promote:
+      - protected_page_unit_section
+      - sentence_ending_prose
+      - image_link
+      - table_row
+      - metadata_comment
+deletion_rules:
+  header_template:
+    - 只匹配完整物理行。
+    - 只在页首安全区、页尾安全区或至少两个不同模板规则相邻的模板块中删除。
+    - profile 命中但不在安全区的独立行保留为 suspect。
+  footer_page_number:
+    - 只删除由数字、空格和横线组成的独立行。
+    - 必须位于原始页面图 Markdown 链接之前的页尾区域。
+    - 正文编号和图片链接之后的数字行不得删除。
+  boundary_delimiter:
+    - 只删除值为 --- 的独立行。
+    - 在其他允许删除行移除后的固定点上，只能删除第一个或最后一个非空行。
+protected:
+  - 页面元数据注释
+  - 语义标题与 page-unit 必需 section
+  - 正文、表格、列表和代码块
+  - Unknown/needs-review 边界
+  - 原始页面图链接和路径行
+  - 正文内部横线
+evidence:
+  format: JSON
+  required_top_level:
+    - contract
+    - version
+    - mode
+    - status
+    - page_units
+    - selected_pages
+    - profile
+    - counts
+    - counts_by_kind
+    - discovered_rules
+    - files
+    - suspects
+    - retained_internal_delimiters
+    - residual_high_confidence
+    - checks
+    - next_action
+  per_file:
+    required:
+      - file
+      - page
+      - input_sha256
+      - output_sha256
+      - changed
+      - deletions
+  deletion:
+    required: [file, line, kind, rule_id, raw, line_sha256]
+required_checks:
+  - all_files_nonempty
+  - image_links_unchanged
+  - delete_only_reconstruction
+  - input_hashes_rechecked_before_apply
+  - only_changed_files_rewritten
+statuses:
+  passed: 允许删除项已处理且没有未决高置信残留。
+  needs-review: 安全删除可保留，但存在未自动删除的疑似模板行。
+  failed: 输入、profile、并发哈希或写后完整性校验失败。
+exit_codes:
+  0: passed
+  1: needs-review
+  2: input-profile-or-integrity-error
+claim_boundary:
+  proves: deterministic-page-text-noise-cleanup
+  does_not_prove: [semantic-correctness, visual-relation-correctness, full-package-acceptance]

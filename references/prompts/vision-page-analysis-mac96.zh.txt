@@ -26,6 +26,17 @@
 只有图片中确实出现的标题，才能作为 Markdown 标题。
 文字无法确认时标记为“〔无法确认〕”，不要自行猜测。
 
+Markdown 结构保真要求：
+
+1. 标题：只把视觉上明确独立、字号/位置/编号能支持标题身份的原文写成 `#`、`##` 或 `###`。标题身份或层级无法确认时保留原文，并在 `structure_inventory` 中登记 `needs-review`，不得为了版式整齐臆造标题或层级。
+2. 自然段：同一句因版心宽度产生的软换行应合并；视觉上有缩进、段前段后间距或语义起止的自然段必须用空行分隔。不得把整页正文平铺成一个段落，也不得把每个 OCR 式短行拆成独立段落。
+3. 列表：只在页面存在项目符号、编号、连续案例号或明确并列结构时使用 Markdown 列表；保留原编号与顺序，缺失的编号不得补写。
+4. 目录：页面明确为目录时，保留章节、条目与可见页码的对应关系；目录续页不得新增图片中不存在的“目录”标题。对应关系不清楚时逐项保留原文并标记 `〔无法确认〕`，不得猜配页码。
+5. 页眉页脚：页眉、页脚、页码和版权行仍属于可见来源文字，提取阶段必须转写；可以在 `header_footer_candidates` 中登记候选身份，但不得在本阶段删除。
+6. 跨页：单页请求不得参考前后页，也不得自行续写被截断的句子。页面起止明显不完整时在 `structure_inventory` 中登记 `cross_page_continuity: needs-review`。
+7. 异常文字：微信号、联系方式、二维码附近说明、推广语和其他疑似广告文字必须逐字保留。不得在提取阶段判断、隐藏、删除、改写或归纳广告；广告分类和处理属于独立后置策略。
+8. 二维码图形本身不进入 Markdown 图片，也不得解码；二维码附近实际可见的文字仍必须转写。
+
 输出格式：
 先输出图片中实际出现的标题；没有标题时不要新增标题。
 接着输出可直接确认的正文关系；没有可确认关系时不要新增关系标题或占位。
@@ -37,12 +48,17 @@
 1. 直接阅读当前图片，不猜测，不补写，不解释，不总结，不改写原意。
 2. 只记录图片中实际出现的文字、符号、公式、标签和由当前图片直接确认的关系；无法确认的文字写为 `〔无法确认〕`，无法确认的关系放入 `uncertainties` 或 `unknown_forms`。
 3. 尽量逐字保留原图字形和措辞。不要把形近字、异体字或低清晰度字形擅自规范化；例如原图若显示“蕞”，不要自动改成“最”。无法辨认时标记“〔无法确认〕”。
-4. 只有图片中确实出现的标题才能作为 Markdown 标题；不要新增“定义”“解读”“总结”等标题。不要为了让结构好看而制造图片中不存在的分节。
+4. 只有图片中确实出现的标题才能作为 Markdown 标题；图片中确有标题时必须用 `#`/`##` 等 Markdown 标题语法表达。不要新增“定义”“解读”“总结”等标题，不要为了让结构好看而制造图片中不存在的分节。
 5. 不把左侧、右侧、上方、下方、中心等坐标叙述写入 Markdown 正文；视觉位置只能作为结构化关系的证据。
 6. 图表、流程、矩阵、时间线、分组、箭头、颜色/线型编码和嵌套容器必须按实际可见内容记录，不要从常识推断缺失关系。只有箭头、连线或明确标签能确认的关系才能写入 `relationships`。
 7. 不要把同一段分散排版的文字强行拼成一句；只有在当前图片中能直接确认其连续关系时才合并。
 8. Markdown 换行是内容保真的一部分：图片中视觉上独立的文字块、标签、节点、公式和说明必须各占一行；相邻独立行之间使用空行或 Markdown 硬换行，绝不能把多个标签串成一个连续段落。对于同一个句子因版面宽度产生的换行，应合并为完整句子，不要把句子拆成多行。
 9. 即使视觉关系为空，也必须返回可解释的 `coverage_notes`；不要用固定占位文本代替分析。
+10. 必须区分“作为模型输入的整页扫描图”和“读者需要保留的语义图片”。PDF 每页是一张位图，不代表该页含有需要进入 Markdown 的图片。
+11. 如果页面只有标题、段落、列表、简单目录或其他可由 Markdown 完整表达的文字排版，返回 `page_content_type: text-only`、`layout_dependency: none` 或 `markdown-representable`、空 `semantic_visuals`，并设置 `reader_image_policy.action: omit`。字号、字体、粗体、普通颜色或装饰底色可以记录为文字排版，但不是 `semantic_visuals`，也不应单独要求保留页面图。
+12. 照片、插图、图表、流程、矩阵、关系图、依赖颜色或空间位置才能理解的结构属于语义视觉；此时设置 `reader_image_policy.action: retain`。无法确认时设置 `needs-review`，不得为了减少图片而猜测。
+13. 二维码不得作为图片资产提取，不得解码、转写链接、裁剪或写入 Markdown 图片。发现二维码时只在 `ignored_elements` 中记录 `type: qr-code`、`action: ignore` 和简短理由；二维码本身不使纯文字页变成 `text-and-visual`。
+14. `ignored_elements` 只描述不进入读者图片的图形元素，绝不能作为删除其附近可见文字的依据。
 
 `full` 模式的 JSON 结构：
 
@@ -51,6 +67,23 @@
   "page": "当前页或区域标识",
   "markdown": "图片中实际出现的文字 Markdown",
   "visual_analysis": {
+    "page_content_type": "text-only | text-and-visual | visual-only | unknown",
+    "layout_dependency": "none | markdown-representable | image-required | unknown",
+    "semantic_visuals": [],
+    "ignored_elements": [],
+    "reader_image_policy": {
+      "action": "omit",
+      "reason": "text-fully-represented-in-markdown",
+      "confidence": "high"
+    },
+    "structure_inventory": {
+      "title_levels": [],
+      "paragraph_count": 0,
+      "list_count": 0,
+      "toc_entry_count": 0,
+      "header_footer_candidates": [],
+      "cross_page_continuity": "complete | needs-review | unknown"
+    },
     "visual_forms": [],
     "regions": [],
     "relationships": [],
@@ -63,3 +96,11 @@
 ```
 
 `visual_forms`、`regions`、`relationships`、`tables_or_charts` 中的每项都应尽量包含可回看图片的简短证据或区域描述；没有内容时使用空数组。只输出规定格式，不附加分析过程。
+
+`structure_inventory` 只记录本页 Markdown 中实际采用的结构及未决项，不得包含广告分类或删除建议。它必须与 `markdown` 的实际语法逐项一致：`title_levels` 按出现顺序列出每一个真实 `#`/`##`/`###` 标题；`list_count` 等于 Markdown 列表项数量；`paragraph_count` 和 `toc_entry_count` 也必须等于实际输出。不得在清单中声称存在 Markdown 没有写出的标题、列表或目录项。无法确认的结构在相应字段保留 `needs-review`/`unknown`，不能用猜测补齐。
+
+生成顺序必须是：先完成 `markdown` 字符串，再只根据该字符串反向统计 `structure_inventory`。`title_levels` 的元素只允许是字面量 `#`、`##`、`###`、`####`、`#####`、`######`，不得写成 `1`、`2`、`3`、`h1` 或自然语言。若图片中有可确认标题，`markdown` 必须实际包含“井号 + 空格 + 标题原文”；若存在列表，必须实际包含“`- ` + 条目原文”。
+
+以下只演示语法，不是可复制的页面内容：一级标题写成 `# 标题原文`，二级标题写成 `## 章节原文`，列表项写成 `- 条目原文`；对应清单才可写 `"title_levels": ["#", "##"]`、`"list_count": 1`。图片没有这些结构时不要生成示例文字。
+
+`reader_image_policy.action=omit` 只允许用于 `page_content_type=text-only`，且 `layout_dependency` 为 `none` 或 `markdown-representable`、`semantic_visuals`/`relationships`/`tables_or_charts`/`unknown_forms`/`uncertainties` 都为空。任何字段缺失、冲突或不确定都返回 `retain` 或 `needs-review`。

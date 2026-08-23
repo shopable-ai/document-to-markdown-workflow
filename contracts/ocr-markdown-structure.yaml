@@ -1,0 +1,40 @@
+contract: ocr-markdown-structure
+version: 0.2.0
+description: 将逐行 OCR 文字、bbox 和置信度确定性投影为保守 Markdown，并逐候选登记来源。
+stage: markdown-structure-reconstruction
+input:
+  required: [status, candidates]
+  candidate_required: [text, confidence, bbox]
+  bbox_required: [x, y, width, height]
+  immutable: true
+output:
+  required:
+    - contract
+    - version
+    - prompt_version
+    - page
+    - status
+    - input_candidate_count
+    - mapped_candidate_count
+    - candidate_accounting
+    - raw_text_sha256
+    - markdown_sha256
+    - markdown
+    - structure_inventory
+    - advertising_policy
+    - blocks
+    - diagnostics
+  status: enum[passed, needs-review, failed]
+  block_required: [kind, markdown, source_candidate_indices, source_text]
+  block_kinds: [heading, paragraph, list-item, toc-entry]
+quality_gates:
+  - 每个 OCR candidate index 必须恰好进入一个 block。
+  - Markdown 必须非空，但非空本身不能使状态通过。
+  - 低置信度候选必须保留并使状态至少为 needs-review。
+  - 标题只能来自显式章节标记或当前页 bbox 的相对视觉显著性。
+  - 目录章节必须保留为标题；同一目录条目的换行文字和右栏页码必须聚合为一个可追溯 block。
+  - 目录项、列表项和独立段落不得合并成一个平铺段落。
+  - 页首或页尾跨页断点只标记 starts_with_continuation/ends_with_continuation 并进入 needs-review，不在单页阶段猜测补全。
+  - 页眉页脚候选只登记，不在本阶段删除。
+  - advertising_policy.mode 固定为 preserve-only，classification_stage 固定为 not-run。
+forbidden_actions: [advertising-classification, delete-visible-text, rewrite-source-text, cross-page-inference]

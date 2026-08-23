@@ -8,7 +8,7 @@ failure:
   required: [failure_id, stage_id, code, severity, retryable, status, message, evidence_paths, remediation]
   failure_id: string
   stage_id: string
-  code: enum[source-invalid, unsupported-format, extract-timeout, render-failed, ocr-unavailable, visual-review-unavailable, contract-invalid, provenance-missing, integrity-check-failed, broken-link, unknown-form-unresolved, provider-timeout, provider-rate-limit, image-download-failed, review-failed, other]
+  code: enum[source-invalid, unsupported-format, extract-timeout, render-failed, ocr-unavailable, visual-review-unavailable, contract-invalid, provenance-missing, integrity-check-failed, broken-link, unknown-form-unresolved, provider-timeout, provider-rate-limit, image-download-failed, review-failed, full-document-coverage-incomplete, other]
   severity: enum[P0, P1, P2, info]
   retryable: boolean
   status: enum[open, acknowledged, resolved, blocked]

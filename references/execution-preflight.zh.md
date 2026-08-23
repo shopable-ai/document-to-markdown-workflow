@@ -2,7 +2,7 @@
 
 顶级专家不会把“错误目录”当成知识库里的提醒，而会把它变成执行前的可判定门禁：先用廉价、确定性的检查阻止注定失败的运行，再进入 A1–A7；不可廉价确定的问题才留给阶段内的 fallback、`needs-review` 和独立验收。
 
-这不是新增 A8。它是 A1 之前的 `execution_preflight` 横向环节，机器契约为 [`contracts/workflow-a-preflight.yaml`](../contracts/workflow-a-preflight.yaml)，每次真实运行写入 `evidence/preflight.json`。核心预检只做廉价确定性检查，不做转换、不调用 OCR、不调用在线模型；通过后另有一个只读 `capability_probe` 检查 mac96，失败时只决定是否走已声明的 Apple Vision fallback。
+这不是新增 A8。它是 A1 之前的 `execution_preflight` 横向环节，机器契约为 [`contracts/workflow-a-preflight.yaml`](../contracts/workflow-a-preflight.yaml)，每次真实运行写入 `evidence/preflight.json`。核心预检只做廉价确定性检查，不做转换、不调用 OCR、不调用在线模型；通过后另有只读 `capability_probe` 检查各候选路线的可运行条件。探测结果只说明可用性，不能决定 Apple Vision OCR、小视觉模型或 30B 的质量优先级。
 
 本文件是人类可审阅的规则来源；`known-failures.zh.md` 保存完整问题目录，`workflow-a-preflight.yaml` 只编译其中可确定的子集。三者必须通过 `check_id` 和 `risk_ids` 对齐，不再新增第二份同义 preflight 文档。
 
@@ -63,4 +63,4 @@
 - 历史 Skill/说明仍可能写有 DOCX，但当前 active runner 尚未实现；preflight 会在 A1 前阻断，直到补齐能力、契约、夹具和真实验收。
 - 语言质量修复、人工复核消费端、幂等恢复和真实 mac96/Apple OCR E2E 仍是阶段内或横向的后续工作；preflight 通过不等于这些门禁通过。
 - 真实来源仍必须执行独立 `reports/validation-result.json` 和必要的人工复核；fixture、静态契约和预检都不能替代真实业务证据。
-- active source runner 的 deterministic execute 还必须保留 `source-inventory.json`、`capability-probe.json`、`smoke-report.json` 和 `progress.jsonl`；这些文件记录“未执行”同样是证据，不能缺失或伪造通过。
+- active source runner 的 deterministic execute 还必须保留 `source-inventory.json`、`capability-probe.json`、`smoke-report.json` 和 `progress.jsonl`；这些文件记录“未执行”同样是证据，不能缺失或伪造通过。mac96 长文档运行的当前状态优先看 `progress-current.json`，逐页细节看对应的 `progress-pNNN.json`，不要为了查看当前页读取整个追加流。

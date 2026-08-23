@@ -1,6 +1,6 @@
 contract: markdown-asset-package
 version: 0.1.0
-description: Workflow A 的主输出，连接 Markdown 语义层与来源视觉资产层。
+description: Workflow A 显式 --engineering-output 模式的完整资产包；默认 reader-only 输出使用 reader-markdown-output-layout。
 output_layout: workflow-a-output-layout.yaml
 required:
   package_id: string
@@ -18,7 +18,7 @@ required:
     native_extraction: enum[complete, partial, unavailable]
     ocr_used: boolean
     visual_review: enum[not-requested, attempted, complete, partial, unavailable]
-    execution_path: enum[native-only, mac96, conversation-online, apple-vision-ocr, needs-review]
+    execution_path: enum[native-only, mac96, mac96-direct-vision, mac96-with-conversation-online-fallback, conversation-online, conversation-online-vision, apple-vision-ocr, needs-review]
     fallback_reason: string|null
     status: enum[complete, needs-review, failed]
     stage_evidence: array
@@ -59,6 +59,7 @@ invariants:
   - active source-runner manifest 的 evidence 必须指向 source-inventory.json、capability-probe.json、smoke-report.json 和 progress.jsonl；旧 fixture/legacy 包若缺少该映射只能保留为历史/夹具边界
   - deterministic execute 若未执行 capability probe、smoke gate、视觉/OCR或质量审计，必须保留对应 evidence 文件并将相关阶段标为 needs-review/not-run
   - evidence/progress.jsonl 必须记录至少 execution_preflight、source_inventory、native_extraction、source_rendering、markdown_assembly 和 independent_validation 的状态
+  - mac96 运行可额外提供 evidence/progress-current.json 作为覆盖写入的最新状态快照；逐页详情保留在 evidence/progress-pNNN.json，不能把这些逐页记录重复追加进 progress.jsonl
   - needs-review 只能由真实失败、冲突、未裁决关系或明确未知形式触发；缺少可选 unknown_forms 字段本身不构成失败
   - index.md 只保留读者层语义和必要页面图链接；工程证据字段必须进入 evidence/、manifest.yaml 或 reports/
   - 若执行视觉资产语义筛选，manifest.evidence.visual_asset_pruning 必须指向满足 contracts/visual-asset-pruning.yaml 的报告；被移除读者层引用对应的来源资产、哈希、source_occurrences 和理由不得从 manifest 或报告中消失

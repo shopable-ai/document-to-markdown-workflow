@@ -43,7 +43,7 @@ required:
   package_id: string
   document: string
   generated_from: array
-  status: enum[applied, rejected, deferred]
+  status: enum[applied, skipped, rejected, deferred]
   items: array
   route: object
   model_calls: array
@@ -65,7 +65,7 @@ item:
     after: string|null
     evidence: array
   rationale: string
-  status: enum[applied, rejected, deferred]
+  status: enum[applied, skipped, rejected, deferred]
   decision_note: string|null
 invariants:
   - 每项必须定位到 section；source_occurrence 和 visual_asset_id 只有在调用方已有对应元数据时才记录。
@@ -74,8 +74,9 @@ invariants:
   - 跨页、缺字、多个合理断句或需要视觉关系才能判断的内容只能保持 deferred。
   - deferred 和 rejected 项不得在 index.md 中显示 OCR、候选、置信度、页码或审核旁注。
   - applied 项表示局域网或获授权的在线模型结果已经通过当前页结构守卫并直接写回当前 page-unit；图片链接和来源资产不属于本契约的修改范围。
+  - skipped 项表示当前页在语言调用前已通过标题、段落、列表、读者图片处置和来源保真结构守卫；必须记录 model_call_count=0、最终哈希和守卫结论。
   - 原文、候选、提案文本和最终通过文本必须分字段保存，不能以候选覆盖原始证据。
   - page_results 中每个页面只能记录一个当前页输入哈希、输出哈希、调用路由和写回状态。
   - 局域网模型成功后不得再调用在线模型；在线模型回退必须记录明确授权和失败原因。
-  - page-unit 的页面编号、原始页面图链接和未确认关系边界必须保持不变。
+  - page-unit 的页面编号、reader_image_action、已有原始页面图链接和未确认关系边界必须保持不变；纯文本 omit 页面不得新增图片链接。
   - 修复提示词必须要求模型只返回当前页 Markdown，不得返回解释、摘要、JSON 诊断或工程字段。

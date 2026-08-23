@@ -1,0 +1,93 @@
+contract: pdf-route-detection
+version: 0.4.0
+description: 在批量转换前做文档级低成本预检，并在转换时逐页决定 native-only、native-plus-visual 或 visual-only。
+root: runs/pdf-route-detection/<timestamp>-<digest>/report.json
+required:
+  - contract
+  - version
+  - run_id
+  - detected_at
+  - status
+  - input
+  - tooling
+  - outputs
+  - summary
+  - records
+statuses: [complete, partial, failed]
+record:
+  required:
+    - status
+    - source_path
+    - relative_path
+  optional_when_complete:
+    - source_sha256
+    - file_size
+    - modified_at
+    - total_pages
+    - page_size_points
+    - sample_pages
+    - sample_records
+    - document_summary
+    - decision
+  decision:
+    required: [route, confidence, reason_codes, recommended_entrypoint]
+    route: enum[native-only, hybrid, vision-only]
+    confidence: enum[high, medium, low]
+  page_signal:
+    required: [text_profile, layout_profile, full_page_image, image_heavy]
+    text_profile: enum[none, sparse, present, dense]
+    layout_profile: enum[diagram-like, sparse-layout, narrative]
+page_decision:
+  scope: one-source-page
+  required:
+    - page
+    - route
+    - status
+    - reason_codes
+    - native_text_chars
+    - text_signals
+    - image_stats
+    - bbox_metrics
+    - table_detection
+    - rendered_structure
+    - visual_model_required
+  route: enum[native-only, native-plus-visual, visual-only]
+  status: enum[passed, needs-review, failed]
+  text_signals:
+    role: candidate-only
+    examples: [如图, 见图, 图1, 图 1, 如下图, 见下图, 表1, 表 1, 矩阵, 流程图, 模型图]
+  corroborating_signals:
+    - pdfimages-page-image-object-and-area-ratio
+    - native-bbox-layout-and-large-blank-region
+    - pdfplumber-table-detection
+    - local-rendered-structure-probe
+  rendered_structure_probe:
+    implementation: local-deterministic-page-render-analysis
+    model_calls: forbidden
+    scope: candidate-pages-only
+  outputs:
+    page_record: evidence/page-routes/p<page-3-digits>.json
+    completion_report: reports/page-completion.json
+    merged_page_unit: page-units/p<page-3-digits>.md
+invariants:
+  - 检测脚本不得调用在线模型、OCR、远程 API 或转换 Markdown 正文。
+  - 每条成功记录必须保存 source_sha256；不得只保存文件名或 md5。
+  - "单个 `--source-dir` 运行时，来源根目录只新增 `PDF转换路线总览.md` 和 `PDF转换路线/`；不得把完整 JSON 或 NDJSON 浅放在来源根目录。"
+  - "`PDF转换路线/` 只保存 `原生文本路线.txt`、`图文混合路线.txt`、`视觉识别路线.txt` 和 `待人工复核.csv`。"
+  - "完整报告、逐项 NDJSON、逐文件记录和英文 route list 只保存在 `runs/pdf-route-detection/<timestamp>-<digest>/`。"
+  - "`runs/pdf-route-detection/current.json` 只能保存小型报告指针和来源目录索引，不得复制完整 records。"
+  - "`--backfill-report` 必须只读取已有报告并重建新布局，不得重新调用 PDF 检测工具。"
+  - 不得仅凭 full-page image ratio、image-heavy ratio 或前导页整页图片信号直接短路为 vision-only；必须先完成代表页原生文字抽样。
+  - 代表页至少覆盖首页、早期目录候选、普通正文候选、长正文候选、图片占比较高但文字仍存在的候选页，以及末页。
+  - route=vision-only 只能由原生文字显著不足、乱码严重、正文覆盖不足或结构复杂到原生层无法恢复等证据触发。
+  - route=native-only 必须由较强的 native text 信号触发；封面/插页异常只能作为例外说明，不得掩盖整本文字层缺失。
+  - route=hybrid 表示 native text 存在，应先执行 no-model native smoke，再仅把失败或结构异常页送入视觉 fallback，而不是整本改走 vision-only。
+  - 失败记录必须保留 source_path 和错误信息；批次 status=partial 或 failed 时不得把未检测来源写成成功。
+  - 文档级 hybrid 进入执行后必须逐页生成 page_decision；不得把整本 PDF 直接交给视觉模型。
+  - 纯文字且无视觉佐证的页面必须为 native-only，visual_model_required=false。
+  - 文字候选信号不得单独触发视觉调用；特别是“如图”但没有页面图片对象时必须为 native-only + needs-review，不得凭文字生成图片内容。
+  - 原生文字为空或显著不足且存在图片、表格或渲染结构佐证时必须为 visual-only。
+  - 原生文字完整且有视觉佐证时必须保留原生正文，并把视觉结果作为同一 page-unit 的补充；视觉结果不得覆盖原生正文。
+  - 逐页视觉失败不得中断后续页面；失败页必须写入待处理/覆盖报告并保留已有原生正文。
+  - 断点续跑只能复用 source_sha256、页码、路线记录和页面单元均一致且通过的页面；不得只凭文件存在跳过。
+  - 最终验收必须比较 selected_pages 与完成页面集合，并报告 missing_pages、duplicate_pages 和 unexpected_pages；存在未完成页不得为 passed。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "页面 Markdown 噪声清洗"
+  short_description: "保守清理逐页 Markdown 的页眉、页脚页码与边界噪声"
+  default_prompt: "使用 $clean-page-markdown-noise 扫描并清理当前 page-units，保留正文、页面图链接和 Unknown/needs-review 边界。"

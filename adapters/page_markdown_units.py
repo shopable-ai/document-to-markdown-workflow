@@ -23,6 +23,7 @@ METADATA = {
     "unit-status": re.compile(r"^<!--\s*unit-status:\s*([a-z-]+)\s*-->$"),
     "semantic-title": re.compile(r"^<!--\s*semantic-title:\s*(.*?)\s*-->$"),
     "relation-status": re.compile(r"^<!--\s*relation-status:\s*([a-z-]+)\s*-->$"),
+    "reader-image-action": re.compile(r"^<!--\s*reader-image-action:\s*([a-z-]+)\s*-->$"),
 }
 REQUIRED_HEADINGS = (
     "正文",
@@ -32,7 +33,6 @@ REQUIRED_HEADINGS = (
     "举例与思考",
     "模型结构",
     "已确认的关系说明",
-    "原始页面图",
     "待核对项",
 )
 LABELS = ("选择A", "选择B", "机会", "成本", "收益", "读书", "追剧")
@@ -49,20 +49,36 @@ class PageUnitError(ValueError):
     """Raised when a page unit or stage gate is invalid."""
 
 
-def parse_page_selector(value: str) -> list[int]:
+TOTAL_PAGE_MARKERS = {"total_pages", "total-pages"}
+
+
+def _resolve_page_token(token: str, total_pages: int | None) -> int:
+    token = token.strip()
+    if token in TOTAL_PAGE_MARKERS:
+        if total_pages is None:
+            raise PageUnitError(f"page selector requires total_pages for dynamic marker: {token}")
+        return total_pages
+    return int(token)
+
+
+def parse_page_selector(value: str, total_pages: int | None = None) -> list[int]:
     pages: set[int] = set()
     for part in value.split(","):
         part = part.strip()
         if not part:
             continue
         if "-" in part:
-            start, end = (int(item) for item in part.split("-", 1))
+            start_token, end_token = (item.strip() for item in part.split("-", 1))
+            start = _resolve_page_token(start_token, total_pages)
+            end = _resolve_page_token(end_token, total_pages)
             pages.update(range(min(start, end), max(start, end) + 1))
         else:
-            pages.add(int(part))
+            pages.add(_resolve_page_token(part, total_pages))
     result = sorted(pages)
-    if not result or result[0] < 1 or result[-1] > 100:
-        raise PageUnitError(f"pages must be within 1..100: {value}")
+    if not result or result[0] < 1:
+        raise PageUnitError(f"pages must be >= 1: {value}")
+    if total_pages is not None and result[-1] > total_pages:
+        raise PageUnitError(f"pages must be within 1..{total_pages}: {value}")
     return result
 
 
@@ -105,10 +121,12 @@ def extract_page_section(source_document: Path, page: int) -> str:
     raise PageUnitError(f"page {page} was not found in {source_document}")
 
 
-def _image_link(text: str) -> str:
+def _image_link(text: str, *, required: bool = True) -> str | None:
     matches = PAGE_IMAGE.findall(text)
     if not matches:
-        raise PageUnitError("page unit has no original page image link")
+        if required:
+            raise PageUnitError("page unit has no original page image link")
+        return None
     return matches[-1]
 
 
@@ -137,18 +155,17 @@ def read_metadata(text: str) -> dict[str, str | int]:
 
 def _wrap_extracted_page(page: int, raw_section: str) -> str:
     title = _semantic_title(raw_section)
-    image = _image_link(raw_section)
-    return "\n".join(
-        [
-            f"<!-- page-number: {page} -->",
-            "<!-- unit-status: needs-review -->",
-            f"<!-- semantic-title: {title} -->",
-            "<!-- relation-status: needs-review -->",
-            "",
-            raw_section.rstrip(),
-            "",
-        ]
-    ).replace("<!-- relation-status: needs-review -->\n\n", f"<!-- relation-status: needs-review -->\n<!-- original-page-image: {image} -->\n\n")
+    image = _image_link(raw_section, required=False)
+    metadata = [
+        f"<!-- page-number: {page} -->",
+        "<!-- unit-status: needs-review -->",
+        f"<!-- semantic-title: {title} -->",
+        "<!-- relation-status: needs-review -->",
+        f"<!-- reader-image-action: {'retain' if image else 'omit'} -->",
+    ]
+    if image:
+        metadata.append(f"<!-- original-page-image: {image} -->")
+    return "\n".join([*metadata, "", raw_section.rstrip(), ""])
 
 
 def enforce_stage_gate(pages: list[int], gate_path: Path | None) -> None:
@@ -166,7 +183,7 @@ def enforce_stage_gate(pages: list[int], gate_path: Path | None) -> None:
     if max(pages) <= 5 and scope != "single-page":
         raise PageUnitError("pages 2-5 require a passed single-page gate")
     if max(pages) > 5 and scope != "small-batch-2-5":
-        raise PageUnitError("pages 6-100 require a passed small-batch-2-5 gate")
+        raise PageUnitError("pages 6-total_pages require a passed small-batch-2-5 gate")
 
 
 def split_pages(source_document: Path, pages: list[int], output_dir: Path | None, output: Path | None, gate_path: Path | None) -> list[Path]:
@@ -188,6 +205,17 @@ def split_pages(source_document: Path, pages: list[int], output_dir: Path | None
         target.write_text(_wrap_extracted_page(page, found[page]), encoding="utf-8")
         written.append(target)
     return written
+
+
+def infer_total_pages(source_document: Path) -> int:
+    total = 0
+    with source_document.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if PAGE_HEADING.match(line.rstrip("\n")):
+                total += 1
+    if total < 1:
+        raise PageUnitError(f"cannot infer total_pages from {source_document}")
+    return total
 
 
 def _section_spans(text: str) -> dict[str, tuple[int, int]]:
@@ -225,10 +253,24 @@ def validate_unit_text(
     missing = [heading for heading in REQUIRED_HEADINGS if heading not in spans]
     if missing:
         raise PageUnitError(f"missing required sections: {missing}")
-    positions = [spans[heading][0] for heading in REQUIRED_HEADINGS]
+    reader_image_action = metadata.get("reader-image-action")
+    image = _image_link(text, required=False)
+    if reader_image_action is None:
+        reader_image_action = "retain" if image else None
+    if reader_image_action not in {"omit", "retain", "needs-review"}:
+        raise PageUnitError("reader-image-action must be omit, retain, or needs-review")
+    if reader_image_action == "omit" and image:
+        raise PageUnitError("reader-image-action=omit cannot contain a page image link")
+    if reader_image_action != "omit" and not image:
+        raise PageUnitError("retained or unresolved reader image requires a page image link")
+    if image and "原始页面图" not in spans:
+        raise PageUnitError("page image link requires an 原始页面图 section")
+    ordered_headings = list(REQUIRED_HEADINGS)
+    if "原始页面图" in spans:
+        ordered_headings.insert(ordered_headings.index("待核对项"), "原始页面图")
+    positions = [spans[heading][0] for heading in ordered_headings]
     if positions != sorted(positions):
         raise PageUnitError("required sections are not in deterministic reader order")
-    image = _image_link(text)
     if expected_image is not None and image != expected_image:
         raise PageUnitError(f"page image link changed: expected {expected_image}, got {image}")
     if page_one_acceptance is None:
@@ -275,6 +317,7 @@ def validate_unit_text(
         "page": page,
         "semantic_title": title,
         "relation_status": relation_status,
+        "reader_image_action": reader_image_action,
         "image": image,
         "checks": {
             "required_sections": True,
@@ -284,7 +327,7 @@ def validate_unit_text(
             "diagram_labels_are_structured": True,
             "ambiguous_fragments_preserved": True,
             "unconfirmed_relations_not_promoted": True,
-            "original_image_link_preserved": True,
+            "reader_image_disposition_preserved": True,
         },
     }
     return result
@@ -314,7 +357,7 @@ def merge_units(units: list[Path], output: Path) -> dict[str, object]:
         "pages": pages,
         "output": str(output),
         "source_units": [str(item[1]) for item in records],
-        "rules": ["ascending-page-number", "preserve-page-image-links", "no-reinference"],
+        "rules": ["ascending-page-number", "preserve-reader-image-disposition", "no-reinference"],
     }
 
 
@@ -325,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     split = subparsers.add_parser("split")
     split.add_argument("--source-document", type=Path, required=True)
     split.add_argument("--pages", default="1")
+    split.add_argument("--total-pages", type=int)
     split.add_argument("--output", type=Path)
     split.add_argument("--output-dir", type=Path)
     split.add_argument("--prior-gate", type=Path)
@@ -343,7 +387,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "split":
-            pages = parse_page_selector(args.pages)
+            total_pages = args.total_pages
+            if total_pages is None and any(marker in args.pages for marker in TOTAL_PAGE_MARKERS):
+                total_pages = infer_total_pages(args.source_document)
+            pages = parse_page_selector(args.pages, total_pages=total_pages)
             if len(pages) == 1 and args.output_dir is None and args.output is None:
                 raise PageUnitError("single-page split requires --output")
             paths = split_pages(args.source_document, pages, args.output_dir, args.output, args.prior_gate)

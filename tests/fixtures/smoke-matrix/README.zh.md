@@ -12,7 +12,7 @@ RUNTIME_PY=/Users/a0000/.cache/codex-runtimes/codex-primary-runtime/dependencies
   --output /tmp/workflow-a-smoke-matrix
 ```
 
-生成结果只用于测试输入。脚本不会调用 Workflow A，也不会写入 `runs/real/` 或正式
+生成结果只用于测试输入。脚本不会调用 Workflow A，也不会写入 `runs/` 或正式
 `output_root`。
 
 ## 顺序

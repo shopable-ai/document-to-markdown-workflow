@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,16 @@ def sha256_text(value: str) -> str:
 def _strip_fence(value: str) -> str:
     text = value.strip()
     match = re.fullmatch(r"```(?:markdown|md)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
-    return match.group(1).strip() if match else text
+    text = match.group(1).strip() if match else text
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[0].strip() == "---" and lines[-1].strip() == "---":
+        return "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def has_full_document_yaml_envelope(value: str) -> bool:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    return len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---"
 
 
 def _reader_atoms(value: str) -> Counter[str]:
@@ -72,12 +82,16 @@ def _request(
     model: str,
     prompt_file: Path,
     timeout: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, Any]]:
     prompt = prompt_file.read_text(encoding="utf-8").strip()
     payload = {
         "model": model,
         "system": "只处理当前一页 Markdown，不读取其他文件；只返回修复后的 Markdown。",
-        "prompt": f"{prompt}\n\n当前页面 Markdown：\n---\n{page_text}\n---",
+        "prompt": (
+            f"{prompt}\n\n"
+            "当前页面 Markdown（标签只用于分隔输入，不得出现在输出中）：\n"
+            f"<current_page_markdown>\n{page_text}\n</current_page_markdown>"
+        ),
         "stream": False,
         "options": {"temperature": 0},
     }
@@ -98,6 +112,7 @@ def _request(
         "--data-binary",
         "@-",
     ]
+    started = time.monotonic()
     try:
         result = subprocess.run(
             command,
@@ -107,20 +122,40 @@ def _request(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        return "unavailable", f"LAN repair request timed out: {exc}"
+        return "unavailable", f"LAN repair request timed out: {exc}", {
+            "wall_seconds": round(time.monotonic() - started, 3),
+        }
     except OSError as exc:
-        return "unavailable", f"LAN repair request could not start: {exc}"
+        return "unavailable", f"LAN repair request could not start: {exc}", {
+            "wall_seconds": round(time.monotonic() - started, 3),
+        }
+    wall_seconds = round(time.monotonic() - started, 3)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip()[-500:]
-        return "unavailable", f"LAN repair SSH/curl failed with exit {result.returncode}: {detail}"
+        return "unavailable", f"LAN repair SSH/curl failed with exit {result.returncode}: {detail}", {
+            "wall_seconds": wall_seconds,
+        }
     try:
         response = json.loads(result.stdout.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        return "failed", f"LAN repair response was not JSON: {exc}"
+        return "failed", f"LAN repair response was not JSON: {exc}", {"wall_seconds": wall_seconds}
+    metrics = {"wall_seconds": wall_seconds}
+    if isinstance(response, dict):
+        for key in (
+            "total_duration",
+            "load_duration",
+            "prompt_eval_count",
+            "prompt_eval_duration",
+            "eval_count",
+            "eval_duration",
+        ):
+            value = response.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics[key] = value
     raw = response.get("response") if isinstance(response, dict) else None
     if not isinstance(raw, str) or not raw.strip():
-        return "failed", "LAN repair response did not contain non-empty Markdown"
-    return "complete", _strip_fence(raw)
+        return "failed", "LAN repair response did not contain non-empty Markdown", metrics
+    return "complete", _strip_fence(raw), metrics
 
 
 def validate_repaired_markdown(original: str, repaired: str, page: int | None = None) -> list[str]:
@@ -141,6 +176,8 @@ def validate_repaired_markdown(original: str, repaired: str, page: int | None = 
     for link in original_images:
         if link not in repaired_images:
             errors.append(f"original page image link was removed: {link}")
+    if not original_images and repaired_images:
+        errors.append("reader image link was added to a text-only page")
     for marker in RELATION_BOUNDARY_MARKERS:
         if marker in original and marker not in repaired:
             errors.append(f"uncertain reader boundary was removed: {marker}")
@@ -149,6 +186,8 @@ def validate_repaired_markdown(original: str, repaired: str, page: int | None = 
             errors.append(f"engineering field leaked into reader Markdown: {marker}")
     if re.search(r"^\s*```(?:json|yaml)\b", repaired, re.M | re.I):
         errors.append("structured diagnostic fence leaked into reader Markdown")
+    if has_full_document_yaml_envelope(repaired):
+        errors.append("entire page was wrapped in YAML delimiters")
     original_atoms = _reader_atoms(original)
     repaired_atoms = _reader_atoms(repaired)
     invented = sorted(
@@ -203,8 +242,16 @@ def repair_page(
         "diagnostics": [],
         "changes": [],
     }
-    status, value = _request(original, host=host, model=model, prompt_file=prompt_file, timeout=timeout)
+    request_result = _request(original, host=host, model=model, prompt_file=prompt_file, timeout=timeout)
+    if len(request_result) == 2:  # compatibility for narrow test doubles and older adapters
+        status, value = request_result
+        metrics: dict[str, Any] = {}
+    else:
+        status, value, metrics = request_result
     result["model_status"] = status
+    result["model_call_count"] = 1
+    result["model_metrics"] = metrics
+    result["finished_at"] = now()
     if status != "complete":
         result["diagnostics"].append(value)
         result["next_action"] = "保留原文件；仅在明确授权时交给当前在线模型回退一次"
@@ -239,20 +286,22 @@ def write_review(path: Path, package_id: str, results: list[dict[str, Any]]) -> 
         change = (result.get("changes") or [{}])[0]
         before = change.get("before")
         after = change.get("after")
-        status = "applied" if result.get("status") == "applied" else "deferred"
+        raw_status = result.get("status")
+        status = raw_status if raw_status in {"applied", "skipped"} else "deferred"
+        changed = status == "applied" and after is not None
         items.append({
             "id": f"page-unit-{page_label}",
             "kind": "paragraph",
             "source_occurrence": None,
             "section_id": f"page-{int(page):03d}" if isinstance(page, int) else "page-unknown",
             "visual_asset_id": None,
-            "reader_text": after if status == "applied" else before,
+            "reader_text": after if changed else before,
             "source_text": before,
             "candidate_text": after,
             "proposed_text": after,
             "repair": {
-                "operation": "page-unit-structure-repair" if after is not None else "none",
-                "basis": "markdown-context",
+                "operation": "page-unit-structure-repair" if changed else "none",
+                "basis": "markdown-context" if changed else "none",
                 "before": before,
                 "after": after,
                 "evidence": [f"evidence/markdown-content-repair-{page_label}.json"],
@@ -268,6 +317,9 @@ def write_review(path: Path, package_id: str, results: list[dict[str, Any]]) -> 
             "target": result.get("target"),
             "model": result.get("model"),
             "status": result.get("model_status"),
+            "called": int(result.get("model_call_count") or 0) > 0,
+            "model_call_count": int(result.get("model_call_count") or 0),
+            "metrics": result.get("model_metrics") or {},
         })
         page_results.append({
             "page": page,
@@ -276,6 +328,8 @@ def write_review(path: Path, package_id: str, results: list[dict[str, Any]]) -> 
             "output_sha256": result.get("output_sha256"),
             "final_sha256": result.get("final_sha256"),
             "write_back": result.get("write_back", False),
+            "model_call_count": int(result.get("model_call_count") or 0),
+            "model_metrics": result.get("model_metrics") or {},
             "diagnostics": result.get("diagnostics", []),
         })
     payload = {
@@ -284,7 +338,7 @@ def write_review(path: Path, package_id: str, results: list[dict[str, Any]]) -> 
         "package_id": package_id,
         "document": "index.md",
         "generated_from": [f"page-units/p{int(item.get('page')):03d}.md" for item in results if isinstance(item.get("page"), int)],
-        "status": "applied" if results and all(item.get("status") == "applied" for item in results) else "deferred",
+        "status": "applied" if results and all(item.get("status") in {"applied", "skipped"} for item in results) else "deferred",
         "route": {
             "primary": "lan-language-model",
             "online_fallback": "explicit-current-task-only-after-lan-failure",

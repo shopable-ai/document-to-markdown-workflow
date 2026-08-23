@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Queue multiple Workflow A sources for explicit legacy compatibility only.
+"""Queue multiple Workflow A sources after generic batch execution is promoted.
 
-The generic source runner has not promoted batch execution yet.  Therefore
-the default CLI is fail-closed; ``--legacy-compat`` is required to run the
-archived document-profile adapter for recovery or comparison work.
+The generic source runner has not promoted batch execution yet.  This module
+is deliberately fail-closed and contains no compatibility route to the
+retired document-profile runner.  Run one source at a time through
+``workflow_a_source_runner.py`` until a new batch contract is implemented.
 """
 from __future__ import annotations
 
@@ -27,7 +28,6 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY_RUNNER = ROOT / "archive/legacy-adapters/workflow_a_runner.py"
 FORBIDDEN_CONFIG_KEYS = {"api_key", "authorization", "cookie", "secret", "subscription_url", "token"}
 SUPPORTED_SUFFIXES = {".pptx", ".pdf", ".png", ".jpg", ".jpeg"}
 # These validator findings describe an explicit review boundary (usually OCR,
@@ -238,96 +238,14 @@ def validator_gate(validation: dict[str, Any] | None) -> tuple[bool, list[dict[s
     return (not hard), hard
 
 
-def run_page_batches(source: Path, output_root: Path, pages: str = "all", smoke_pages: str | None = None, batch_size: int = 8, resume_record: Path | None = None, timeout: int = 1800, context_mode: str = "auto", context_window: int = 1, legacy_compat: bool = False) -> tuple[int, dict[str, Any]]:
+def run_page_batches(source: Path, output_root: Path, pages: str = "all", smoke_pages: str | None = None, batch_size: int = 8, resume_record: Path | None = None, timeout: int = 1800, context_mode: str = "auto", context_window: int = 1) -> tuple[int, dict[str, Any]]:
     """Run one long document through smoke + bounded page batches.
 
     Each page batch gets a new package directory.  Checkpoints are append-only
     records of the package hash and page states; a resume never overwrites an
     earlier package or silently advances past a failed batch.
     """
-    if not legacy_compat:
-        raise ValueError("batch execution is not promoted; pass --legacy-compat only for archived recovery runs")
-    source = source.expanduser().resolve()
-    if not source.is_file():
-        raise ValueError(f"source does not exist: {source}")
-    # Determine the page count without invoking the runner.  A count probe must
-    # not consume model/OCR time or create an untracked package.
-    if source.suffix.lower() == ".pdf":
-        count_process = subprocess.run(["pdfinfo", str(source)], capture_output=True, text=True, timeout=60)
-        match = re.search(r"^Pages:\s*(\d+)\s*$", count_process.stdout, re.MULTILINE)
-        total = int(match.group(1)) if count_process.returncode == 0 and match else 0
-        if not total:
-            raise ValueError("could not determine source page count for page batches")
-    else:
-        raise ValueError("page batches currently require a PDF source")
-    selected = parse_page_selector(pages, total)
-    smoke = parse_page_selector(smoke_pages, total) if smoke_pages else selected[:2]
-    if not set(smoke).issubset(selected):
-        raise ValueError("smoke pages must be a subset of selected pages")
-    remaining = [page for page in selected if page not in smoke]
-    chunks = [smoke] + split_page_batches(remaining, batch_size)
-    output_root = output_root.expanduser().resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-    source_id = _compact_source_id(source)
-    if resume_record:
-        record_path = resume_record.expanduser().resolve()
-        state = _read_json(record_path)
-        if not state:
-            raise ValueError(f"page checkpoint is missing or invalid: {record_path}")
-        if state.get("source_sha256") != sha256(source):
-            raise ValueError("resume source SHA-256 does not match the checkpoint")
-        batch_root = record_path.parent
-        (batch_root / "packages").mkdir(exist_ok=True)
-    else:
-        batch_root = output_root / f"page-batch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{sha256(source)[:8]}"
-        batch_root.mkdir(parents=False, exist_ok=False)
-        (batch_root / "packages").mkdir()
-        record_path = batch_root / "checkpoint.json"
-        state = {"run_id": batch_root.name, "workflow_id": "document-to-markdown-assets", "workflow_version": "0.4.0", "status": "running", "source": str(source), "source_sha256": sha256(source), "selected_pages": selected, "smoke_pages": smoke, "batch_size": batch_size, "batches": [], "next_page": selected[0] if selected else None, "started_at": now()}
-    completed = {int(item.get("batch_index")): item for item in state.get("batches", []) if item.get("status") == "passed"}
-    _write_json_atomic(record_path, state)
-    for index, batch_pages in enumerate(chunks, 1):
-        if index in completed:
-            continue
-        label = "smoke" if index == 1 else f"batch-{index - 1:03d}"
-        attempt = 1 + sum(1 for item in state.get("batches", []) if item.get("batch_index") == index)
-        suffix = f"--attempt-{attempt:02d}" if attempt > 1 else ""
-        package_name = f"{source_id}-pdf--{label}{suffix}"
-        command = [sys.executable, str(LEGACY_RUNNER), "--source", str(source), "--output-root", str(batch_root / "packages"), "--package-name", package_name, "--pages", page_selector(batch_pages), "--smoke-pages", page_selector(batch_pages), "--context-mode", context_mode, "--context-window", str(context_window)]
-        if index > 1:
-            command.append("--no-smoke-gate")
-        command_record = _run_command(command, timeout)
-        summary = _summary_from_stdout(command_record.get("stdout", "")) or {}
-        package = Path(str(summary.get("output", ""))) if summary.get("output") else batch_root / "packages" / package_name
-        smoke_report = _read_json(package / "evidence/smoke-report.json") or {}
-        validation = _read_json(package / "reports/validation-result.json") or {}
-        validation_status = validation.get("status") or "missing"
-        smoke_passed = smoke_report.get("status") == "passed"
-        validator_gate_passed, hard_validator_failures = validator_gate(validation)
-        passed = smoke_passed and validator_gate_passed and package.is_dir()
-        item = {"batch_index": index, "label": label, "pages": batch_pages, "status": "passed" if passed else "failed", "package": str(package), "package_hash": _package_hash(package), "page_states": _page_states(package, batch_pages), "command": command_record, "smoke_report": str(package / "evidence/smoke-report.json"), "smoke_status": smoke_report.get("status", "missing"), "validation": str(package / "reports/validation-result.json"), "validation_status": validation_status, "validation_failures": validation.get("failures", []), "hard_validator_failures": hard_validator_failures, "completed_at": now()}
-        state.setdefault("batches", []).append(item)
-        state["status"] = "running" if passed else "needs-review"
-        state["next_page"] = next((page for page in selected if not any(page in entry.get("pages", []) and entry.get("status") == "passed" for entry in state.get("batches", []))), None)
-        _write_json_atomic(record_path, state)
-        if not passed:
-            state["stop_reason"] = {"batch_index": index, "pages": batch_pages, "stage": "smoke" if not smoke_passed else "batch-validation", "evidence": [str(package / "evidence/smoke-report.json"), str(package / "reports/validation-result.json")], "reason": "smoke failed or independent validator is missing/failed/hard-failed", "hard_validator_failures": hard_validator_failures, "suggestion": "查看 smoke-report.json、validation-result.json 与逐页 evidence；从最近一个 passed checkpoint 恢复，不覆盖失败 package。"}
-            state["finished_at"] = now()
-            state["checkpoint"] = str(record_path)
-            state["final_report"] = str(batch_root / "final-report.json")
-            _write_json_atomic(batch_root / "final-report.json", {"status": state["status"], "processed_pages": sum(len(item.get("pages", [])) for item in state.get("batches", [])), "passed_pages": 0, "smoke_passed_pages": 0, "needs_review_pages": sum(len(item.get("pages", [])) for item in state.get("batches", [])), "stopped": True, "stop_reason": state["stop_reason"], "ocr_candidate_boundary": "OCR candidates are searchable review evidence, not confirmed facts", "asset_roots": [f"{item.get('package')}/assets/" for item in state.get("batches", [])], "checkpoint": str(record_path)})
-            _write_json_atomic(record_path, state)
-            return 1, state
-    all_page_states = [page for item in state.get("batches", []) for page in item.get("page_states", [])]
-    needs_review_pages = [page for page in all_page_states if page.get("status") != "complete" or page.get("ocr") == "complete" and page.get("title_source") == "ocr-candidate"]
-    state["status"] = "needs-review" if needs_review_pages else "succeeded"
-    state["finished_at"] = now()
-    state["checkpoint"] = str(record_path)
-    state["summary"] = {"processed_pages": len(selected), "passed_pages": len(selected) - len(needs_review_pages), "smoke_passed_pages": len(selected), "needs_review_pages": len(needs_review_pages), "stopped": False, "checkpoint": str(record_path)}
-    state["final_report"] = str(batch_root / "final-report.json")
-    _write_json_atomic(batch_root / "final-report.json", {"status": state["status"], "processed_pages": len(selected), "passed_pages": len(selected) - len(needs_review_pages), "smoke_passed_pages": len(selected), "needs_review_pages": len(needs_review_pages), "stopped": False, "stop_reason": None, "ocr_candidate_boundary": "100/100 pages used Apple Vision OCR candidates because native text layer was empty; candidates remain needs-review", "asset_roots": [f"{item.get('package')}/assets/" for item in state.get("batches", [])], "checkpoint": str(record_path)})
-    _write_json_atomic(record_path, state)
-    return (0 if state["status"] == "succeeded" else 1), state
+    raise ValueError("batch execution is not promoted; run workflow_a_source_runner.py once per source")
 
 
 def resolve_concurrency(cli_value: str | int | None, config: dict[str, Any], source_count: int) -> dict[str, Any]:
@@ -407,14 +325,13 @@ def _package_for_attempt(packages_root: Path, job: Job, attempt: int) -> tuple[s
     return package_name, packages_root / package_name
 
 
-def execute_job(job: Job, packages_root: Path, pages: str, context_mode: str, context_window: int, timeout: int, max_attempts: int, retry_backoff: float, previous: dict[str, Any] | None, legacy_compat: bool = False) -> dict[str, Any]:
-    if not legacy_compat:
-        raise ValueError("batch execution is not promoted; pass --legacy-compat only for archived recovery runs")
+def execute_job(job: Job, packages_root: Path, pages: str, context_mode: str, context_window: int, timeout: int, max_attempts: int, retry_backoff: float, previous: dict[str, Any] | None) -> dict[str, Any]:
+    raise ValueError("batch execution is not promoted; run workflow_a_source_runner.py once per source")
     attempts = int((previous or {}).get("attempts", 0))
     while attempts < max_attempts:
         attempts += 1
         package_name, package_root = _package_for_attempt(packages_root, job, attempts)
-        command = [sys.executable, str(LEGACY_RUNNER), "--source", str(job.source), "--output-root", str(packages_root), "--package-name", package_name, "--pages", pages, "--context-mode", context_mode, "--context-window", str(context_window)]
+        command = [sys.executable, str(ROOT / "adapters/workflow_a_source_runner.py"), "--source", str(job.source), "--output-root", str(packages_root), "--pages", pages, "--execute"]
         command_record = _run_command(command, timeout)
         summary = _summary_from_stdout(command_record.get("stdout", ""))
         status = _status_from_summary(summary, command_record.get("returncode"))
@@ -466,9 +383,8 @@ def _successful_existing(item: dict[str, Any], packages_root: Path) -> bool:
     return value.get("status") == "passed"
 
 
-def run_batch(sources: list[Path], output_root: Path, pages: str = "all", config: dict[str, Any] | None = None, concurrency: str | int | None = None, resume_record: Path | None = None, retry_needs_review: bool = False, legacy_compat: bool = False) -> tuple[int, dict[str, Any]]:
-    if not legacy_compat:
-        raise ValueError("batch execution is not promoted; pass --legacy-compat only for archived recovery runs")
+def run_batch(sources: list[Path], output_root: Path, pages: str = "all", config: dict[str, Any] | None = None, concurrency: str | int | None = None, resume_record: Path | None = None, retry_needs_review: bool = False) -> tuple[int, dict[str, Any]]:
+    raise ValueError("batch execution is not promoted; run workflow_a_source_runner.py once per source")
     config = config or {}
     execution = config.get("execution") if isinstance(config.get("execution"), dict) else {}
     context = config.get("context") if isinstance(config.get("context"), dict) else {}
@@ -551,7 +467,7 @@ def run_batch(sources: list[Path], output_root: Path, pages: str = "all", config
         with lock:
             state["queue"][job.index]["status"] = "running"
             write_yaml_atomic(record_path, state)
-        result = execute_job(job, packages_root, pages, context_mode, context_window, timeout, max_attempts, retry_backoff, previous_by_sha.get(job.source_sha256), legacy_compat)
+        result = execute_job(job, packages_root, pages, context_mode, context_window, timeout, max_attempts, retry_backoff, previous_by_sha.get(job.source_sha256))
         with lock:
             state["queue"][job.index].update(result)
             write_yaml_atomic(record_path, state)
@@ -596,12 +512,10 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true", help="resume the newest batch run under output-root")
     parser.add_argument("--resume-run", type=Path, help="resume this exact batch run-record.yaml")
     parser.add_argument("--retry-needs-review", action="store_true", help="retry prior needs-review items when resuming")
-    parser.add_argument("--legacy-compat", action="store_true", help="explicitly run the archived document-profile adapter; blocked by default")
     args = parser.parse_args()
     try:
         sources, duplicates = normalise_sources(args.source, args.source_list)
-        if not args.legacy_compat:
-            parser.error("batch execution is not promoted; use the source runner plan-only entrypoint, or pass --legacy-compat for archived recovery")
+        parser.error("batch execution is not promoted; run workflow_a_source_runner.py once per source")
         config = load_config(args.config.expanduser().resolve() if args.config else None)
         if args.context_mode is not None or args.context_window is not None:
             context_config = config.setdefault("context", {})
@@ -624,10 +538,10 @@ def main() -> int:
                 parser.error("use either --resume or --resume-pages")
             page_record = args.resume_pages.expanduser().resolve() if args.resume_pages else None
             batch_size = args.batch_size or _positive_int((config.get("execution") or {}).get("batch_size"), "batch_size", 8)
-            code, state = run_page_batches(sources[0], args.output_root, args.pages, args.smoke_pages, batch_size, page_record, _positive_int((config.get("execution") or {}).get("per_source_timeout_seconds"), "per_source_timeout_seconds", 1800), str((config.get("context") or {}).get("mode", "auto")), _positive_int((config.get("context") or {}).get("window_pages"), "window_pages", 1), args.legacy_compat)
+            code, state = run_page_batches(sources[0], args.output_root, args.pages, args.smoke_pages, batch_size, page_record, _positive_int((config.get("execution") or {}).get("per_source_timeout_seconds"), "per_source_timeout_seconds", 1800), str((config.get("context") or {}).get("mode", "auto")), _positive_int((config.get("context") or {}).get("window_pages"), "window_pages", 1))
             print(json.dumps({"status": state.get("status"), "run_id": state.get("run_id"), "output": str(Path(str(state.get("checkpoint", args.output_root)))), "summary": state.get("summary", {}), "checkpoint": str((Path(str(state.get("checkpoint"))) if state.get("checkpoint") else args.output_root))}, ensure_ascii=False))
             return code
-        code, state = run_batch(sources, args.output_root, args.pages, config, args.concurrency, resume_record, args.retry_needs_review, args.legacy_compat)
+        code, state = run_batch(sources, args.output_root, args.pages, config, args.concurrency, resume_record, args.retry_needs_review)
         state["duplicates"] = duplicates
         record_path = Path(str(state["packages_root"])).parent / "run-record.yaml"
         write_yaml_atomic(record_path, state)

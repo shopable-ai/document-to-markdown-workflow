@@ -18,7 +18,8 @@
 4. 理解链路：再读 [WORKFLOW-MAP.zh.md](WORKFLOW-MAP.zh.md)，查看任务树如何落到阶段、Skill、Tool、契约和证据。
 5. 理解执行拆分：读 [EXECUTION-TASK-TREE.zh.md](EXECUTION-TASK-TREE.zh.md)，先看单页纵向切片，再看多页、多文件、测试与旧 A1–A7/Skill 拆分复盘。
 6. 执行 Workflow A：读 [Workflow A 人工入口](workflows/document-to-markdown-assets/README.zh.md)，需要逐步执行或排障时再读 [Workflow A 执行指南](WORKFLOW-A-EXECUTION.zh.md)。
-7. 机器路由与验收：执行器只读取 [workflow-registry.yaml](workflow-registry.yaml)、对应 `workflow.yaml` 和 contracts；人工 README 不覆盖机器契约。
+7. 已完成路线检测并要批量跑 `native-only` PDF：读 [局域网原生 PDF 批量转换说明](references/lan-pdf-markdown-batch.zh.md)。
+8. 机器路由与验收：执行器只读取 [workflow-registry.yaml](workflow-registry.yaml)、对应 `workflow.yaml` 和 contracts；人工 README 不覆盖机器契约。
 
 人工说明解释“为什么、何时、如何阅读”；YAML 和 validator 决定“字段、顺序、状态是否合规”。
 
@@ -36,7 +37,8 @@ workflow-document-markdown-visual-assets/
 ├── workflow-registry.yaml
 ├── .prompt/                  # 临时提示词、handoff 和续接目标
 ├── .audit/                   # 本地临时审计快照（默认忽略）
-├── runs/real/                # 本地真实运行证据（默认忽略）
+├── runs/                     # 正式转换运行证据与输出包（默认忽略）
+├── runs/pdf-route-detection/ # PDF 路线检测证据（默认忽略）
 ├── workflows/
 │   ├── document-to-markdown-assets/
 │   │   ├── README.zh.md
@@ -115,7 +117,7 @@ archive/legacy-skills/knowledge-map-image-to-md/
 
 ## 如何实际运行
 
-不要把 `tests/runs/` 里的 fixture-sample 当作转换结果。一次真实 Workflow A 运行必须按以下顺序执行，并在 `reports/processing-report.yaml` 写明实际路径：
+不要把 `tests/runs/` 里的 fixture-sample 当作转换结果。一次真实 Workflow A 默认运行交付关键点 `index.md`；只有页面含 Markdown 无法替代的语义视觉时才附带实际引用的 `assets/` 图片。纯文本结果可只有 `index.md`，不会在输出目录生成 JSON、YAML、manifest、reports、evidence 或 page-units。
 
 日常请求只需提供自然语言、来源和输出目录：
 
@@ -123,60 +125,72 @@ archive/legacy-skills/knowledge-map-image-to-md/
 
 内部入口和输出格式由 `AGENTS.md`、注册表、Workflow 文件和 contracts 解析，不要求用户重复填写。
 
-当前 active runner 是 `adapters/workflow_a_source_runner.py`：默认 `--plan-only`，并支持
-不调用 legacy 的确定性 `--execute`。当前页面修复试运行不重新执行该 runner，而是只处理已有
+如果已经有 `PDF转换路线总览.md` 或 `原生文本路线.txt`，并且目标是批量执行原生文本路线，不要再手工循环单文件命令；直接使用 [局域网原生 PDF 批量转换说明](references/lan-pdf-markdown-batch.zh.md) 中的 `adapters/lan_pdf_markdown_batch.py`。
+
+当前 active runner 是 `adapters/workflow_a_source_runner.py`：普通单源转换直接使用确定性 `--execute`，
+`--plan-only` 仅用于显式诊断；它不调用 legacy 或 optimized runner。当前页面修复试运行不重新执行该 runner，而是只处理已有
 `index.md` 的第 1 页独立单元；不调用模型/OCR。旧
-`archive/legacy-adapters/workflow_a_runner.py` 仅保留为 `legacy/document-profile` 兼容入口，
-固定标题、页码、术语、OCR 区域、DPI 和 mac96/SSH/Ollama 逻辑不得扩散到 generic path。
+旧 document-profile runner 已删除并从 Workflow、工具注册表和批处理路由排除；固定标题、页码、术语、
+OCR 区域、DPI 和 mac96/SSH/Ollama 逻辑不得扩散到 generic path。
 此前历史测试结果不能作为本轮页面修复或全量处理已通过的证据。
 
 ```text
 单一来源文档（后续 execute 阶段）
-  → source runner 读取 source/profile/config，生成来源无关执行计划
-  → dispatcher/batch 在 generic execute 被单独实现并测试后，记录 workflow 与 A1-A7 执行链
+  → source runner 读取当前 source 和固定 generic profile，直接生成来源无关 package
+  → 只有显式候选比较或批处理场景才进入 dispatcher/batch envelope
   → A1/A2 原生 PPTX XML、PDF 布局或 DOCX OOXML 提取
-  → A3 页面/按需区域/嵌入视觉资产落盘
-  → A4 原生结构先行
+  → A3 页面渲染供视觉模型读取（reader-only 只复制真正需要引用的图片）
+  → A4 原生结构先行（内部临时处理，不写工程 JSON）
       ├─ 默认：vision-page-analysis 以 full + single 一次输出 Markdown 和视觉结构
       ├─ 高风险页面：显式传 dual，分别输出 text 和 layout
       ├─ 文字层失败：当前对话视觉模型或 Apple Vision OCR 只补文字
       └─ 视觉层失败：保留 unavailable/needs-review，不用 OCR 伪造关系
       → 真实冲突或关系未裁决时才使用 `needs-review`
       → 复杂结构/重建意图：visual-reconstruction-profile（结构版 + 提示词版）
-  → A5 index.md
-  → A6 manifest.yaml
-  → A7 processing-report.yaml + acceptance-report.yaml + failure-report.yaml
-  → 独立验收器 → reports/validation-result.json → passed / needs-review / failed
+  → A5 page-units 批量确定性页眉页脚清洗 → 逐页语言修复 → index.md
+  → A6 可选 assets/（只复制 index.md 引用且有语义增量的图片）
+  → A7 结构守卫（stdout 摘要）
+```
+
+如确实需要完整工程登记和诊断证据，必须显式加 `--engineering-output`；这不是默认生产输出：
+
+```bash
+python3 adapters/workflow_a_source_runner.py \
+  --source "/absolute/path/input.pdf" \
+  --output-root "/absolute/path/output-root" \
+  --pages all --execute --engineering-output
 ```
 
 固定夹具命令只验证历史输入范围和目录契约；本轮的转换包与测试记录位于
 `tests/runs/source-runner-test-20260816-0022/`，不作为生产结果。完整测试已通过；仍不调用
 SSH/mac96、在线模型或 OCR。
 
-最终是否正确，以资产包内 `reports/validation-result.json` 的状态为准：
+默认读者包的结构是否完整，以命令 stdout 摘要和 `index.md` 的图片链接检查为准：
 
-- `passed`：可继续使用 `index.md` 和 `assets/`；
-- `needs-review`：先根据报告和页面资产人工复核；
+- `passed`：`index.md` 已写入，且其中任何图片引用均可解析；
+- `needs-review`：先人工复核关键点和仍需保留的图片；
 - `failed`：不能声称转换完成。
 
 执行优先级和降级规则见 [WORKFLOW-A-EXECUTION.zh.md](WORKFLOW-A-EXECUTION.zh.md)；新对话续接提示词见 [tests/prompts/continue-workflow-a-mac96-first.zh.md](tests/prompts/continue-workflow-a-mac96-first.zh.md)。
 
 ## 当前交付边界
 
-- 已交付：页面独立处理契约、阶段门、确定性拆分/合并能力，以及第 1 页试运行闭环。
-- 第 1 页：独立结构验收和人工可读性检查通过；关系状态仍为 `needs-review`。
-- 尚未进入：第 2–5 页小批量正文修复、第 2–5 页人工复核、第 6–100 页批量修复。
-- 暂不执行：真实 source 转换、在线基准、本地视觉校准、质量比较、OCR、Workflow A runner 和真实 package validator。
-- 未交付：DOCX 生产解析器、完整 Apple Vision fallback 的真实运行覆盖、独立语言质量修复适配器、逐阶段实时心跳/硬停止预算、GPT-image-2 供应商适配器。
+- 已交付：页面独立处理契约、动态 `total_pages` 阶段门、同一资产包内的渲染/识别断点续跑、确定性拆分/合并能力和逐页运行账本。
+- 当前真实包：第 1 页及第 2–5 页小批量的结构守卫和人工可读性检查已通过；已完成页在来源指纹与页面图哈希匹配时直接复用，不重复调用视觉模型。
+- 当前未完成：第 6–total_pages 页仍须在精确来源可用且前置小批量 Gate 通过后续跑；部分覆盖的包必须保持 `needs-review`，不得把阶段完成表述成整本文档完成。
+- 已执行：当前对话在线视觉候选路线的隔离式逐页回退、真实 package validator 和完整 pytest；实际 provider、失败尝试、耗时与 token/eval 可用性按页记录，无法取得的字段保持 `Unknown`。
+- 未交付：DOCX 生产解析器、完整 Apple Vision fallback 的真实运行覆盖、逐阶段实时心跳/硬停止预算、GPT-image-2 供应商适配器。
+- 已实现但不等于人工验收：`clean-page-markdown-noise` 确定性页眉页脚清洗和局域网语言质量修复适配器；工程路径会先批量清洗 page-units，再逐页执行语言修复并保留各自证据。
+- 已实现可选的 `prune-low-value-ebook-pages` 知识库后置清洗：必须等待全部 page-units 分组复制/汇合完成，先生成无正文副本的哈希锁定计划，再按已批准页码删除目录、版权、推广等整页低价值内容；清洗后必须由保留页重建索引或合并全文。
 - `tool-registry.yaml` 中标记 `planned` 的适配器仍不能作为已实现能力声明。
 - Skill 文件已经建立；Tool 注册表中标记 `planned` 的适配器仍需后续实现。
 - 视觉资产语义筛选是 A5/A6 的内容级清洗：只移除读者层图片链接和 section 绑定，不删除 `assets/` 中的来源资产、manifest 资产或来源出现记录；未获批准的页码可通过 mac96 分类脚本形成 `candidate-only` 报告。
 
 ## 设计原则
 
-1. 原生结构优先，局域网 mac96 视觉转写主路径，当前对话在线视觉模型是 mac96 失败后的第二路径，Apple Vision OCR 只做最后兜底。
+1. 原生结构优先；扫描文字页把 Apple Vision OCR 加确定性结构重建、mac96 小视觉模型和 mac96 30B 作为候选，用真实页面质量、耗时和资源证据选路由，不设固定主次。
 2. 文字层与视觉层并行保留，复杂图不扁平化。
-3. 落盘文件名使用短英文语义 `file_name`，阅读名称使用中文 `display_name`；稳定 ID/来源指纹/哈希、asset kind 和 ordinal 只放 manifest，原始文件名只作为来源证据。正式包使用扁平 `assets/`，类型由 manifest 区分，读者层复制无需再穿过 `pages/`。
+3. 默认输出保留 `index.md` 和可选的扁平 `assets/` 读者图片；纯文本页不附整页截图，二维码不作为图片提取。稳定 ID/来源指纹/哈希、asset kind 和 ordinal 不落盘到读者包。需要完整追溯时再显式使用 `--engineering-output`。
 4. 事实、候选、Unknown 和 needs-review 分开保存。
 5. B 只生成一张图片，不生成 PPTX、PDF 或其他文件集合。
 

@@ -31,7 +31,7 @@
 - `workflows/document-to-markdown-assets/ACCEPTANCE.zh.md`
 - `WORKFLOW-A-EXECUTION.zh.md`
 - `adapters/workflow_a_dispatcher.py`
-- `adapters/workflow_a_runner.py`
+- `adapters/workflow_a_source_runner.py`
 
 先输出一份文件职责矩阵和最小文档重构计划，再开始编辑。
 

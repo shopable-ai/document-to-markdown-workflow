@@ -1,0 +1,47 @@
+contract: recognition-route-benchmark
+version: 0.1.0
+description: 在相同真实页面、相同图片哈希和相同质量维度下比较文字识别及 Markdown 结构路线。
+input:
+  required: [run_id, source_fingerprint, page_images]
+  page_image_required: [page, absolute_path, image_sha256]
+routes:
+  comparable:
+    - apple-vision-ocr
+    - apple-vision-ocr-plus-deterministic-structure
+    - small-vision-model
+    - mac96-30b-vision
+  no_default_before_calibration: true
+record:
+  required:
+    - route
+    - stage
+    - page
+    - status
+    - source_fingerprint
+    - image_sha256
+    - engine
+    - model
+    - parameters
+    - prompt_version
+    - metrics
+    - raw_output
+    - quality_assessment
+quality_dimensions:
+  - heading_hierarchy
+  - paragraph_segmentation
+  - table_of_contents
+  - lists
+  - header_footer
+  - punctuation
+  - cross_page_continuity
+  - anomalous_content_preservation
+resource_dimensions: [wall_seconds, maximum_resident_set_size, peak_memory_footprint, model_resident_memory]
+invariants:
+  - 同页比较必须使用相同 source_fingerprint、page 和 image_sha256。
+  - 声明的模型路线必须与 evidence 中记录的 model 一致；30B 路线不得登记在线模型或小模型证据。
+  - raw 输出与结构化 Markdown 分层保存，不得互相覆盖。
+  - quality_assessment 未完成人工复核时报告状态必须为 needs-review。
+  - 缺少资源指标时必须写 Unknown，不能用参数量替代测量。
+  - 模型枚举、HTTP 200、非空输出和文件存在不能判质量通过。
+  - 广告处理模式固定 preserve-only；基准阶段不得删除、隐藏或改写可见文字。
+  - 下载、安装或改变远程模型运行状态不属于此适配器职责。

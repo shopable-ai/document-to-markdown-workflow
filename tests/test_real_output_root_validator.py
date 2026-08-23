@@ -161,10 +161,89 @@ def make_package(tmp_path: Path) -> Path:
     return package
 
 
+def test_reader_only_package_requires_only_markdown_and_referenced_images(tmp_path: Path):
+    package = tmp_path / "reader"
+    (package / "assets").mkdir(parents=True)
+    (package / "assets" / "page-one.png").write_bytes(b"png")
+    (package / "index.md").write_text("# 关键点\n\n![页面](assets/page-one.png)\n", encoding="utf-8")
+
+    result = validate_package(package)
+
+    assert result.valid
+    assert result.as_dict()["status"] == "passed"
+
+
+def test_reader_only_text_package_does_not_require_assets_directory(tmp_path: Path):
+    package = tmp_path / "reader-text-only"
+    package.mkdir()
+    (package / "index.md").write_text("# 关键点\n\n只有文字内容。\n", encoding="utf-8")
+
+    result = validate_package(package)
+
+    assert result.valid, result.errors
+    assert result.as_dict()["status"] == "passed"
+
+
+def test_reader_only_package_allows_source_named_markdown_alias(tmp_path: Path):
+    package = tmp_path / "reader-source-alias"
+    package.mkdir()
+    content = "# 关键点\n\n只有文字内容。\n"
+    (package / "index.md").write_text(content, encoding="utf-8")
+    (package / "第009部《绝秘人性天书》.md").write_text(content, encoding="utf-8")
+
+    result = validate_package(package)
+
+    assert result.valid, result.errors
+    assert result.as_dict()["status"] == "passed"
+
+
+def test_reader_only_package_rejects_unreferenced_or_engineering_files(tmp_path: Path):
+    package = tmp_path / "reader"
+    (package / "assets").mkdir(parents=True)
+    (package / "assets" / "page-one.png").write_bytes(b"png")
+    (package / "assets" / "unused.png").write_bytes(b"png")
+    (package / "index.md").write_text("# 关键点\n\n![页面](assets/page-one.png)\n", encoding="utf-8")
+    (package / "evidence").mkdir()
+    (package / "extra.json").write_text("{}", encoding="utf-8")
+
+    result = validate_package(package)
+
+    assert not result.valid
+    assert any("unreferenced-asset" in error for error in result.errors)
+    assert any("reader-layout" in error for error in result.errors)
+
+
 def test_real_package_validator_accepts_structurally_valid_needs_review_package(tmp_path):
     result = validate_package(make_package(tmp_path))
     assert result.valid, result.errors
     assert result.declared_status == "needs-review"
+
+
+def test_real_package_validator_does_not_warn_when_all_reader_images_are_explicitly_omitted(tmp_path):
+    package = make_package(tmp_path)
+    index_path = package / "index.md"
+    index_path.write_text(
+        "\n".join(
+            line for line in index_path.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("![")
+        ) + "\n",
+        encoding="utf-8",
+    )
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    for section in manifest["markdown"]["sections"]:
+        section["visual_asset_ids"] = []
+        section["reader_image_policy"] = {
+            "action": "omit",
+            "reason": "text-fully-represented-in-markdown",
+            "confidence": "high",
+        }
+    _write(manifest_path, manifest)
+
+    result = validate_package(package)
+
+    assert result.valid, result.errors
+    assert not any(warning.startswith("markdown.links:") for warning in result.warnings)
 
 
 def test_real_package_validator_detects_media_hash_drift(tmp_path):
@@ -246,6 +325,109 @@ def test_real_package_validator_requires_page_projection_triplets_for_mac96(tmp_
     result = validate_package(package)
 
     assert any(error.startswith("page-output-contract:") for error in result.errors)
+
+
+def _prepare_mac96_divider_page(package: Path, page: int = 24) -> Path:
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    source_fingerprint = manifest["source"]["source_fingerprint"]
+    asset = next(
+        item
+        for item in manifest["assets"]
+        if ((item.get("source") or {}).get("source_occurrences") or [{}])[0].get("page") == page
+    )
+    old_asset_id = asset["asset_id"]
+    asset_path = package / asset["file_path"]
+    original_sha256 = (asset.get("media") or {}).get("sha256")
+    asset["asset_id"] = f"page-p{page:03d}"
+    asset_path.unlink()
+
+    for section in manifest["markdown"]["sections"]:
+        if old_asset_id in section.get("visual_asset_ids", []):
+            section["visual_asset_ids"] = [asset["asset_id"]]
+
+    manifest["source"]["selected_pages"] = [page]
+    manifest["processing"]["execution_path"] = "mac96-direct-vision"
+    _write(manifest_path, manifest)
+
+    index_path = package / "index.md"
+    index_path.write_text(
+        "\n".join(
+            line
+            for line in index_path.read_text(encoding="utf-8").splitlines()
+            if asset["file_path"] not in line
+        ) + "\n",
+        encoding="utf-8",
+    )
+    evidence = package / "evidence"
+    _write(
+        evidence / f"vision-page-analysis-p{page:03d}.json",
+        {
+            "input_asset_id": asset["asset_id"],
+            "source_fingerprint": source_fingerprint,
+            "image_sha256": original_sha256,
+            "status": "complete",
+        },
+    )
+    _write(
+        evidence / f"vision-text-transcription-p{page:03d}.json",
+        {
+            "input_asset_id": asset["asset_id"],
+            "source_fingerprint": source_fingerprint,
+            "status": "complete",
+            "candidate_markdown": "# 结构分隔标题",
+        },
+    )
+    unit_path = package / "page-units" / f"p{page:03d}.md"
+    unit_path.parent.mkdir(exist_ok=True)
+    unit_path.write_text(
+        "---\ntype: divider\n---\n\n# 结构分隔标题\n",
+        encoding="utf-8",
+    )
+    _write(
+        evidence / "visual-asset-pruning.json",
+        {
+            "schema": "visual-asset-pruning",
+            "version": "0.1.0",
+            "status": "complete",
+            "mode": "apply",
+            "source_fingerprint": source_fingerprint,
+            "excluded_pages": [page],
+            "assets": [
+                {
+                    "asset_id": asset["asset_id"],
+                    "page": page,
+                    "file_path": asset["file_path"],
+                    "sha256": original_sha256,
+                    "reason_code": "user-approved-page-selection",
+                    "source_asset_action": "deleted-by-explicit-user-request",
+                }
+            ],
+            "synchronization": {
+                "document": "updated",
+                "manifest_assets": "retained",
+                "source_occurrences": "retained",
+                "source_files": "deleted-by-explicit-user-request",
+            },
+            "diagnostics": [],
+        },
+    )
+    return unit_path
+
+
+def test_real_package_validator_allows_an_explicit_divider_to_delete_its_page_image(tmp_path: Path):
+    package = make_package(tmp_path)
+    unit_path = _prepare_mac96_divider_page(package)
+
+    result = validate_package(package)
+
+    assert result.valid, result.errors
+    unit_path.write_text("# 普通页面\n", encoding="utf-8")
+    non_divider_result = validate_package(package)
+    assert any(
+        error.startswith("page-output-contract:") and "non-divider" in error
+        for error in non_divider_result.errors
+    )
 
 
 def test_real_package_validator_detects_stage_and_report_status_drift(tmp_path):

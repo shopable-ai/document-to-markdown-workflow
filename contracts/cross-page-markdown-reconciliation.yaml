@@ -1,0 +1,32 @@
+contract: cross-page-markdown-reconciliation
+version: 0.1.0
+description: 对两个相邻页的显式目录断点生成独立、可追溯的派生合并建议。
+stage: markdown-structure-reconstruction
+input:
+  required: [previous_structure_record, current_structure_record]
+  immutable: true
+output:
+  required:
+    - contract
+    - version
+    - created_at
+    - status
+    - pages
+    - source_records
+    - source_records_mutated
+    - merged_block
+    - advertising_policy
+    - diagnostics
+  status: enum[passed, needs-review, failed]
+qualification:
+  - 两条记录必须是相邻页。
+  - 上一页 ends_with_continuation 与下一页 starts_with_continuation 必须同时为 true。
+  - 上一页末 block 必须是带明确案例编号且缺少页码的 toc-entry。
+  - 下一页首 block 必须是带页码、且不是新案例或新章节的 toc-entry。
+  - 任一条件不满足时保留 needs-review，不猜测补全。
+evidence_rules:
+  - 必须记录两个源结构 JSON 的绝对路径和 SHA-256。
+  - merged_block 必须保留两页原始 candidate index。
+  - source_records_mutated 必须为 false。
+  - advertising_policy.mode 固定为 preserve-only。
+forbidden_actions: [overwrite-source-record, delete-visible-text, renumber-entry, infer-missing-words]

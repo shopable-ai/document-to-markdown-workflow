@@ -1,0 +1,94 @@
+contract: workflow-a-production-runtime-context
+version: 1.1.0
+status: active
+description: Workflow A 的精简生产运行投影；让执行器调用稳定接口，而不是重新读取需求史、Workflow 全文或 Python 实现。
+
+applies_when:
+  trigger: 文档转 Markdown
+  mode: production-execution
+  excludes: [workflow-design, code-change, root-cause-debugging]
+
+default_context:
+  load:
+    - 当前用户输入中的 source、output_root、pages
+    - 本契约
+  load_when_needed:
+    - workflow-registry.yaml 中 document-to-markdown-assets 的 execution_entrypoint、default_pages、production_runtime_contract
+    - contracts/workflow-a-source-runner.yaml
+    - contracts/workflow-a-output-layout.yaml
+    - 当前运行的 progress-current.json
+    - 当前失败页的 progress-pNNN.json
+    - 当前运行的 reports/validation-result.json
+  do_not_load_by_default:
+    - .prompt/**
+    - GOAL.zh.md
+    - TASK-TREE.zh.md
+    - EXECUTION-TASK-TREE.zh.md
+    - WORKFLOW-MAP.zh.md
+    - WORKFLOWS.zh.md
+    - README.zh.md
+    - references/**
+    - workflows/document-to-markdown-assets/workflow.yaml
+    - skills/**/SKILL.md
+    - adapters/**/*.py
+    - tests/**
+    - archive/**
+    - .audit/**
+    - 非当前 runs/**
+
+execution:
+  entrypoint: python3 adapters/workflow_a_source_runner.py --source <non-pdf-file> --output-root <dir> --pages <selector> --execute
+  media_routes:
+    pdf:
+      entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <pdf> --run-root <exact-run-root> --pages <selector>
+      default_mode: page-hybrid
+      page_routes: [native-only, native-plus-visual, visual-only]
+      explicit_full_visual: --visual-only
+      existing_run_resume: pass-the-exact-run-root-and---resume
+      no_prompt_rule_repetition: true
+    non_pdf:
+      entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --pages <selector> --execute
+  parameter_discovery: python3 adapters/workflow_a_source_runner.py --help
+  default_pages: all
+  source_isolation: one-source-per-run
+  source_code:
+    default: do-not-inspect
+    rule: 把 Python 适配器视为黑盒执行单元；正常生产执行不得通过读取源码理解参数、阶段或输出。
+    inspection_triggers:
+      - 用户明确要求修改或审查代码
+      - 命令执行失败且 stderr 已定位到相关模块
+      - 实际 CLI 或输出与已登记契约不一致
+    failure_scope: 先读 stderr、--help 和失败报告；仍不足时只读取被定位脚本的相关函数，不展开其他适配器。
+  long_tasks:
+    threshold_seconds: 30
+    interaction_contract: contracts/long-task-interaction.yaml
+    manager: python3 adapters/pdf_background_task.py start --task-type <native-pdf|native-pdf-batch|hybrid-pdf|visual-pdf|workflow-a>
+    pdf_default_task_type: hybrid-pdf
+    default_mode: detached-silent
+    after_start: 返回一次 started 摘要后立即结束当前交互，不持续 write_stdin、ps 或进度文件轮询。
+
+observability:
+  before_run: [source_path, media_type, sha256, total_pages, selected_pages]
+  during_run:
+    first_read: progress-current.json
+    page_detail: 只在该页失败或低置信度时读取 progress-pNNN.json
+    never_bulk_read: progress.jsonl
+    read_trigger: 仅用户明确查询、需要用户决策或检测到真实异常时读取；不得为保持关注主动读取。
+    dialogue_forwarding: 工具轮询结果和逐页 stdout 不得转发到当前对话。
+  after_run: [status, package_path, processed_pages, validator_status, validation_result_path]
+  statuses: [passed, needs-review, failed]
+
+acceptance:
+  passed_requires: independent-validator-passed
+  needs_review: 保留当前包和失败证据，仅加载失败页或低置信度页继续处理。
+  failed: 不得声称转换完成；先根据 stderr 和失败报告缩小故障范围。
+
+invariants:
+  - 原始需求、推理过程、设计说明、历史提示词和测试材料是开发期输入，不是常规生产上下文。
+  - Workflow 与契约已经固化的行为不得在每次生产运行时重新推理。
+  - 正常生产运行只传递当前输入、当前状态摘要和最终验收摘要，不传递源码正文或全量事件流。
+  - 读取被排除文件必须由明确触发条件支持；不得以熟悉实现为由预读 Python 源码。
+  - 超过 30 秒的任务默认后台静默运行；启动、异常、用户查询、完成和取消之外不得产生对话消息。
+  - PDF 默认进入 page-hybrid；纯文字页不调用视觉模型，只有显式批准才允许 --visual-only 全书路线。
+  - PDF 页面失败必须继续后续页面并进入最终 page-completion 覆盖报告；不得把未完成页面藏在总状态中。
+  - 同一来源已有 run root 时优先按来源哈希和页面路线记录复用，不创建替代运行目录掩盖已有完成页。

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Small, observable dispatcher for the active source-independent Workflow A runner.
+"""Optional bounded dispatcher for the active source-independent runner.
 
-The dispatcher reads the registered Workflow and its phase-gate specification,
-records the A1-A7 envelope, runs the explicit candidate comparison, and then
-invokes the active plan-only source runner.  The legacy document-profile
-runner is deliberately not part of this path.
+The ordinary single-source entrypoint is ``workflow_a_source_runner.py``.
+This dispatcher is reserved for an already supplied same-document candidate
+comparison and an explicit A1-A7 envelope; it invokes the active deterministic
+runner in execute mode and never routes through the retired document-profile
+runner.
 """
 from __future__ import annotations
 
@@ -29,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "workflow-registry.yaml"
 WORKFLOW = ROOT / "workflows/document-to-markdown-assets/workflow.yaml"
 ACTIVE_RUNNER = ROOT / "adapters/workflow_a_source_runner.py"
+CANONICAL_VERDICTS = {"passed", "needs-review", "failed", "planned"}
+STAGE_STATUSES = {"complete", "needs-review", "unavailable", "failed", "not-run"}
 
 
 def now() -> str:
@@ -102,6 +105,82 @@ def candidate_comparison_gate(path: Path, source: Path) -> tuple[bool, list[str]
     return not failures, failures
 
 
+def parse_runner_summary(stdout: str) -> dict:
+    """Read either the runner's pretty JSON or a final compact JSON line."""
+    payload = stdout.strip()
+    if not payload:
+        return {}
+    try:
+        value = json.loads(payload)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    for line in reversed(payload.splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _reported_validator_status(summary: dict) -> str | None:
+    direct = summary.get("validator_status")
+    if isinstance(direct, str):
+        return direct
+    validation = summary.get("validation")
+    if isinstance(validation, dict) and isinstance(validation.get("status"), str):
+        return validation["status"]
+    return None
+
+
+def _runner_verdict(summary: dict, returncode: int | None) -> str:
+    """Normalize the child result without upgrading process success to proof."""
+    reported = summary.get("status")
+    if reported not in CANONICAL_VERDICTS:
+        return "failed" if returncode not in {0, None} else "needs-review"
+    if reported == "passed":
+        if returncode == 0 and _reported_validator_status(summary) == "passed":
+            return "passed"
+        return "needs-review"
+    if reported == "failed":
+        return "failed"
+    return "needs-review"
+
+
+def apply_runner_result(record: dict, runner_record: dict) -> tuple[dict, str]:
+    """Propagate only runner facts that were actually reported."""
+    summary = parse_runner_summary(str(runner_record.get("stdout", "")))
+    verdict = _runner_verdict(summary, runner_record.get("returncode"))
+
+    reported_stages = summary.get("stage_evidence")
+    if not isinstance(reported_stages, list):
+        processing = summary.get("processing")
+        reported_stages = (processing.get("stage_evidence") if isinstance(processing, dict) else []) or []
+    stage_statuses = {
+        item.get("stage_id"): item.get("status")
+        for item in reported_stages
+        if isinstance(item, dict)
+        and item.get("stage_id")
+        and item.get("status") in STAGE_STATUSES
+    }
+    for stage in record.get("stages", []):
+        if stage.get("stage_id") in stage_statuses:
+            stage["status"] = stage_statuses[stage["stage_id"]]
+
+    record["status"] = verdict
+    record["exit_code"] = runner_record.get("returncode")
+    record["runner_summary"] = summary
+    record["package_path"] = summary.get("package_path")
+    record["validator_status"] = _reported_validator_status(summary) or "not-run"
+    validation_path = summary.get("validation_result_path")
+    if validation_path is None and isinstance(summary.get("evidence"), dict):
+        validation_path = summary["evidence"].get("validation")
+    record["validation_result_path"] = validation_path
+    return summary, verdict
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dispatch registered Workflow A stages")
     parser.add_argument("--workflow", required=True)
@@ -165,9 +244,9 @@ def main() -> int:
         print(json.dumps({"status": "failed", "execution": str(execution_path), "preflight": str(preflight_path)}, ensure_ascii=False))
         return 1
 
-    # Plan-only dispatch consumes the already recorded comparison as input.
-    # Re-running the comparator here would re-enter the archived compatibility
-    # adapter through its historical helper imports.
+    # Bounded dispatch consumes the already recorded comparison as input.
+    # Re-running the comparator here would add an unnecessary second route;
+    # ordinary single-source runs should bypass this dispatcher entirely.
     comparison_record = {
         "status": "skipped",
         "command": "not-run; candidate comparison was supplied and preflight-checked",
@@ -199,39 +278,41 @@ def main() -> int:
         str(output_root),
         "--pages",
         args.pages,
-        "--plan-only",
+        "--execute",
     ]
     runner_record = run_command(runner_command, cwd=ROOT)
     record["commands"].append({"stage": "single-source-runner", **runner_record})
-    runner_summary = {}
-    try:
-        runner_summary = json.loads(runner_record.get("stdout", ""))
-    except ValueError:
-        runner_summary = {}
-    plan_only = runner_summary.get("status") == "planned"
-    for stage in record["stages"]:
-        stage["status"] = "needs-review" if plan_only else "complete" if runner_record["status"] == "complete" else "needs-review"
-    record["status"] = "needs-review" if plan_only else "complete" if runner_record["status"] == "complete" else "needs-review"
-    if plan_only:
-        record["next_action"] = "通用 execute 尚未提升；当前仅保存来源无关执行计划，不得声称转换完成。"
+    runner_summary, verdict = apply_runner_result(record, runner_record)
+    if runner_summary.get("status") == "planned":
+        record["next_action"] = "unexpected plan-only response; use the direct source runner execute entrypoint."
     record["finished_at"] = now()
-    record["exit_code"] = runner_record.get("returncode")
-    record["runner_summary"] = runner_record.get("stdout", "").splitlines()[-1:] or []
     # The runner summary names the selected package.  Put the final execution
     # record inside that package while retaining a root-level copy for failed
     # comparator/runner starts that never create a package.
     try:
-        summary = json.loads(runner_record.get("stdout", "").splitlines()[-1])
-        package_root = Path(str(summary.get("output", "")))
-        if package_root.is_dir():
+        package_root = Path(str(runner_summary.get("package_path", "")))
+        if package_root.is_dir() and (package_root / "evidence").is_dir():
             package_execution = package_root / "evidence" / "workflow-execution.json"
             package_execution.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
             execution_path = package_execution
-    except (ValueError, OSError, IndexError):
+    except OSError:
         pass
     execution_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"status": record["status"], "execution": str(execution_path), "runner": runner_record.get("stdout", "").splitlines()[-1:]}, ensure_ascii=False))
-    return 0 if runner_record.get("returncode") == 0 and not plan_only else 1
+    print(
+        json.dumps(
+            {
+                "status": verdict,
+                "execution": str(execution_path),
+                "package_path": record.get("package_path"),
+                "validator_status": record.get("validator_status"),
+                "validation_result_path": record.get("validation_result_path"),
+            },
+            ensure_ascii=False,
+        )
+    )
+    if verdict == "passed":
+        return 0
+    return 2 if runner_record.get("returncode") == 2 else 1
 
 
 if __name__ == "__main__":

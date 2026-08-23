@@ -6,8 +6,10 @@ temporary directory.  They do not use fixture expected Markdown or historical
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +67,32 @@ def _fixture(name: str) -> Path:
     return path
 
 
+def test_active_runner_is_a_single_deterministic_entrypoint():
+    source = RUNNER.read_text(encoding="utf-8")
+
+    assert "workflow_a_optimized_runner" not in source
+    assert "archive/legacy-adapters" not in source
+    assert "from workflow_a_optimized_runner" not in source
+    assert "from .workflow_a_optimized_runner" not in source
+
+
+def test_execute_does_not_create_secondary_optimized_repair_outputs(tmp_path: Path):
+    source = _fixture("18个工作思维模型-第24-25页.pdf")
+    result = _run(source, tmp_path / "execute-output", "1", "--execute")
+    payload = _payload(result)
+
+    assert result.returncode == 1, result.stderr
+    assert payload["status"] == "needs-review"
+    assert payload["validation"]["status"] == "not-run"
+    assert payload["validation"]["passed"] is False
+    package = Path(payload["package_path"])
+    assert (package / "index.md").is_file()
+    assert (package / "assets").is_dir()
+    assert not any(path.suffix.lower() in {".json", ".yaml", ".yml"} for path in package.rglob("*"))
+    assert not (package / "evidence").exists()
+    assert not (package / "reports").exists()
+
+
 @pytest.mark.parametrize(
     ("suffix", "source_type"),
     [
@@ -96,6 +124,30 @@ def test_page_selector_is_sorted_deduplicated_and_does_not_infer_source_pages():
         runner.parse_pages("3-1")
     with pytest.raises(ValueError, match="invalid page selector"):
         runner.parse_pages("0")
+
+
+def test_output_package_name_uses_readable_source_title(tmp_path: Path):
+    runner = _runner_module()
+    source = tmp_path / "50个相处话术案例.pdf"
+    when = datetime(2026, 8, 21, 15, 42, 33, tzinfo=timezone(timedelta(hours=8)))
+
+    package_id, target = runner.resolve_package_target(tmp_path, source, when=when)
+
+    assert package_id == "50个相处话术案例"
+    assert target == tmp_path / package_id
+    assert not re.fullmatch(r"source-[0-9a-f]{12}-.+", package_id)
+
+
+def test_output_package_name_adds_short_collision_suffix(tmp_path: Path):
+    runner = _runner_module()
+    source = tmp_path / "50个相处话术案例.pdf"
+    when = datetime(2026, 8, 21, 15, 42, 33, tzinfo=timezone(timedelta(hours=8)))
+    (tmp_path / "50个相处话术案例").mkdir()
+
+    package_id, target = runner.resolve_package_target(tmp_path, source, when=when)
+
+    assert package_id == "50个相处话术案例-02"
+    assert target == tmp_path / package_id
 
 
 def test_plan_only_does_not_read_or_hash_source(tmp_path: Path):
@@ -345,12 +397,14 @@ def test_execute_creates_a_fresh_output_root_for_pdf_preflight(tmp_path: Path):
     package = Path(payload["package_path"])
     assert package.is_dir()
     assert package.parent == output_root.resolve()
-    assert (package / "evidence/content-classification.json").is_file()
+    assert package.name == source.stem
+    assert (package / "index.md").is_file()
+    assert not (package / "evidence").exists()
 
 
 def test_pdf_native_layer_preserves_block_line_word_bbox_and_reader_text(tmp_path: Path):
     source = _fixture("18个工作思维模型-第24-25页.pdf")
-    result = _run(source, tmp_path / "pdf-output", "all", "--execute")
+    result = _run(source, tmp_path / "pdf-output", "all", "--execute", "--engineering-output")
     payload = _payload(result)
     package = Path(payload["package_path"])
     native = json.loads((package / "evidence/native-content-model.json").read_text(encoding="utf-8"))
@@ -377,7 +431,7 @@ def test_pdf_native_layer_preserves_block_line_word_bbox_and_reader_text(tmp_pat
 
 def test_image_candidate_layers_keep_source_fingerprint_when_ocr_is_unavailable(tmp_path: Path):
     source = _fixture("pdf-page-24.png")
-    result = _run(source, tmp_path / "image-output", "all", "--execute")
+    result = _run(source, tmp_path / "image-output", "all", "--execute", "--engineering-output")
     payload = _payload(result)
     package = Path(payload["package_path"])
     fingerprint = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -412,7 +466,7 @@ def test_unsupported_source_suffix_returns_explicit_failed_status(tmp_path: Path
         ("pdf-page-24.png", "all", [1]),
     ],
 )
-def test_execute_fixture_creates_independent_package_and_reports_real_status(
+def test_execute_fixture_creates_minimal_reader_package(
     filename: str,
     pages: str,
     expected_pages: list[int],
@@ -423,8 +477,10 @@ def test_execute_fixture_creates_independent_package_and_reports_real_status(
     result = _run(source, output_root, pages, "--execute")
     payload = _payload(result)
 
-    assert result.returncode in {0, 1}, result.stderr
-    assert payload["status"] in {"passed", "needs-review"}
+    assert result.returncode == 1, result.stderr
+    assert payload["status"] == "needs-review"
+    assert payload["validation"]["status"] == "not-run"
+    assert payload["validation"]["authority"] == "independent-validator"
     assert payload["source"]["path"] == str(source.resolve())
     assert payload["source"]["source_fingerprint_status"] == "computed"
     assert len(payload["source"]["sha256"]) == 64
@@ -440,27 +496,15 @@ def test_execute_fixture_creates_independent_package_and_reports_real_status(
     assert package_value, payload
     package = Path(package_value)
     assert package.is_dir()
-    for relative in (
-        "index.md",
-        "manifest.yaml",
-        "reports/processing-report.yaml",
-        "reports/acceptance-report.yaml",
-        "reports/failure-report.yaml",
-        "reports/validation-result.json",
-        "assets",
-    ):
+    assert package.name == source.stem
+    for relative in ("index.md", "assets"):
         assert (package / relative).exists(), relative
-    assert not (package / "assets/pages").exists()
-    assert not (package / "assets/regions").exists()
-    assert not (package / "assets/embedded").exists()
-
-    manifest_text = (package / "manifest.yaml").read_text(encoding="utf-8")
-    assert hashlib.sha256(source.read_bytes()).hexdigest() in manifest_text
-    manifest = yaml.safe_load(manifest_text)
-    assert manifest["output_layout"] == "flat-assets-v1"
-    assert all(Path(item["file_path"]).parent == Path("assets") for item in manifest["assets"])
-
-    validation = json.loads((package / "reports/validation-result.json").read_text(encoding="utf-8"))
-    assert validation["status"] in {"not-run", "passed", "needs-review", "failed"}
-    if payload["status"] == "passed":
-        assert validation["status"] == "passed"
+    assert not (package / "manifest.yaml").exists()
+    assert not (package / "evidence").exists()
+    assert not (package / "reports").exists()
+    assert not (package / "page-units").exists()
+    assert not list(package.glob("*.json"))
+    markdown = (package / "index.md").read_text(encoding="utf-8")
+    referenced = set(re.findall(r"\((?:<)?(assets/[^)> ]+)", markdown))
+    actual = {path.relative_to(package).as_posix() for path in (package / "assets").iterdir() if path.is_file()}
+    assert referenced == actual

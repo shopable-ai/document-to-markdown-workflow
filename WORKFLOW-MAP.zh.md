@@ -75,6 +75,7 @@ flowchart LR
 | 避免把不同材料混成一份内容 | 建立单源/显式候选输入门禁和来源边界 | source inventory、candidate comparison | 来源关系不明不得合并 |
 | 如实表达结果的边界 | 独立 validator 重读并分层输出状态和 Claim | acceptance、failure report | 无 validator 或有未决 P0 不得 passed |
 | 分离读者标题与来源追溯元数据 | A5 reader layer 与 A6 manifest 分层；标题前缀回归检查 | output layout、manifest、known failures K-001 | 语义标题被源文件名/页码污染即 needs-review，不得把元数据混入正文 |
+| 知识库导入前可选剔除整页低价值内容 | ET5.4：完整 page-units 汇合后，对知识库工作副本生成哈希锁定预览；只删除已批准的目录、版权、推广等整页候选，并从保留页重建下游索引/合并全文 | `contracts/ebook-page-pruning.yaml`、`skills/prune-low-value-ebook-pages/SKILL.md`、`ebook-page-pruning.json` | 页面未完整汇合、页码/理由不明确、目录快照漂移或下游文件未重建时停止；不得把清洗状态升级为 Workflow A 通过 |
 | 使用可验证的局域网视觉资源并安全降级 | A4 由 `vision-page-analysis` 默认以 `full + single` 一次输出 Markdown 与视觉结构；高风险页面显式使用 `dual`；当前对话视觉模型或 Apple Vision OCR 只能补文字层，不能伪造视觉关系 | `vision-page-analysis`、`local-ocr`、`reconciliation`、known failures K-005/K-006 | 无连通性/模型/结构化响应证据不得声称视觉理解完成 |
 | 单页技术可行性纵向切片 | ET1：从当前 source 贯穿内容提取、页面视觉证据、Markdown、命名、审计到独立验收；图片资产按需启用 | `EXECUTION-TASK-TREE.zh.md`、quality targets、A1–A7 | 不能只凭某个 Skill 或 runner `complete` 进入多页/多文件 |
 | 单文件多页面扩展 | ET2：页码选择、smoke、checkpoint、恢复和跨页隔离 | `workflow-a-batch.yaml`、run record、page-batch evidence | smoke、checkpoint 或邻页边界失败即停止扩展 |
@@ -89,20 +90,20 @@ flowchart LR
 
 工程执行不是“把目录中的脚本依次都跑一遍”。每个脚本必须声明前置证据；前置阶段没有明确终态时，调度器停止并保留当前证据。允许的 fallback 也必须是当前 Workflow 明确登记的下一路径，不能因为主路径失败就任意启动其他脚本。
 
-脚本状态、恢复脚本和旧文档专用规则见 [`references/legacy-code-status.zh.md`](references/legacy-code-status.zh.md)。尤其是 `workflow_a_reclassify.py` 只用于已有完整验收包的本地恢复，不能用来绕过来源预检、smoke 或独立验收。
+脚本状态、历史规则和排除边界见 [`references/legacy-code-status.zh.md`](references/legacy-code-status.zh.md)。旧恢复脚本已删除，不能用来绕过来源预检、smoke 或独立验收。
 
 ### 0.3.2 工程执行任务树的定位
 
 用户提出的“单页转换、图片命名、原生/OCR/视觉提取、Markdown 修复、AI 审计、多页、多文件、测试”不应继续散落在 `GOAL`、需求 `TASK-TREE` 或某个 Skill 的说明里。它们统一进入 [`EXECUTION-TASK-TREE.zh.md`](EXECUTION-TASK-TREE.zh.md)，作为工程 Task 的纵向展开。
 
-该树当前把 ET0 定义为执行控制与可观测基线，把 ET1 定义为单页内容质量纵向切片，把 ET2/ET3 定义为规模扩展，把 ET4 定义为测试与质量门。它同时记录对现有 A1–A7/Skill 拆分的复盘：A4 的能力可用性、候选生成和裁决需要分开；A5/A6 必须先有稳定资产 ID 再闭合最终链接；A7 的 package validator 不能冒充语义/视觉质量审计；原生/OCR 后还缺独立语言质量修复步骤。现有目录仍是实现投影和历史运行证据，不能反向证明这棵树已经通过。
+该树当前把 ET0 定义为执行控制与可观测基线，把 ET1 定义为单页内容质量纵向切片，把 ET2/ET3 定义为规模扩展，把 ET4 定义为测试与质量门，并把知识库低价值页清洗定义为 ET5.4 可选下游任务。它同时记录对现有 A1–A7/Skill 拆分的复盘：A4 的能力可用性、候选生成和裁决需要分开；A5 在原生/OCR/视觉投影后先执行确定性页眉页脚清洗，再执行独立语言质量修复；A5/A6 必须先有稳定资产 ID 再闭合最终链接；A7 的 package validator 不能冒充语义/视觉质量审计；ET5.4 不能反向删除或改变 Workflow A 的来源证据。现有目录仍是实现投影和历史运行证据，不能反向证明这棵树已经通过。
 
 ## 0.4 需求回写的页面独立单元与视觉门禁
 
-本轮从已有 Workflow/Skill/验收规则反向提炼出两项必须回到需求层的门禁：
+本轮从已有 Workflow/Skill/验收规则反向提炼出以下必须回到需求层的门禁：
 
 1. **读者标题与来源追溯分层**：A5 只负责读者可读的语义；源文件名、页码、哈希、对象 ID 和 occurrence 由 A6/manifest/evidence 保存。只有没有可确认标题时，才允许用页码作为临时标题，并进入 `needs-review`。对应长期错误为 [`references/known-failures.zh.md`](references/known-failures.zh.md) 的 K-001。
-2. **局域网视觉资源必须可验证**：A4 可以优先调用局域网视觉模型，当前登记的 `mac96` 与 SSH 只是一个可替换资源/transport 组合；每次 Run 必须记录连通性、目标、模型、输入输出和失败状态。不可用时先把同一张当前图片交给当前对话在线视觉模型，再按需降级到 Apple Vision OCR；外部在线 provider 仍需用户显式授权，结果都只能是 candidate；传输失败不自动进入 `needs-review`。对应 K-005/K-006。
+2. **识别候选资源必须可验证**：A4 不预设 Apple Vision OCR、mac96 小视觉模型或 mac96 30B 的主次；当前登记的 `mac96` 与 SSH 只是一个可替换资源/transport 组合。每次 Run 必须记录目标、模型、提示词版本、输入输出、结构质量、耗时、资源和失败状态；当前对话或外部在线 provider 仍需用户显式授权，结果都只能是 candidate；传输失败不自动进入 `needs-review`。对应 K-005/K-006。
 
 3. **启用图片资产提取时必须单独校准**：A3/ET1.4 按需先用确定性方法分别保留 PPT/PPTX、PDF 和独立图片的原始/页面/区域资产；得到授权时再用高质量在线视觉模型建立基准，用同一输入、schema、提示词版本和评分表让本地视觉模型复现。只有质量、重复性、成本和来源追溯证据同时通过，才允许切换本地默认路线；否则该可选工作包保留 `needs-review` 或使用明确授权的便宜在线 fallback，不阻塞 ET2。对应 [`references/asset-extraction-strategy.zh.md`](references/asset-extraction-strategy.zh.md)。
 
@@ -117,10 +118,17 @@ flowchart LR
    [`skills/markdown-asset-copy/SKILL.md`](skills/markdown-asset-copy/SKILL.md)。
 
 6. **页面修复采用严格阶段门**：第 1 页是唯一首个处理单元；第 1 页页面结构守卫未通过时，不得处理
-   第 2–100 页。第 1 页通过后只开放第 2–5 页小批量，且必须经过人工查看；只有第 2–5 页通过后
-   才能进入第 6–100 页。页面单元只能读取当前页 Markdown 和当前页图，原始 OCR/Vision/bbox/
+   第 2–total_pages 页。第 1 页通过后只开放第 2–5 页小批量，且必须经过人工查看；只有第 2–5 页通过后
+   才能进入第 6-total_pages 页。页面单元只能读取当前页 Markdown 和当前页图，原始 OCR/Vision/bbox/
    置信度/manifest 保持只读；合并按固定页序确定性进行，`document-temp.md` 只是派生预览。
    对未确认的图示关系继续使用 `Unknown`/`needs-review`。
+
+7. **知识库低价值页清洗必须晚于完整汇合**：只有用户明确要把电子书用于知识库或读者集合时，
+   才在全部 page-units 生成、分组复制和并发结果汇合后启动 ET5.4。先对知识库工作副本生成不含正文
+   副本的哈希锁定计划，再按明确页码与理由删除；目录、版权/出版说明、推广、推荐、重复封面和空白页
+   是候选类型，不是固定页码规则。保留原 PDF、页面图、OCR/Vision、manifest 和报告，删除后从保留页
+   重建 `index.md`/`total.md`/集合包。对应 [`contracts/ebook-page-pruning.yaml`](contracts/ebook-page-pruning.yaml)
+   和 [`skills/prune-low-value-ebook-pages/SKILL.md`](skills/prune-low-value-ebook-pages/SKILL.md)。
 
 这些是需求门禁到工程门禁的映射，不是对任何真实 Run 的通过结论。
 
@@ -134,7 +142,7 @@ flowchart TD
     A1 --> A2["A2 原生结构提取"]
     A2 --> A3["A3 视觉资产保留与多路线提取"]
     A3 --> A4["A4 视觉文本提取与结构复核"]
-    A4 --> A5["A5 Markdown 组装"]
+    A4 --> A5["A5 page-unit 噪声清洗、语言修复与 Markdown 组装"]
     A5 --> A6["A6 命名与来源登记"]
     A6 --> A7["A7 资产包验收"]
     A7 --> P["Markdown 资产包 index.md + manifest + assets"]
@@ -165,11 +173,11 @@ flowchart TD
 
 | 顺序 | 用户要确认什么 | 最小证据 | 未通过时 |
 |---|---|---|---|
-| 1. 第 1 页 | 当前 source 的文字、页面图和链接是否互相对应 | 第 1 页独立单元、页面图、页面结构守卫记录、人工可读性记录 | 停在 `needs-review` 或 `failed`，不得处理第 2–100 页 |
-| 2. 第 2–5 页 | 小批量页序、页面边界和结构守卫是否连续 | 每页独立单元、结构守卫结果、人工查看记录 | 不进入第 6–100 页 |
+| 1. 第 1 页 | 当前 source 的文字、页面图和链接是否互相对应 | 第 1 页独立单元、页面图、页面结构守卫记录、人工可读性记录 | 停在 `needs-review` 或 `failed`，不得处理第 2–total_pages 页 |
+| 2. 第 2–5 页 | 小批量页序、页面边界和结构守卫是否连续 | 每页独立单元、结构守卫结果、人工查看记录 | 不进入第 6-total_pages 页 |
 | 3. 候选比较 | PPTX/PDF 是否被明确声明为同一逻辑文档，差异是否可解释 | 代表页截图、差异指标、五项选择字段 | 保持独立 package，或 `needs-review` |
 | 4. 排版异常 | PPTX 错位/遮挡/不可见时，是否切换主视觉证据 | XML、PPTX 渲染、PDF 页面图、错误诊断 | 不得声称 PPTX 视觉可信 |
-| 5. 第 6–100 页 | 第 1 页和第 2–5 页门禁已通过且可恢复 | 全量 run-record、逐页证据、独立 validator 报告 | 不运行或标记 `failed` |
+| 5. 第 6-total_pages 页 | 第 1 页和第 2–5 页门禁已通过且可恢复 | 全量 run-record、逐页证据、独立 validator 报告 | 不运行或标记 `failed` |
 
 ## 2. 文件关系图
 
@@ -182,7 +190,7 @@ flowchart TD
     WR --> D["adapters/workflow_a_dispatcher.py"]
     WR -. "仅在显式同逻辑候选时" .-> CC["adapters/workflow_a_candidate_compare.py"]
     D --> RUN["adapters/workflow_a_source_runner.py"]
-    RUN -. "兼容/legacy" .-> LEGACY["archive/legacy-adapters/workflow_a_runner.py"]
+    RUN -. "旧实现已排除" .-> LEGACY["legacy document-profile（不可执行）"]
 
     WA --> WAR["README.zh.md"]
     WA --> WAY["workflow.yaml"]
@@ -228,7 +236,7 @@ flowchart TD
 | 总览 | `WORKFLOWS.zh.md` | A/B 选择和关系 | 不执行 Workflow |
 | 关系图 | `WORKFLOW-MAP.zh.md` | 文件、链路和证据关系 | 不作为机器路由配置 |
 | 执行任务树 | `EXECUTION-TASK-TREE.zh.md` | 工程 Task 的纵向切片、规模扩展、测试门和旧拆分复盘 | 不作为机器路由配置，不记录真实 Run |
-| 来源无关执行器 | `adapters/workflow_a_source_runner.py`、`contracts/workflow-a-source-runner.yaml`、`references/source-runner-design.zh.md` | source/profile/config 路由、资产登记、内容阶梯和独立验收边界 | 本轮默认 plan-only，不执行真实 source |
+| 来源无关执行器 | `adapters/workflow_a_source_runner.py`、`contracts/workflow-a-source-runner.yaml`、`references/source-runner-design.zh.md` | source/profile/config 路由、reader-only Markdown 与被引用截图；工程登记为显式 opt-in | 默认不落盘 JSON/manifest/evidence/reports |
 | 注册 | `workflow-registry.yaml` | 机器可读 Workflow 入口 | 不描述每个 Skill 的过程 |
 | 执行规格 | `workflows/*/workflow.yaml` | 阶段、Skill、Tool、失败态、证据 | 不替代人类说明 |
 | 人类说明 | `workflows/*/README.zh.md` | 输入、输出、运行方式、成本 | 不作为机器路由配置 |
@@ -239,8 +247,8 @@ flowchart TD
 | 执行组件 | `tool-registry.yaml` | 解析器、OCR、渲染器、模型适配器登记 | 不承诺 `planned` 已实现 |
 | A bounded 入口 | `adapters/workflow_a_dispatcher.py` | 后续 execute 阶段读取 registry/workflow、限制页码并编排 A1-A7 | 本轮迁移待定，不启动真实转换 |
 | 候选比较 | `adapters/workflow_a_candidate_compare.py` | 在明确声明同一逻辑文档时比较 PPTX/PDF 候选并记录 `semantic_source`、`visual_source`、`visual_difference`、`selection_reason`、`uncertainties` 和差异证据 | 不把两个来源合并成一个 package，不替代单一来源转换 |
-| A 来源无关 runner | `adapters/workflow_a_source_runner.py` | 读取 source/profile/config，声明 PPT/PPTX、PDF、图片的原生/页面/嵌入/裁剪路线和内容阶梯 | 默认 plan-only；不含固定标题、术语、页码、DPI、SSH 或模型选择 |
-| A 兼容执行器 | `archive/legacy-adapters/workflow_a_runner.py` | 对一个 `source` 执行旧路径解析、渲染、复核/兜底、Markdown/manifest/report 生成 | `legacy/document-profile`，不作为新来源默认入口 |
+| A 来源无关 runner | `adapters/workflow_a_source_runner.py` | 读取 source/profile/config，生成 `index.md` 和它引用的页面截图；完整资产登记由 `--engineering-output` 显式开启 | 默认 reader-only；不含固定标题、术语、页码、DPI、SSH 或模型选择 |
+| A 旧兼容执行器 | 已删除 | 历史实现不再被 Workflow、工具注册表或批处理读取 | `legacy/document-profile` 已排除 |
 | A 多文件编排器 | `adapters/workflow_a_batch.py` | 按 source 建立可恢复队列、串行优先/受控并发、重试和批次 run-record；每个 source 调用单文件 runner | 不合并来源，不把批次状态冒充单包验收 |
 | 数据契约 | `contracts/*.yaml` | 输入、输出、handoff、运行记录、目录结构 | 不保存真实业务产物 |
 | 证据 | `tests/`、`tests/runs/` | fixture、验证结果和运行记录 | 不替代正式 `output_root` |

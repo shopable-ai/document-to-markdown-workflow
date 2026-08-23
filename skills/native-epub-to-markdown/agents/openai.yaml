@@ -1,0 +1,4 @@
+interface:
+  display_name: "原生 EPUB 转 Markdown"
+  short_description: "解包可读型 EPUB 并生成 Markdown 与图片资产"
+  default_prompt: "使用 $native-epub-to-markdown 将当前可读型 EPUB 解包为 Markdown、assets 和基础 evidence，保持 spine 顺序，不走 OCR 或视觉模型。"

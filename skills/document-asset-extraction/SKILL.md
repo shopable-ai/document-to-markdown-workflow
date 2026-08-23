@@ -19,7 +19,7 @@ order: 10
 - 不负责：调用 GPT-image-2、自动把来源图升级为通用模板、生成 PPTX/PDF。
 - 原则：不得覆盖来源文件；每个结论都能回到页码、节点或图像资产。
 - 通用入口：由 `adapters/workflow_a_source_runner.py` 根据 source、profile/config 和页码选择路由；默认是 `--plan-only`，不读取真实 source。
-- 兼容入口：`archive/legacy-adapters/workflow_a_runner.py` 仅用于旧证据/旧 profile 兼容，不得作为新来源的默认入口。
+- 旧 document-profile 兼容入口已删除；不得从旧 runner、动态 loader 或历史 profile 读取新来源。
 
 ## 执行链路
 
@@ -59,7 +59,7 @@ Markdown 文件合并成一篇新文档。
 - 当复杂图片包含递进、包含、因果、对比、时间线、树状或矩阵等已确认文字关系时，可在正文前增加一条简短的 `> 关系：...` 说明；普通正文和工程诊断不使用引用块。关系不确定时保留工程候选和视觉证据，不强行下结论。
 - 正文应忠实转写来源文字。允许修正明显错字、统一标点、拆分段落、列表、表格和标题层级，但不能擅自总结、扩写、删减或改变语义。
 - OCR 或视觉模型生成的文字只能在来源层级和置信度清楚记录后进入正文；无法确认的内容写入 `evidence/`、`manifest.yaml` 或 `reviews/markdown-content-repair.yaml`，不能以 `Unknown`、“需要核对”、“原文疑似”或 OCR 旁注出现在正文，更不能因为已经生成 Markdown 就当作确认事实。
-- 图片是来源证据，必须放在语义文字和关系说明之后；图片不能替代 Markdown 中可读、可检索的正文。自动阶段不得删除页面图片；仅人工审核确认“页面仅含已提取文字且没有额外图示”后，才能从 `index.md` 移除图片链接，同时保留 `assets/` 和 manifest 的来源记录。
+- 页面渲染图首先是模型输入和工程来源证据，不能替代 Markdown 中可读、可检索的正文。视觉 JSON 明确给出 `text-only`、Markdown 可表达、无语义视觉/未决关系和 `reader_image_policy.action=omit` 时，首次读者层投影直接不写图片链接；二维码也不作为图片提取。字段缺失、冲突或不确定时保守保留；工程 `assets/` 和 manifest 来源记录不删除。
 
 最小格式示例（标题和关系说明均按来源实际情况可选）：
 

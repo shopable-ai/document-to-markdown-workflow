@@ -1,7 +1,7 @@
 ---
 name: local-ocr
 title: "本机 OCR"
-description: 作为 mac96 和当前对话视觉文字 fallback 均失败后的本机 Apple Vision OCR 最后兜底，对无文字层或冲突区域保存候选文字和置信度。
+description: 通过本机 Apple Vision OCR 保存当前页原始文字、坐标和置信度；它是待实测的文字识别候选路线，必须搭配独立 Markdown 结构重建，不能被预设为主路线或最后兜底。
 order: 10
 ---
 
@@ -9,7 +9,7 @@ order: 10
 
 ## 职责
 
-仅在 A4 的 `vision-page-analysis` 文字层经 SSH/mac96 和当前对话视觉 fallback 都不可用、超时或输出不可解析时，对无文字层或冲突区域执行本机 Apple Vision OCR，并保存候选文字和置信度。它只补文字层，不替代页面视觉结构分析，也不替代 PPTX XML、PDF 布局或 DOCX OOXML 原生提取。
+对无文字层或冲突区域执行本机 Apple Vision OCR，并保存候选文字、坐标和置信度。是否使用它由真实页面基准与页面质量守卫决定，不依赖固定 fallback 顺序。它只提供原始文字层，必须搭配 `ocr_markdown_structure.py` 才能形成 Markdown 结构候选；它不替代页面视觉结构分析，也不替代 PPTX XML、PDF 布局或 DOCX OOXML 原生提取。
 
 ## 输入与输出
 

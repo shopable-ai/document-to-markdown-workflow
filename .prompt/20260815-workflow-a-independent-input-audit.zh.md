@@ -19,7 +19,7 @@
 - 候选比较结果至少能表达 `semantic_source`、`visual_source`、`visual_difference`、`selection_reason` 和 `uncertainties`；差异大/排版异常时 visual source 必须能落到 PDF。
 - 执行并记录：
   - `python3 tests/validate_workflow_package.py`
-  - `python3 -m pytest -q tests/test_repository_layout.py tests/test_real_output_root_validator.py tests/test_smoke_fixture_matrix.py tests/test_workflow_a_runner.py`
+  - `python3 -m pytest -q tests/test_repository_layout.py tests/test_real_output_root_validator.py tests/test_smoke_fixture_matrix.py tests/test_workflow_a_source_runner.py`
   - 若生成 smoke 输入，再对代表页运行候选比较器和对应独立验收器；未运行的真实 mac96/Apple Vision 证据必须标为待核实。
 
 任务拆分：
@@ -47,8 +47,8 @@
 当前状态与证据：
 - 已确认：项目已有 `workflow.yaml`、A1-A7、独立输出验收器、候选比较器、批处理器和 24–25 页 PPTX/PDF fixture。
 - 已完成：在 `GOAL.zh.md` 写入背景/当前问题/需求链；新增 `TASK-TREE.zh.md`；在 `README.md` 与 `WORKFLOW-MAP.zh.md` 增加任务树入口；为 A1-A7 增加用户问题/成功信号/失败显现字段；新增 `tests/fixtures/smoke-matrix/` 元数据、说明和生成脚本。
-- 已修复：删除 `adapters/workflow_a_runner.py` `_normalise_text_structure()` 中按 `page == 3/4` 和固定短语注入“四象限/GRAI”语义的逻辑，并增加回归测试。
-- 已确认的风险：`adapters/workflow_a_runner.py` 仍可能存在旧文档导向的 OCR 运行页眉过滤、章节命名或验收正则；需要按“通用启发式 vs 来源特定泄漏”继续审计，不要一刀切破坏已有 OCR 保护。
+- 已修复：旧 document-profile runner 已删除，固定页码/短语语义不再进入 active source runner。
+- 已确认的边界：旧 OCR 页眉过滤、章节命名和验收正则只属于历史证据审计，不得重新接回当前 Workflow。
 - 待核实：候选比较器还没有完成基于截图的 `visual_difference` 阈值实现；当前代码的默认选择逻辑与新的“PPTX XML 语义优先、PDF 视觉回退”规则可能不一致。
 - 待核实：六类 smoke 输入尚未在本轮全部 materialize 并运行真实 runner；不要把生成脚本存在写成运行通过。
 

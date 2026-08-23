@@ -7,7 +7,7 @@ schema:
   path_must_exist: true
   frontmatter_name_must_equal_id: true
   stage_references_must_be_registered: true
-  entrypoint_skills: [document-asset-extraction, document-visual-generation, knowledge-map-image-to-md]
+  entrypoint_skills: [document-asset-extraction, document-visual-generation, knowledge-map-image-to-md, native-pdf-to-markdown]
 skills:
   - id: source-inventory
     path: skills/source-inventory/SKILL.md
@@ -45,8 +45,17 @@ skills:
     path: skills/markdown-structure-builder/SKILL.md
   - id: page-markdown-unit
     path: skills/page-markdown-unit/SKILL.md
+  - id: clean-page-markdown-noise
+    path: skills/clean-page-markdown-noise/SKILL.md
+  - id: prune-low-value-ebook-pages
+    path: skills/prune-low-value-ebook-pages/SKILL.md
+    scope: optional-post-complete-page-unit-merge-pre-knowledge-base-export
+    entrypoint: python3 skills/prune-low-value-ebook-pages/scripts/prune_ebook_pages.py
+    contract: contracts/ebook-page-pruning.yaml
   - id: markdown-content-repair
     path: skills/markdown-content-repair/SKILL.md
+  - id: markdown-format-repair
+    path: skills/markdown-format-repair/SKILL.md
   - id: source-asset-linker
     path: skills/source-asset-linker/SKILL.md
   - id: uncertainty-marking
@@ -61,6 +70,20 @@ skills:
     path: skills/semantic-visual-asset-pruning/SKILL.md
   - id: asset-package-validation
     path: skills/asset-package-validation/SKILL.md
+  - id: native-pdf-to-markdown
+    path: skills/native-pdf-to-markdown/SKILL.md
+  - id: native-epub-to-markdown
+    path: skills/native-epub-to-markdown/SKILL.md
+    scope: native-epub-reader-markdown-extraction
+    entrypoint: python3 skills/native-epub-to-markdown/scripts/epub_to_markdown.py
+  - id: pdf-route-detection
+    path: skills/pdf-route-detection/SKILL.md
+    scope: pre-conversion-document-routing-and-runtime-page-hybrid-routing
+    entrypoint: python3 adapters/pdf_route_detection.py
+    page_hybrid_entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <pdf> --run-root <exact-run-root> --pages <selector>
+    contract: contracts/pdf-route-detection.yaml
+    run_root: runs/pdf-route-detection
+    reader_summary: PDF转换路线总览.md
   - id: markdown-asset-copy
     path: skills/markdown-asset-copy/SKILL.md
     modes: [single_markdown, collection_merge]

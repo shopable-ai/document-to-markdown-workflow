@@ -131,16 +131,6 @@ def test_fixture_markdown_places_visual_assets_after_semantic_content():
     assert "开放集合未知形式扫描" not in text
 
 
-def test_workflow_a_runner_keeps_generic_source_and_page_contract():
-    runner = (ROOT.parent / "archive/legacy-adapters/workflow_a_runner.py").read_text(encoding="utf-8")
-    assert "--source" in runner
-    assert "--pages" in runner
-    assert "pages = [24, 25]" not in runner
-    assert "args.pptx.name" not in runner
-    assert "source_selection" in runner
-    assert "assets/regions" in runner
-
-
 def test_quality_target_contract_is_95_plus_and_has_hard_gates():
     package_root = ROOT.parent
     workflow = (package_root / "workflows" / "document-to-markdown-assets" / "workflow.yaml").read_text()

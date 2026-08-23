@@ -3,7 +3,7 @@ version: 0.1.0
 description: 规格包根目录的 Workflow 入口索引；详细阶段仍以各 Workflow 目录中的 workflow.yaml 为准。
 schema:
   required_entry_fields: [id, title, path, readme, acceptance, independent]
-  optional_entry_fields: [aliases, trigger_keywords, daily_trigger, execution_observability, reader_collection_entrypoint, reader_collection_contract, reader_collection_scope]
+  optional_entry_fields: [aliases, trigger_keywords, daily_trigger, execution_entrypoint, pdf_execution_entrypoint, pdf_visual_only_entrypoint, plan_entrypoint, default_pages, production_runtime_contract, background_task_entrypoint, background_task_contract, execution_observability, page_vision_pdf_entrypoint, page_vision_resume_entrypoint, recognition_benchmark_entrypoint, recognition_benchmark_contract, recognition_quality_entrypoint, recognition_quality_contract, ocr_structure_entrypoint, ocr_structure_contract, advertising_policy_contract, page_noise_cleanup_scan_entrypoint, page_noise_cleanup_apply_entrypoint, page_noise_cleanup_contract, page_noise_cleanup_default_profile, reader_collection_entrypoint, reader_collection_contract, reader_collection_scope, knowledge_base_page_pruning_preview_entrypoint, knowledge_base_page_pruning_apply_entrypoint, knowledge_base_page_pruning_contract, knowledge_base_page_pruning_scope]
   path_must_exist: true
   exactly_one_root_entry_per_workflow: true
 workflows:
@@ -14,24 +14,49 @@ workflows:
     acceptance: workflows/document-to-markdown-assets/ACCEPTANCE.zh.md
     independent: true
     aliases: [knowledge-map-image-to-md]
-    primary_output: markdown-asset-package
-    execution_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --pages <selector> --plan-only
-    batch_entrypoint: python3 adapters/workflow_a_batch.py --source <file-1> --source <file-2> --output-root <dir> --pages all --legacy-compat
-    batch_entrypoint_status: compatibility-only;generic-execute-not-promoted
-    runner_compatibility_entrypoint: python3 archive/legacy-adapters/workflow_a_runner.py --source <file> --output-root <dir> --pages <explicit-pages>
+    primary_output: reader-markdown-output
+    execution_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --execute
+    pdf_execution_entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <pdf> --run-root <exact-run-root> --pages <selector>
+    pdf_visual_only_entrypoint: python3 adapters/lan_pdf_markdown_graph.py --visual-only --source <pdf> --run-root <exact-run-root> --pages <selector>
+    engineering_output_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --execute --engineering-output
+    plan_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --plan-only
+    default_pages: all
+    production_runtime_contract: contracts/workflow-a-production-runtime-context.yaml
+    background_task_entrypoint: python3 adapters/pdf_background_task.py start --task-type <workflow-a|native-pdf|native-pdf-batch|hybrid-pdf|visual-pdf> --source <pdf> --output-root <dir> --pages <selector>
+    background_task_contract: contracts/long-task-interaction.yaml
+    batch_entrypoint: python3 adapters/workflow_a_batch.py --source <file-1> --source <file-2> --output-root <dir> --pages all
+    batch_entrypoint_status: blocked-until-generic-execute-promotion
+    excluded_legacy_routes: [workflow_a_runner, workflow_a_legacy_loader, legacy-document-profile]
     generic_execute_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --pages <selector> --profile <profile.yaml> --execute
     generic_runner_contract: contracts/workflow-a-source-runner.yaml
-    generic_runner_status: active-design;execute-not-promoted
+    generic_runner_status: active-reader-only-execute;engineering-package-explicit-opt-in;visual-and-language-review-explicit
     page_unit_entrypoint: python3 adapters/page_markdown_units.py split --source-document <index.md> --pages <explicit-pages> --output-dir <page-units>
     page_unit_merge_entrypoint: python3 adapters/page_markdown_units.py merge --unit <p001.md> --output <document-temp.md>
     page_unit_contract: contracts/page-markdown-unit.yaml
-    page_unit_gate_order: [single-page-1, small-batch-2-5, full-batch-6-100]
+    page_unit_gate_order: [single-page-1, small-batch-2-5, full-batch-6-total_pages]
+    page_vision_pdf_entrypoint: python3 adapters/mac96_pdf_vision_runner.py --source <pdf> --output-root <dir> --pages <selector> --noise-profile <profile.yaml>
+    page_vision_resume_entrypoint: python3 adapters/mac96_pdf_vision_resume.py --source <pdf> --package <package> --pages <selector> --noise-profile <profile.yaml>
+    recognition_benchmark_entrypoint: python3 adapters/recognition_route_benchmark.py --run-id <run-id> --source-fingerprint <sha256> --page-image <page>=<image> --output-root <dir>
+    recognition_benchmark_contract: contracts/recognition-route-benchmark.yaml
+    recognition_quality_entrypoint: python3 adapters/recognition_route_quality_validator.py --benchmark <benchmark-run.json> --assessment <quality-assessment.json> --output <validation.json>
+    recognition_quality_contract: contracts/recognition-route-quality-assessment.yaml
+    ocr_structure_entrypoint: python3 adapters/ocr_markdown_structure.py --ocr-json <ocr.json> --page <page> --output-markdown <page.md> --evidence <structure.json>
+    ocr_structure_contract: contracts/ocr-markdown-structure.yaml
+    advertising_policy_contract: contracts/advertising-content-policy.yaml
+    page_noise_cleanup_scan_entrypoint: python3 adapters/page_markdown_noise_cleanup.py --page-units <page-units> --pages <selector> --profile <profile.yaml> --evidence <cleanup.json>
+    page_noise_cleanup_apply_entrypoint: python3 adapters/page_markdown_noise_cleanup.py --page-units <page-units> --pages <selector> --profile <profile.yaml> --apply --evidence <cleanup.json>
+    page_noise_cleanup_contract: contracts/page-markdown-noise-cleanup.yaml
+    page_noise_cleanup_default_profile: references/reader-noise-profile.yaml
     markdown_content_repair_entrypoint: python3 adapters/markdown_content_repair.py --page-unit <page-units/pNNN.md> --page <N> --evidence <evidence/markdown-content-repair-pNNN.json>
     markdown_content_repair_contract: contracts/markdown-content-repair.yaml
     markdown_content_repair_route: lan-language-model-first;conversation-online-explicit-fallback-only
     reader_collection_entrypoint: python3 adapters/markdown_collection_merge.py --source-page-units <source-package>/page-units --source-assets <source-package>/assets --destination-root <destination-root> --destination-dir-name <collection-name> --category-map <category-map.json> --pages <selector>
     reader_collection_contract: contracts/markdown-collection-output-layout.yaml
     reader_collection_scope: downstream-reader-export;does-not-rename-workflow-a-index
+    knowledge_base_page_pruning_preview_entrypoint: python3 skills/prune-low-value-ebook-pages/scripts/prune_ebook_pages.py preview --page-units <complete-working-copy>/page-units --pages <approved-selector> --expected-page-count <complete-count> --reason <selector=reason> --plan <plan.json>
+    knowledge_base_page_pruning_apply_entrypoint: python3 skills/prune-low-value-ebook-pages/scripts/prune_ebook_pages.py apply --plan <plan.json>
+    knowledge_base_page_pruning_contract: contracts/ebook-page-pruning.yaml
+    knowledge_base_page_pruning_scope: optional-downstream-step-after-all-page-groups-merge-before-kb-export
     candidate_comparison_entrypoint: python3 adapters/workflow_a_candidate_compare.py --source-a <pptx> --source-b <pdf> --pages 3,4 --output <comparison-json>
     source_isolation: one-source-per-run
     batch_source_isolation: one-independent-package-per-source
@@ -40,17 +65,17 @@ workflows:
     daily_trigger: 文档转 Markdown
     execution_observability:
       before_run: [workflow_id, workflow_version, source_path, media_type, sha256, total_pages, selected_pages, preflight_status, preflight_report]
-      progress: [runner_plan, execution_preflight, capability_probe, workflow_spec_validation, smoke_gate, candidate_comparison, source_inventory, native_extraction, source_rendering, asset_registration, text_structure_or_relation_review_or_fallback, language_quality_repair, markdown_assembly, semantic_visual_quality_audit, batch_checkpoint, independent_validation]
-      execution_evidence: evidence/workflow-execution.json
-      final_report: reports/validation-result.json
+      progress: [runner_plan, execution_preflight, capability_probe, workflow_spec_validation, smoke_gate, candidate_comparison, source_inventory, native_extraction, source_rendering, asset_registration, text_structure_or_relation_review_or_fallback, page_markdown_noise_cleanup, language_quality_repair, markdown_assembly, semantic_visual_quality_audit, batch_checkpoint, independent_validation]
+      execution_evidence: null
+      final_report: null
       statuses: [passed, needs-review, failed]
       exit_codes: {0: passed, 1: needs-review-or-validation-failed, 2: input-or-argument-error}
-      passed_means: independent_validator_passed
-      needs_review_means: package_preserved_but_human_review_required
+      passed_means: reader-markdown-and-required-images-resolve;semantic-text-coverage-and-structure-quality-pass;raw-evidence-and-advertising-preservation-trace-complete
+      needs_review_means: reader_package_written_but_content_requires_human_review
       failed_means: package_not_usable
       same_name_same_page_count_preference: pdf-original-page-render
     online_model_calls: 0 by default
-    current_round_status: design-only;fixture-local-runtime-tests-run;no-real-source;production-not-proven
+    current_round_status: scanned-text-route-calibration-pending;apple-ocr-structure-adapter-implemented;small-model-real-benchmark-pending-authorization;engineering-output-required-for-route-evidence
     optional_reference_for: [markdown-to-gpt-image]
     optional_profile_output: contracts/visual-reconstruction-profile.yaml
   - id: markdown-to-gpt-image

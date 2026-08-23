@@ -20,7 +20,7 @@ order: 10
 - 把来源页、source occurrence、置信度、OCR 原值/候选、冲突理由和阶段状态写入 `evidence/` 或 `manifest.yaml`。
 - 把无法直接确认、需要保留追溯的读者层文字和结构修复写入 `reviews/markdown-content-repair.yaml`；状态为 `applied`、`rejected` 或 `deferred`。图文关系和页面图筛选由对应的视觉复核与资产筛选流程记录。
 - `index.md` 禁止出现 `Unknown`、`needs-review`、`待复核`、`原文疑似`、`OCR` 解释、`第 x 页`、`来源页`、`A4 状态` 和 `来源与原图`等工程文字。
-- `markdown-content-repair` 对确定的文字结构问题可以直接修改正文，并记录 `applied` 差异；页面图链接的移除必须由视觉资产筛选流程明确批准，被移除的页面图仍保留在 `assets/` 与 `manifest.yaml` 中。
+- `markdown-content-repair` 对确定的文字结构问题可以直接修改正文，并记录 `applied` 差异；页面图链接只能由视觉 JSON 的 fail-closed reader image 判定或后置视觉资产筛选流程决定。被省略的页面渲染图仍保留在工程 `assets/` 与 `manifest.yaml` 中。
 
 ## 边界
 

@@ -1,7 +1,7 @@
 contract: workflow-a-batch-run
 version: 0.1.0
 description: 多来源队列与单一长 PDF 的 smoke、分批、checkpoint、恢复和单包输出边界。
-root: <output_root>/batch-<timestamp>-<digest>/run-record.yaml
+root: <output_root>/<source-name>-<timestamp>/run-record.yaml
 required:
   run_id: string
   workflow_id: document-to-markdown-assets
@@ -43,6 +43,7 @@ forbidden_fields:
   - subscription_url
   - token
 invariants:
+  - 批次根目录名必须优先保留来源文件名，并追加本地时间戳；同名冲突时追加稳定序号。
   - 每个 queue 项对应一个 source，并且 source_sha256 不为空。
   - 每个 source 仍由单文件 runner 生成独立 package，不合并不同 source 的 index.md 或 manifest。
   - status=succeeded 仅当所有 queue 项的独立 validation-result.json.status=passed。

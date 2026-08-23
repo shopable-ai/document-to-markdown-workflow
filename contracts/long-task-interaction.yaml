@@ -1,0 +1,103 @@
+contract: long-task-interaction
+version: 1.1.0
+status: active
+description: 长时间后台任务与当前 Codex 对话的隔离、状态、消息预算和停止语义。
+
+scope:
+  long_task_threshold_seconds: 30
+  default_mode: detached-silent
+  problem_boundary:
+    background_task_resource_consumption: 后台脚本、局域网模型、渲染和磁盘留证自身的资源消耗。
+    current_conversation_context_consumption: Agent 写入当前对话的消息所占在线模型上下文。
+    agent_polling_consumption: Agent 为保持关注而重复调用工具、读取状态和处理结果的消耗。
+    user_query_consumption: 用户主动查询时读取一次最新快照并返回一次摘要的消耗。
+
+task_state:
+  latest_snapshot: progress-current.json
+  lifecycle_ledger: progress.jsonl
+  process_output: run.log
+  required_fields:
+    - run_id
+    - source
+    - output_root
+    - pid
+    - process_group_id
+    - status
+    - started_at
+    - updated_at
+    - completed_pages
+    - failed_pages
+  statuses:
+    - queued
+    - running
+    - paused
+    - cancelled
+    - failed
+    - completed
+    - budget-exhausted
+  process_truth:
+    rule: running 只能由当前 PID、进程组和本次 worker identity 共同验证，旧 PID 或旧文件不能证明活动状态。
+    stale_pid_result: failed-with-actionable-recovery
+
+dialogue_policy:
+  start:
+    max_messages: 1
+    fields: [status, run_id, pid, task_type, run_root, task_root, log_path, status_command, cancel_command]
+  periodic_progress:
+    max_messages: 0
+    forbidden_examples: [per-page, every-10-pages, every-30-seconds, every-5-minutes, still-running, no-errors]
+  exception:
+    allowed_when: [failed, user-decision-required, abnormal-stall]
+    rule: 相同异常只发送一条可操作摘要，不转发原始 stdout。
+  user_status_query:
+    max_messages_per_query: 1
+    read: progress-current.json
+    never_read_for_summary: progress.jsonl
+    response: latest-snapshot-only
+    route_capabilities:
+      native-pdf: outer lifecycle plus the runner current page snapshot
+      native-pdf-batch: outer lifecycle plus native batch checkpoint snapshot
+      hybrid-pdf: outer lifecycle plus page route and completion snapshots
+      visual-pdf: outer lifecycle plus the runner current page snapshot
+      workflow-a: outer lifecycle while running; terminal page count comes from the runner final JSON already stored in run.log
+  terminal:
+    max_messages: 1
+    allowed_when: [completed, cancelled, failed, budget-exhausted]
+    rule: 终态摘要不得复述逐页历史。
+  allowed_agent_events: [start, exception, explicit-user-query, completed, cancelled]
+
+agent_orchestration:
+  after_start: end-current-interaction
+  autonomous_polling: forbidden
+  prohibited_tools_for_attention:
+    - repeated-write_stdin
+    - repeated-ps
+    - repeated-progress-current-read
+  tool_stdout_forwarding: forbidden
+  conversation_page_history: forbidden
+  automatic_monitoring: explicit-user-request-only
+  task_survives_conversation_close: true
+  automatic_polling_resume_on_new_conversation: false
+
+commands:
+  entrypoint: python3 adapters/pdf_background_task.py
+  start: start --task-type <approved-route> --source <pdf> --output-root <dir> --pages <selector>
+  status: status <run_id>
+  cancel: cancel <run_id>
+  resume: resume <run_id>
+  resume_support:
+    native-pdf: supported-reuse-existing-run-root
+    native-pdf-batch: supported-reuse-existing-run-root
+    hybrid-pdf: supported-reuse-existing-run-root-with-page-route-validation
+    visual-pdf: supported-reuse-existing-run-root
+    workflow-a: unsupported-until-source-runner-has-a-verified-in-place-resume-contract
+  task_type_rule: start 必须显式传入 native-pdf、native-pdf-batch、hybrid-pdf、visual-pdf 或 workflow-a；后台管理层不得替调用方静默改变已选执行路线。
+  stdout_rule: 每次显式命令只输出一个紧凑 JSON；后台 worker 的 stdout 和 stderr 只写 run.log。
+  cancel_rule: 只在 PID identity 匹配时终止整个进程组，确认无残留后写 cancelled。
+
+invariants:
+  - 后台任务不能依赖当前对话、前台工具会话或 Agent 持续轮询。
+  - 任务启动后，除允许事件外不得主动向当前对话追加消息。
+  - status 查询不追加生命周期事件，也不把历史进度重新写入当前对话。
+  - cancel 后不得继续轮询或自动调用模型；只返回一次终态和残留进程检查。
+  - 局域网模型 token 或计算消耗与当前对话上下文消耗必须分别报告，不得混为同一问题。

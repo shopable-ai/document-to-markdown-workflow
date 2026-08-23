@@ -1,14 +1,14 @@
 contract: vision-page-analysis
-version: 0.1.0
-description: 通过局域网 mac96 视觉模型对当前单图执行文字提取、视觉结构分析或两者；mac96 失败后交给当前对话在线视觉模型，文字层最后才使用 Apple Vision OCR。
+version: 0.3.0
+description: 对当前单图执行文字识别和 Markdown 结构候选生成；Apple Vision OCR、小视觉模型与 mac96 30B 都是待实测选择的候选路线，不预设固定主次。
 authorization:
   mac96:
     required: local-resource
-    default: enabled
+    default: calibration-candidate
   online_provider:
     id: conversation-online-vision-page-analysis
     required: current-task-explicit
-    default: fallback-only-after-mac96
+    default: explicit-current-task-only
     authorization: explicit-current-conversation
     input_scope: current-image-only
 input:
@@ -23,23 +23,24 @@ input:
 prompt:
   source: references/prompts/vision-page-analysis-mac96.zh.txt
   skill: skills/vision-page-analysis/SKILL.md
-  version: vision-page-analysis-v4
+  version: vision-page-analysis-v8
   policy: direct-vision-only-no-ocr
 transport:
-  primary:
+  mac96_candidate:
     type: ssh
     target: mac96
     endpoint: http://127.0.0.1:11434/api/generate
-  conversation_fallback:
+    models: [small-vision-model, qwen3-vl:30b-a3b-instruct]
+  conversation_candidate:
     type: current-conversation
     target: current-conversation
-    trigger: mac96-unavailable-timeout-or-unparseable
+    trigger: explicit-authorized-comparison-or-selected-fallback
     adapter: none-direct-current-vision-model
     input_scope: one-current-page-or-region-image-only
-  text_fallback:
+  apple_vision_candidate:
     type: local-system
     target: apple-vision-ocr
-    trigger: mac96-and-conversation-text-unavailable-timeout-or-unparseable
+    paired_structure_reconstructor: adapters/ocr_markdown_structure.py
     does_not_provide: visual-analysis
 output:
   evidence_path: evidence/vision-page-analysis.json
@@ -66,8 +67,25 @@ output:
     - status
     - diagnostics
   status: enum[complete, partial, unavailable, failed]
-  text_required: [status, source, markdown, diagnostics]
+  text_required: [status, source, markdown, structure_inventory, diagnostics]
   visual_required: [status, source, visual_analysis, diagnostics]
+  visual_analysis_required: [page_content_type, layout_dependency, semantic_visuals, ignored_elements, reader_image_policy, structure_inventory]
+  visual_analysis_fields:
+    page_content_type: enum[text-only, text-and-visual, visual-only, unknown]
+    layout_dependency: enum[none, markdown-representable, image-required, unknown]
+    semantic_visuals: array
+    ignored_elements: array
+    reader_image_policy:
+      required: [action, reason, confidence]
+      action: enum[omit, retain, needs-review]
+      confidence: enum[high, medium, low, unknown]
+    structure_inventory:
+      required: [title_levels, paragraph_count, list_count, toc_entry_count, header_footer_candidates]
+      title_levels: array
+      paragraph_count: integer
+      list_count: integer
+      toc_entry_count: integer
+      header_footer_candidates: array
 projections:
   markdown:
     candidate_field: text.markdown
@@ -86,6 +104,12 @@ projections:
       - page-units/p<page-3-digits>.md
     complete_only_when: all-required-files-exist-and-match-current-page
     resume_missing_markdown: repair-from-existing-vision-json-without-new-model-call
+  reader_image:
+    candidate_field: visual.visual_analysis.reader_image_policy
+    omit_only_when: page_content_type=text-only-and-layout_dependency-in[none,markdown-representable]-and-no-semantic-visual-or-unresolved-relation
+    missing_or_conflicting_policy: retain
+    source_render_policy: keep-as-engineering-evidence
+    qr_code_policy: ignore-without-decode-crop-or-reader-image
 policy:
   single_pass_default: full-mode-one-request
   dual_pass_when:
@@ -96,17 +120,42 @@ policy:
   dual_pass_order: [text, layout]
   full_complete_requires: [text.status=complete, visual.status=complete]
   partial_means: exactly-one-requested-layer-complete
-  ocr_fallback_scope: text-only
-  fallback_order: [mac96-vision-page-analysis, conversation-online-vision-page-analysis, apple-vision-ocr]
-  text_fallback_order: [mac96, current-conversation, apple-vision-ocr]
+  recognition_stages:
+    - id: text-recognition
+      output: immutable-raw-visible-text-evidence
+    - id: markdown-structure-reconstruction
+      output: candidate-markdown-with-structure-inventory
+    - id: advertising-classification-and-treatment
+      output: independent-policy-decision
+      default_action: preserve-only
+  route_selection:
+    status_before_real_benchmark: calibration-pending
+    candidates: [apple-vision-ocr-plus-deterministic-structure, small-vision-model, mac96-30b-vision-model]
+    fixed_priority_forbidden: true
+    benchmark_contract: contracts/recognition-route-benchmark.yaml
+    quality_dimensions: [heading_hierarchy, paragraph_segmentation, toc, lists, header_footer, punctuation, cross_page_continuity, anomalous_content_preservation]
+    escalate_when: [raw-text-coverage-failed, structure-guard-failed, low-confidence, complex-layout, unresolved-reading-order, silent-omission, hallucinated-structure]
+    fallback_rule: retry-next-qualified-route-and-preserve-all-attempt-evidence
+  ocr_scope: raw-text-candidate-only-until-structure-reconstruction-passes
+  advertising_policy: contracts/advertising-content-policy.yaml
+  advertising_default: preserve-only-no-delete-no-rewrite
   no_quality_claim_from: [ssh-reachable, http-200, model-list, queue-accepted, response-length]
+  reader_image_fail_closed: retain-on-missing-invalid-or-conflicting-classification
 forbidden_fields: [api_key, authorization, cookie, secret, subscription_url]
 invariants:
   - 每个 pass 只能读取并上传一张当前页面图或当前区域图。
-  - full 是默认模式，默认只发起一次 mac96 请求，同时请求 Markdown 和视觉结构。
+  - full/single 只是单个视觉模型适配器的请求方式，不代表 mac96 是 Workflow 默认路线。
   - dual 只有在调用方明确选择或已知页面风险满足策略时才发起两次专门请求。
   - 原生内容、视觉文字候选和视觉结构候选必须分层保存，不能互相覆盖。
-  - Apple Vision OCR 只能补 text 层，不能把 OCR 候选写成 visual 分析完成。
+  - Apple Vision OCR 只产生原始文字和坐标候选；通过独立结构重建和质量验收前，不能声称已生成合格 Markdown。
   - 视觉模型不得读取其他文件、前后图片或整份文档。
   - 无法确认的文字或关系必须保留为〔无法确认〕、Unknown 或 needs-review。
+  - 标题层级、自然段、目录、列表和跨页连续性只能根据可见证据重建；无法确认时不得为了排版美观而臆造。
+  - full.markdown 中实际使用的标题和列表语法必须与 structure_inventory 完全一致；不一致时保留 raw response 并判为 structure-guard-failed。
+  - text 模式的 structure_inventory 由适配器从实际 Markdown 语法反向计算，不接受模型自报计数。
+  - 提取阶段必须保留微信号、二维码附近说明、推广语及其他可见异常文字；不得在识别或结构重建阶段分类、隐藏、删除或改写。
+  - 广告分类、标记、隐藏或删除只允许在独立策略阶段执行；本轮默认 preserve-only。
+  - PDF 页面渲染图是模型输入和工程证据，不因其在 PDF 中是图片对象就自动成为读者图片。
+  - 只有明确判定为 text-only、Markdown 可完整表达且没有语义视觉/未决关系时，reader_image_policy.action 才能为 omit。
+  - 二维码不得解码、裁剪或作为图片资产进入 Markdown；只在 ignored_elements 中记录 type=qr-code 和 action=ignore。
   - 不记录密码、Token、Cookie、Authorization 或订阅地址。

@@ -21,8 +21,10 @@ temp/
 scratch/
 *.tmp
 *.bak
+*.bak-*
 *.draft.md
 *.tmp.md
+work/
 
 # Build and dependency output
 node_modules/
@@ -37,7 +39,8 @@ out/
 *.log
 
 # Automatically generated workflow/test run directories
-runs/real/
+runs/
+runs/pdf-route-detection/
 tests/runs/
 
 # Local engineering audit snapshots (keep locally, never commit)

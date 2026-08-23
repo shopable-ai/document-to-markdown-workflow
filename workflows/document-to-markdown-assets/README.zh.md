@@ -33,28 +33,29 @@
 
 ## 本轮执行边界
 
-当前 active 入口是来源无关的 `adapters/workflow_a_source_runner.py`，默认只生成执行计划；
-对单一 fixture/source 可显式使用 `--execute` 生成确定性 package：
+当前 active 入口是来源无关的 `adapters/workflow_a_source_runner.py`，单一来源默认直接执行确定性转换；
+`--plan-only` 只是显式的无读取诊断模式：
 
 ```bash
 python3 adapters/workflow_a_source_runner.py \
   --source "<SOURCE>" \
   --output-root "<OUTPUT_ROOT>" \
   --pages all \
-  --plan-only
+  --execute
 ```
 
-本轮只对 `tests/fixtures/` source 做了转换和完整测试；不调用在线或局域网视觉模型、不调用 OCR。
-fixture 输出仍是测试证据，不是生产业务结果。
-`archive/legacy-adapters/workflow_a_runner.py` 暂时保留为 `legacy/document-profile` 兼容入口；其固定文档标题、
-页眉过滤、OCR 标题区域、PDF DPI、mac96/SSH/Ollama 和旧 Markdown 模板不得复制到新 runner。
+执行器只加载自身、注册的固定 preflight helper、generic profile 和当前 source；不会为了普通单源转换读取或调用
+dispatcher、batch、legacy runner、optimized runner 或其他历史脚本。视觉模型、OCR、语言修复和质量审计
+仍是独立的显式后续门，不会被隐式串入本入口。
+本轮只对 `tests/fixtures/` source 做了转换和完整测试；fixture 输出仍是测试证据，不是生产业务结果。
+旧 document-profile runner 已删除并从当前 Workflow 排除；其固定文档标题、页眉过滤、OCR 标题区域、PDF DPI、
+mac96/SSH/Ollama 和旧 Markdown 模板不得复制到新 runner。
 详细迁移表见 [来源无关 Runner 设计](../../references/source-runner-design.zh.md) 和
 [遗留代码状态](../../references/legacy-code-status.zh.md)。
 
 正式入口在候选比较和转换前先执行横向 `execution_preflight`。它只检查可廉价确定的
 风险（来源、格式、页码、容器、渲染器、输出碰撞和候选一致性），并写入
-`evidence/preflight.json`；预检通过不等于转换通过，最终仍以独立
-`reports/validation-result.json` 为准。规则和专家推进方式见
+预检只作为内部执行门禁，不会写入默认输出目录；默认转换完成以 `index.md` 与其截图链接可用为准。规则和专家推进方式见
 [执行前风险预检](../../references/execution-preflight.zh.md)。
 
 ## 输入
@@ -76,14 +77,16 @@ fixture 输出仍是测试证据，不是生产业务结果。
 需要一次处理多个 source 时，使用下面的批处理编排器；它不改变上述单包边界：
 
 ```bash
-python3 adapters/workflow_a_batch.py --legacy-compat \
+python3 adapters/workflow_a_batch.py \
   --source "/absolute/path/a.pdf" \
   --source "/absolute/path/b.pdf" \
   --output-root "/absolute/path/output-root" \
   --pages all
 ```
 
-后续 execute 阶段仍由 dispatcher/batch 编排；本轮它们不启动真实转换。单一来源的未来 bounded 入口示例：
+普通单一来源不要调用 dispatcher 或 batch；它们只用于显式候选比较/多文件编排实验。单源固定入口就是上面的
+`workflow_a_source_runner.py --execute`。只有在已经准备好候选比较证据、确实需要 A1-A7 envelope 时，才使用下面的
+bounded dispatcher：
 
 ```bash
 python3 adapters/workflow_a_dispatcher.py \
@@ -94,30 +97,40 @@ python3 adapters/workflow_a_dispatcher.py \
   --pages 3,4
 ```
 
-这里的机器关系是：`workflow_a_dispatcher.py` 负责读取
-`workflow-registry.yaml`/`workflow.yaml`、限制 bounded 页码并记录 A1-A7 执行 envelope；
+这里的机器关系是：`workflow_a_dispatcher.py` 只负责显式 bounded envelope，不是普通转换的前置步骤；
 `workflow_a_candidate_compare.py` 只在显式声明同一逻辑文档候选时生成比较证据；
-`workflow_a_source_runner.py` 是 dispatcher 调用的 active plan-only source runner，只输出来源无关执行计划，
-不能声称 Markdown 转换完成。`archive/legacy-adapters/workflow_a_runner.py` 不属于 active 路径，仅保留为明确指定的
-legacy/document-profile 兼容入口。
+`workflow_a_source_runner.py` 是唯一 active source runner，负责生成来源无关 package；旧 document-profile runner
+已删除，不能从 active 路径或批处理入口恢复调用。
 
 dispatcher 要求显式页码，阻止 bounded 验证意外扩展为 `--pages all`。PDF、PPTX
 和图片必须分别调用，不能因为文件名相近就合并。generic runner 通过 profile 选择
-各格式方案；legacy runner 的旧参数只用于兼容/恢复，不得作为新 source 的默认入口。
+各格式方案；旧 runner 参数不再接受，不得作为新 source 的默认入口。
 
-多个来源如需恢复旧包请显式调用 `python3 adapters/workflow_a_batch.py --legacy-compat`。
+多个来源当前仍不支持生产批量执行；`adapters/workflow_a_batch.py` 会 fail-closed，不得把它当成普通单源入口。
 它是上层队列编排器，不改变
-单文件 runner 的来源隔离：每个 source 都有独立 package、manifest、index.md 和
-`reports/validation-result.json`，批次根目录另写 `run-record.yaml`。默认串行，只有有
+单文件 runner 的来源隔离：每个 source 都有独立 package 和 `index.md`；只有需要语义图片时才有读者层 `assets/`，只有显式工程模式才有 manifest 和报告。批次根目录另写 `run-record.yaml`。默认串行，只有有
 明确 mac96/Ollama 容量证据时才配置有限并发；长文档按页请求，使用 `--context-mode`
 控制严格隔离或受限邻页提示。完整配置、恢复和判定见根目录的
 [多文件队列配置](../../references/workflow-a-batch-config.zh.md)。
 
 ### 长文档 smoke、分批与恢复
 
-长 PDF 不允许直接把 `--pages all` 当成一次不可观测运行。promoted dispatcher/batch 路径必须先处理所选页的前 1–2 页（可用 `--smoke-pages 1-2` 显式指定），写入 `evidence/smoke-report.json`；标题仍是页码、正文和 OCR 候选为空、页面图/Markdown 链接缺失、relation-only 或空语义占位任一关键门禁失败，stdout 会返回失败页、阶段、证据路径和修复建议，并停止后续页。当前 generic source runner 的 deterministic execute 只保留 `smoke-report.json: not-run`，不得把它当成 smoke 通过。
+长 PDF 的生产批量路线仍要求 smoke/checkpoint；普通单源 deterministic execute 会按用户的页码选择直接生成 package，
+并在报告中明确视觉/OCR/质量门的 `not-run` 或 `needs-review`，不会伪造 smoke 通过。
 
-运行期间会在阶段边界追加 `evidence/progress.jsonl`，并把当前阶段、页码、状态、耗时和下一步打印到 stderr；这不等于已经证明 15 秒实时心跳或无进展硬停止。调度器在前置证据未达到终态时不会启动后续脚本；允许的 OCR/视觉降级必须作为当前 Workflow 的明确 fallback 记录。旧恢复脚本和夹具脚本的边界见根目录 [`references/legacy-code-status.zh.md`](../../references/legacy-code-status.zh.md)。
+PDF 的默认生产入口现在是页面级混合路线。文档级预检只决定是否需要进入混合控制器；控制器对每一页固定生成
+`native-only`、`native-plus-visual` 或 `visual-only` 路线记录。原生正文总是先提取或复用；“如图”“表 1”
+“矩阵”“流程图”等文字只建立候选，不会单独触发模型，必须结合 `pdfimages -list` 图片对象及面积、原生 bbox
+大块空白、`pdfplumber.find_tables()` 或候选页本地渲染结构。纯文字页不渲染、不调用视觉模型；“如图”但
+没有图片对象的页保留原生正文并标记 `needs-review`，不得据此臆造图片内容。
+
+原生正文完整且视觉信号得到佐证时，路线为 `native-plus-visual`：同一 `page-units/pNNN.md` 先写原生正文，
+再追加图片说明、表格结构或图示关系，视觉输出不能覆盖原生正文。原生文字为空/不足且有图片、表格或渲染结构
+佐证时才进入 `visual-only`。单页失败会登记到路线记录与 `reports/page-completion.json`，然后继续后续页；最终只有
+所选页无缺页、重页、额外页且每页路线所需证据完整时才能为 `passed`。同一来源断点续跑必须校验 SHA-256、
+页码、已通过路线记录、路线证据与唯一页面标记，不能只凭文件存在复用。
+
+运行期间只在阶段边界追加 `evidence/progress.jsonl`；它是短的阶段账本，不再重复写入每一页的完整证据路径。mac96 路径把最新页状态覆盖写入 `evidence/progress-current.json`，把逐页详情写入 `evidence/progress-pNNN.json`，并把当前阶段、页码、状态、耗时和下一步打印到 stderr。读取运行状态时优先读取 `progress-current.json`；只有调查某一页时才读取对应的 `progress-pNNN.json`，不要把整个 `progress.jsonl` 载入上下文。这不等于已经证明 15 秒实时心跳或无进展硬停止。PDF 页面图只为视觉路线页和需要本地结构佐证的候选页生成；某页图片可读后立即进入该页视觉请求、转写和 page-unit 投影，纯文字页直接保留原生 Markdown。全部选定 page-unit 或失败占位就绪后，执行器先完成全页覆盖报告，再跨页清洗明确噪声。已有且经来源与路线校验的页面图/页面单元直接复用，不需要另起脚本或重复渲染/调用模型。调度器只对当前失败页停止该页的下游视觉步骤，不阻断后续页；允许的 OCR/视觉降级必须作为当前页面路线的明确 fallback 记录。旧恢复脚本和夹具脚本的边界见根目录 [`references/legacy-code-status.zh.md`](../../references/legacy-code-status.zh.md)。
 
 smoke 通过后，用 page-batch 编排器按小批次运行。每批都使用新 package 目录并写 checkpoint，不能覆盖既有真实运行证据：
 
@@ -127,7 +140,7 @@ smoke 通过后，用 page-batch 编排器按小批次运行。每批都使用�
 局域网不可用或结构守卫未通过时，package 仍是 `needs-review`，不能把未执行的在线回退或人工修复写成完成。
 
 ```bash
-python3 adapters/workflow_a_batch.py --legacy-compat \
+python3 adapters/workflow_a_batch.py \
   --source "/absolute/path/long.pdf" \
   --output-root "/absolute/path/output-root" \
   --pages all --smoke-pages 1-2 --batch-size 8
@@ -142,10 +155,10 @@ checkpoint 位于 `page-batch-*/checkpoint.json`。恢复时使用
 [`page-markdown-unit.yaml`](../../contracts/page-markdown-unit.yaml)：
 
 1. 先只拆分和修复第 1 页，页面结构守卫通过后才解锁第 2–5 页。
-2. 第 2–5 页小批量必须经过人工查看和页面结构守卫，之后才允许第 6–100 页。
-3. 修复一页时只读取该页页面单元和该页页面图；OCR JSON、bbox、置信度、逐页 Vision JSON、页面图和原始 `manifest.yaml` 保持只读。
-4. 页面单元按固定字段组织：语义标题、正文、列表/图示文字、表格与公式、解读、举例与思考、模型结构、已确认的关系说明、原始页面图和待核对项。
-5. 合并器按页面编号升序逐字拼接页面单元，保留原始页面图链接，不重新推断、摘要、翻译或补写文字。
+2. 第 2–5 页小批量必须经过人工查看和页面结构守卫，之后才允许第 6–total_pages 页。
+3. 页面图可以在页面修复前批量生成；修复一页时只读取该页页面单元和该页页面图。OCR JSON、bbox、置信度、逐页 Vision JSON、页面图和原始 `manifest.yaml` 保持只读。
+4. 页面单元按固定字段组织：语义标题、正文、列表/图示文字、表格与公式、解读、举例与思考、模型结构、已确认的关系说明、可选原始页面图和待核对项。
+5. 合并器按页面编号升序逐字拼接页面单元，保留 reader image 处置和已有页面图链接，不重新推断、摘要、翻译或补写文字。
 
 `document-temp.md` 是当前已通过页面单元的可审阅派生预览，不能覆盖或替代最终
 `index.md`，也不能成为新的事实来源。未确认的箭头、层级、流程、矩阵或颜色关系只能保留在
@@ -158,6 +171,7 @@ A4 使用 [`vision-page-analysis`](../../skills/vision-page-analysis/SKILL.md)�
 
 - `text.markdown`：图片中实际出现的文字、公式和标签；
 - `visual.visual_analysis`：图表、区域、箭头、分组、层级、比较、颜色编码和未知形式。
+- `visual.visual_analysis.page_content_type/layout_dependency/semantic_visuals/ignored_elements/reader_image_policy`：决定读者 Markdown 是否还需要页面图。纯文本且 Markdown 足够时为 `omit`；二维码只进入 ignored elements，不解码、不裁剪、不作为图片。
 
 关系密集或高风险页面可以显式传 `pass_strategy=dual`，分别执行 `text` 与 `layout` 两个专门 pass。
 适配器是 [`adapters/mac96_vision_page_analysis.py`](../../adapters/mac96_vision_page_analysis.py)，
@@ -166,20 +180,50 @@ A4 使用 [`vision-page-analysis`](../../skills/vision-page-analysis/SKILL.md)�
 Apple Vision OCR；这些 fallback 不能伪造视觉结构完成。旧的 `vision-text-transcription` 和
 `mac96-visual-review` 仅作为兼容别名保留。
 
-分页执行器会在每页 pass 完成后自动写入当前页的
-`evidence/vision-page-analysis-pNNN.json`、`evidence/vision-text-transcription-pNNN.json` 和
-`page-units/pNNN.md`。只有这三类产物都存在且可读取，页面才会被 resume 判定为已完成；
-如果只剩 JSON，resume 会从已有证据补写 Markdown，不会重新调用模型。因此日常提示词只需说明
-来源、输出根目录和页码，不需要重复写“生成 page-units/pNNN.md”。
+分页执行器会为每页写入 `evidence/page-routes/pNNN.json` 和 `page-units/pNNN.md`；只有
+`native-plus-visual`/`visual-only` 才要求对应视觉证据。页面只有在来源、页码、路线记录、路线所需证据和
+页面标记全部通过后才可复用；缺失 Markdown 可从当前已验证证据重建，只有路线确实需要视觉且视觉证据无效时
+才重试当前页模型。因此日常提示词只需说明来源、输出根目录和页码，不需要重复内部路由或 page-unit 规则。
+
+`mac96_pdf_vision_runner.py` 和 `mac96_pdf_vision_resume.py` 都接受
+`--noise-profile <profile.yaml>`。两条路径会等待全部选定 page-unit 就绪，保存独立 scan 证据，确认输入哈希和删除计划未变化后再 apply，最后才逐页调用语言修复。
+
+### 页面页眉页脚噪声清洗
+
+`page-units/pNNN.md` 生成后，先使用
+[`clean-page-markdown-noise`](../../skills/clean-page-markdown-noise/SKILL.md) 和
+[`page-markdown-noise-cleanup.yaml`](../../contracts/page-markdown-noise-cleanup.yaml)，再进入语言模型内容修复。
+
+这一步是本地确定性文本处理，不打开页面图，也不读取 OCR JSON、bbox、置信度、Vision JSON 或
+`manifest.yaml`。默认先 scan：统计跨页重复的页首/页尾短行、OCR 拼写变体、原始页面图链接前页码和
+首尾 `---`，记录每个文件输入哈希并输出逐行拟删除清单。不同文档的页眉文字通过运行级 exact、regex、
+fuzzy profile 扩展，不把某本书或某个品牌的固定字符串写入通用 Workflow。
+
+只有页首/页尾安全区或由至少两个独立模板规则组成的相邻模板块可以自动删除。profile 命中但落在正文中的
+独立同名行必须保留为 `suspects`；页码只在原始页面图链接前删除，正文编号保持不变；`---` 只在其他
+允许删除项移除后成为第一个或最后一个非空行时删除。apply 前重新检查全部输入哈希，只原子重写实际命中
+文件，写后必须证明所有文件非空、保留行可逐字重建且页面图路径行没有变化。
+
+```bash
+python3 adapters/page_markdown_noise_cleanup.py \
+  --page-units "/absolute/path/page-units" --pages all \
+  --profile references/reader-noise-profile.yaml \
+  --evidence "/absolute/path/evidence/page-markdown-noise-cleanup.json"
+
+python3 adapters/page_markdown_noise_cleanup.py \
+  --page-units "/absolute/path/page-units" --pages all \
+  --profile references/reader-noise-profile.yaml --apply \
+  --evidence "/absolute/path/evidence/page-markdown-noise-cleanup.json"
+```
 
 ### 页面 Markdown 修复
 
-`page-units/pNNN.md` 生成后，A5 立即进入
+确定性页眉页脚清洗完成后，A5 才进入
 [`markdown-content-repair`](../../skills/markdown-content-repair/SKILL.md)。这一步不是再次看图：
 它只把当前页 Markdown 发送给局域网 `mac96` 上的语言模型，修复断词、错误换行、段落粘连、
 列表/标题结构和局部标点。默认模型标识为 `qwen3.6:latest`，实际可由运行配置覆盖。
 
-局域网结果先通过页面编号、原始页面图链接、读者层字段和 `Unknown/needs-review` 关系边界检查，
+局域网结果先通过页面编号、reader image 处置、已有页面图链接、读者层字段和 `Unknown/needs-review` 关系边界检查，
 通过后才原子写回当前 `page-units/pNNN.md`，并写入
 `evidence/markdown-content-repair-pNNN.json` 与 `reviews/markdown-content-repair.yaml`。
 这组检查就是页面修复的完整验证，不再额外运行 pytest 或页面独立 validator；完整资产包的
@@ -212,37 +256,27 @@ python3 adapters/workflow_a_dispatcher.py \
 
 ## 输出资产包
 
-具体字段由 [markdown-asset-package.yaml](../../contracts/markdown-asset-package.yaml) 和 [source-visual-asset.yaml](../../contracts/source-visual-asset.yaml) 定义。典型目录如下：
+默认输出契约见 [reader-markdown-output-layout.yaml](../../contracts/reader-markdown-output-layout.yaml)。纯文本结果只有 `index.md`；确有语义图片时目录为：
 
 ```text
-<output_root>/<package-id>/
+<output_root>/<来源名称>-<时间>/
 ├── index.md
-├── manifest.yaml
 ├── assets/
 │   ├── <short-semantic-slug>.png
 │   ├── <short-semantic-slug>-02.png
-│   └── ...             # page-render/embedded-media/complex-region 由 manifest 区分
-├── evidence/
-│   ├── source-inventory.json
-│   ├── native-content-model.json
-│   ├── reconciliation.json
-│   └── visual-reconstruction-profile.yaml  # 复杂资产适用时；结构 + 可复用提示词
-├── reports/
-│   ├── processing-report.yaml
-│   ├── acceptance-report.yaml
-│   ├── failure-report.yaml
-│   └── validation-result.json  # runner 自动写入的独立验收结果
+│   └── ...             # 仅保留 index.md 实际引用的语义图片
 ```
 
-`index.md`、`manifest.yaml`、`assets/` 和 `reports/` 才是正式业务结果；`evidence/` 是辅助证据，不能替代主结果。对复杂结构或明确需要重新生成的图片，`visual-reconstruction-profile.yaml` 是随资产包保留的下游重建输入；它不能替代原图，也不能证明生成图片与来源等价。视觉资产语义筛选报告则记录为什么某些页面图不再进入读者层，并保留被移除文件的哈希和来源页码；筛选只移除读者层引用，`assets/`、manifest 资产和 `source_occurrences` 必须保留。未获批准的页码由 `classify_visual_assets_mac96.py` 生成 `candidate-only` 报告，不能自动删除。
+默认运行不会生成 `manifest.yaml`、`evidence/`、`reports/`、`page-units/`、`document-temp.md`、JSON 或其他工程过程文件；也不会提取未被 Markdown 引用的嵌入媒体或区域图。若要保留完整工程登记，显式加 `--engineering-output`，其输出改由 [markdown-asset-package.yaml](../../contracts/markdown-asset-package.yaml) 约束。
+目录名优先保留来源标题，并追加本地时间戳；来源哈希仍保存在工程元数据里，不再默认暴露到目录名。
 
 ### Workflow A 与集合阅读包的命名边界
 
-Workflow A 的正式转换包继续使用：
+Workflow A 的默认转换包使用：
 
 ```text
-index.md = 转换后的完整正文
-page-units/ = 工程过程中的逐页工作单元
+index.md = 转换后的关键点 Markdown
+assets/ = 可选；index.md 实际引用且 Markdown 无法替代的语义图片
 ```
 
 当已有页面单元被另行整理为读者层集合时，才使用
@@ -257,25 +291,35 @@ total.md = 原 index.md 所承载的完整合并正文
 因此，不能把 Workflow A 的 `index.md` 全局替换成 `total.md`；只有集合阅读包内部才采用
 “`index.md` 索引 + `total.md` 合并全文”的双文件结构。
 
+### 可选的电子书知识库低价值页清洗
+
+电子书用于 AI 检索知识库时，可在全部 `page-units/` 生成、分组复制或并发结果汇合完成后，
+调用 [`prune-low-value-ebook-pages`](../../skills/prune-low-value-ebook-pages/SKILL.md)。它先生成
+哈希锁定的预览计划，再按已明确批准的页码整页删除目录、版权/出版说明、推广领取、书目推荐
+或空白装饰页。前言、导读、术语表、附录、参考文献和主题索引默认进入人工复核，不按位置自动删除。
+
+该步骤是知识库/读者导出的可选后置环节，不属于 Workflow A 的 A1–A7 验收，也不改变原运行
+状态。优先对复制后的知识库工作副本执行；若直接清理 engineering package 的 `page-units/`，
+该目录不再代表全页工程输出。清洗只删除选定 `pNNN.md`，不会同步修改已存在的 `index.md`、
+`total.md` 或集合包，因此这些下游文件必须从保留页重新生成。
+
 ### 读者层与工程层
 
 | 层 | 读什么 | 不放什么 |
 |---|---|---|
 | 读者层 | `index.md`：标题、主题、正文、列表/表格、已裁决的关系说明和必要页面图链接 | bbox、对象 ID、模型调用、token、fallback、OCR 诊断或其他运行细节 |
-| 工程层 | `evidence/`：原生模型、mac96/Apple Vision 请求响应、渲染和复核范围、复杂资产的视觉重建 profile；`manifest.yaml`：资产 ID、哈希、来源出现记录和 profile 回指；`reports/`：处理、验收、失败、独立 validator 状态 | 不把工程证据当成读者正文，不用 runner 自报状态替代独立验收 |
+| 工程层 | 默认不落盘；显式 `--engineering-output` 时才写入 `evidence/`、`manifest.yaml` 和 `reports/` | 不把工程证据当成读者正文 |
 
-`manifest.yaml` 连接文件名、资产和来源指纹；`reports/` 解释本次 package 是否可用；
-`evidence/` 允许维护者重读输入、复核降级路径和定位问题。三者都服务工程追溯，
-不应复制进 `index.md`。
+工程登记文件只在显式诊断模式下生成，不应复制进 `index.md`。
 
 ### Markdown 默认阅读顺序与形式选择
 
-常见图文页面按“标题 → 主题/对比 → 内容要点、列表、表格或分区 → 图示说明（有已裁决关系时） → 原始页面图”输出。这个顺序是默认阅读 profile，不是所有 PDF、图片或其他文档的统一模板；文字型、表格/图表型、流程/矩阵型、低质量扫描、多栏或跨页内容应按实际结构选择 Markdown 表达。来源指纹、bbox、对象 ID、字体、渲染命令、OCR 候选、模型调用和未决诊断只进入 `evidence/`、`manifest.yaml` 或 `reports/`，不得混入读者层。
+常见图文页面按“标题 → 主题/对比 → 内容要点、列表、表格或分区 → 图示说明（有已裁决关系时） → 原始页面图”输出。这个顺序是默认阅读 profile，不是所有 PDF、图片或其他文档的统一模板；文字型、表格/图表型、流程/矩阵型、低质量扫描、多栏或跨页内容应按实际结构选择 Markdown 表达。来源指纹、bbox、对象 ID、字体、渲染命令、OCR 候选、模型调用和未决诊断不得混入默认读者层；它们仅在显式 `--engineering-output` 模式下进入工程文件。
 
 资产文件采用双名制：`file_name` 使用最短英文语义组成的稳定 ASCII 名称，
 例如 `time-quadrants.png`；页码、稳定 ID、
-来源指纹、SHA-256、asset kind、用途和 ordinal 只进入 manifest，不作为随机前缀或技术字段
-暴露在文件名中。原始文件名只作为 `original_filename` 证据保存。
+来源指纹、SHA-256、asset kind、用途和 ordinal 默认不进入读者包，也不作为随机前缀或技术字段
+暴露在文件名中。需要工程追溯时显式启用 `--engineering-output`。
 
 正式 Workflow 包和读者导出都使用扁平的 `assets/`。页面图、嵌入媒体和复杂区域图由
 manifest 的 `asset_kind`、来源位置和 occurrence 区分；已有 Markdown 交给
@@ -290,11 +334,11 @@ A1–A7 是当前 Workflow 的运行阶段，不是完整的工程任务树。�
 1. **A1 来源预检**：识别文件类型、页数、文字层和可解析性。
 2. **A2 原生内容提取**：当前 active runner 优先解析 PPTX XML 或 PDF 布局；DOCX OOXML 仍是未接入生产入口的扩展路线。
 3. **A3 视觉来源资产保留**：保留整页图和嵌入媒体；只有整页图无法支撑复杂关系复核时才生成区域图，不能为了满足目录而重复截图。
-4. **A4 页面视觉理解与文字层降级**：原生结构提取后，默认通过 `ssh mac96` 的
-   `vision-page-analysis` 以 `full + single` 读取当前单图，一次生成 Markdown 和视觉结构；
-   关系密集或高风险页面才显式使用 `dual`。文字层不可用时才调用当前对话视觉模型或本机
-   Apple Vision OCR；文字候选和视觉结构必须分层写入 `evidence/`，不得覆盖原生事实，也不得
-   用 OCR 伪造视觉关系。复杂结构或明确重建意图的资产，额外保存 visual reconstruction profile。
+4. **A4 文字识别、Markdown 结构重建与广告策略**：原生结构提取后，将 Apple Vision OCR 加
+   确定性结构重建、mac96 小视觉模型和 mac96 30B 作为候选路线，用同一真实页面集比较后选择。
+   每页依次保留不可变的原始文字证据、重建标题/自然段/目录/列表的 Markdown 候选，以及独立广告
+   策略结果；提取和结构重建不得删除微信号、推广语或二维码附近说明。复杂结构或明确重建意图的
+   资产，额外保存 visual reconstruction profile。
 5. **A5 Markdown 组装与视觉资产语义筛选**：建立页面/章节结构、关系说明和视觉链接；只从读者层移除已被可靠文字覆盖且没有视觉增量的封面、目录或纯文字页面图，保留复杂图示和关系布局及其来源资产登记。
 6. **A6 命名与来源登记**：处理语义命名、来源出现记录、内容去重和筛选后的资产登记。
 7. **A7 资产包验收**：执行链接、完整性、追溯性和不确定性检查。
@@ -308,11 +352,12 @@ PPTX 页面图必须来自 PPTX 自身的 Office 渲染；PDF 页面图必须来
 
 ## 成本与外部调用边界
 
-- 默认使用本地解析和渲染；图片文字优先走 `ssh mac96` 视觉转写，不先调用 Apple Vision OCR。
-- 每次 mac96 尝试都必须写入运行证据；不可用、超时或不可解析时先降级到当前对话在线视觉模型，
-  再在当前对话模型不可用时降级到 Apple Vision OCR。三者均失败时是 `failed/unavailable`，不是自动
-  `needs-review`。mac96 成功返回非空可解析 Markdown 后，不再调用后续路径，也不能因为没有可选
-  `unknown_forms` 字段而强制降级。
+- 默认使用本地解析和渲染；扫描图片文字没有固定识别优先级。Apple Vision OCR 加确定性结构重建、
+  mac96 小视觉模型和 mac96 30B 必须按真实页面的标题层级、正文分段、目录、列表、页眉页脚、标点、
+  跨页连续性、异常内容保留、耗时和资源证据比较后选路由。
+- 每次尝试都必须写入运行证据；不可用、超时、不可解析或质量守卫失败时，只能升级到下一条已经
+  校准且获得授权的候选路线。所有候选均失败时是 `failed/unavailable` 或有明确证据的 `needs-review`。
+  非空 Markdown、SSH/HTTP 成功或模型清单不能代替结构质量证明。
 - 当前对话在线视觉模型只允许读取当前这一张图片，不创建独立 HTTP/SSH 适配器；其他外部在线视觉模型
   仍不是默认兜底，只有用户另行明确授权时才可调用，并必须单独记录成本、输入范围和结果。
 - 本 Workflow 不调用 GPT-image-2，不生成 PPTX、PDF 或 SVG。
@@ -321,7 +366,7 @@ PPTX 页面图必须来自 PPTX 自身的 Office 渲染；PDF 页面图必须来
 
 - 输入损坏或不支持：`source-invalid` / `unsupported-format`；
 - 本地解析或渲染暂时失败：`extract-timeout` / `render-failed`，允许重试；
-- mac96、当前对话在线视觉模型或 Apple Vision OCR 不可用：保留原生结果和视觉资产，分别标记
+- Apple Vision OCR、mac96 小模型、mac96 30B 或明确授权的当前对话在线视觉模型不可用：保留原生结果和视觉资产，分别标记
   `visual-transcription-unavailable`、`conversation-vision-unavailable`、`ocr-unavailable` 或 `failed`，
   不得声称图片内容已完成提取；
 - 真实失败、冲突和未裁决关系必须进入 `Unknown`、`needs-review` 或失败报告，不能静默删除；未执行开放集合扫描本身不是失败，必须在 evidence 中写明实际复核范围。

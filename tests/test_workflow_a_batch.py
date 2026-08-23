@@ -67,34 +67,6 @@ def test_batch_config_rejects_secret_keys(tmp_path):
         module.load_config(config)
 
 
-def test_context_mode_is_registered_in_runner_help():
-    result = subprocess.run([sys.executable, str(ROOT / "archive/legacy-adapters/workflow_a_runner.py"), "--help"], capture_output=True, text=True)
-    assert result.returncode == 0
-    assert "--context-mode" in result.stdout
-    assert "--context-window" in result.stdout
-
-
-def test_run_batch_requires_independent_package_acceptance(monkeypatch, tmp_path):
-    module = _module()
-    source = tmp_path / "source.pdf"
-    source.write_bytes(b"pdf-fixture")
-
-    def fake_runner(command, timeout):
-        output_root = Path(command[command.index("--output-root") + 1])
-        package_name = command[command.index("--package-name") + 1]
-        package = output_root / package_name
-        (package / "reports").mkdir(parents=True)
-        (package / "reports/validation-result.json").write_text(json.dumps({"status": "passed"}), encoding="utf-8")
-        return {"command": "fake", "started_at": "now", "finished_at": "now", "status": "complete", "returncode": 0, "stdout": json.dumps({"status": "passed", "output": str(package)}), "stderr": ""}
-
-    monkeypatch.setattr(module, "_run_command", fake_runner)
-    code, state = module.run_batch([source], tmp_path / "out", legacy_compat=True)
-    assert code == 0
-    assert state["status"] == "succeeded"
-    assert state["summary"]["passed"] == 1
-    assert state["outputs"]
-
-
 def test_page_selector_and_batches_are_deterministic():
     module = _module()
     assert module.parse_page_selector("1-3,7", 10) == [1, 2, 3, 7]
@@ -108,8 +80,8 @@ def test_page_batch_checkpoint_rejects_changed_source(tmp_path):
     source.write_bytes((ROOT / "tests/fixtures/18个工作思维模型-last-2-slides/source/18个工作思维模型.pdf").read_bytes())
     checkpoint = tmp_path / "checkpoint.json"
     checkpoint.write_text(json.dumps({"source_sha256": "different"}), encoding="utf-8")
-    with pytest.raises(ValueError, match="SHA-256"):
-        module.run_page_batches(source, tmp_path / "out", "1", "1", 1, checkpoint, legacy_compat=True)
+    with pytest.raises(ValueError, match="not promoted"):
+        module.run_page_batches(source, tmp_path / "out", "1", "1", 1, checkpoint)
 
 
 def test_batch_help_exposes_smoke_and_checkpoint_controls():
@@ -120,33 +92,7 @@ def test_batch_help_exposes_smoke_and_checkpoint_controls():
     assert "--resume-pages" in result.stdout
 
 
-def test_page_batch_stops_on_failed_independent_validator(monkeypatch, tmp_path):
-    module = _module()
-    source = tmp_path / "source.pdf"
-    source.write_bytes((ROOT / "tests/fixtures/18个工作思维模型-last-2-slides/source/18个工作思维模型.pdf").read_bytes())
-
-    def fake_runner(command, timeout):
-        output_root = Path(command[command.index("--output-root") + 1])
-        package_name = command[command.index("--package-name") + 1]
-        package = output_root / package_name
-        (package / "evidence").mkdir(parents=True)
-        (package / "reports").mkdir()
-        pages = [int(value) for value in command[command.index("--pages") + 1].split(",")]
-        failed = pages == [25]
-        (package / "evidence/smoke-report.json").write_text(json.dumps({"status": "passed", "checked_pages": pages}), encoding="utf-8")
-        (package / "reports/validation-result.json").write_text(json.dumps({"status": "failed" if failed else "needs-review", "failures": [{"code": "fixture-failure"}] if failed else []}), encoding="utf-8")
-        return {"command": "fake", "started_at": "now", "finished_at": "now", "status": "complete", "returncode": 1 if failed else 0, "stdout": json.dumps({"status": "needs-review", "output": str(package)}), "stderr": ""}
-
-    monkeypatch.setattr(module, "_run_command", fake_runner)
-    code, state = module.run_page_batches(source, tmp_path / "out", "24-25", "24", 1, legacy_compat=True)
-    assert code == 1
-    assert state["status"] == "needs-review"
-    assert state["stop_reason"]["batch_index"] == 2
-    assert state["stop_reason"]["stage"] == "batch-validation"
-    assert state["next_page"] == 25
-
-
-def test_batch_cli_is_fail_closed_without_legacy_compat(tmp_path):
+def test_batch_cli_is_fail_closed_until_generic_execute_is_promoted(tmp_path):
     source = tmp_path / "source.pdf"
     source.write_bytes(b"pdf-fixture")
     result = subprocess.run(
@@ -155,4 +101,4 @@ def test_batch_cli_is_fail_closed_without_legacy_compat(tmp_path):
         text=True,
     )
     assert result.returncode == 2
-    assert "legacy-compat" in result.stderr
+    assert "not promoted" in result.stderr

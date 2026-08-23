@@ -1,0 +1,4 @@
+interface:
+  display_name: "电子书低价值页清洗"
+  short_description: "在知识库导入前预览并删除电子书目录、版权、推广等低价值页面"
+  default_prompt: "使用 $prune-low-value-ebook-pages 清理这份电子书知识库工作副本中的低价值页面，先预览删除计划，再按已批准计划执行。"

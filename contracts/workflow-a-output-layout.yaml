@@ -1,6 +1,6 @@
 contract: workflow-a-output-layout
 version: 0.2.0
-description: Workflow A 成功运行时的最终交付目录；过程证据不得替代这些结果文件。
+description: Workflow A 显式 --engineering-output 模式的完整工程交付目录；默认 reader-only 转换不使用此布局。
 root: <output_root>/<package-name>/
 required_files:
   - index.md

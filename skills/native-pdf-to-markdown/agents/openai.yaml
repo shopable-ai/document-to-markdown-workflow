@@ -1,0 +1,4 @@
+interface:
+  display_name: "原生 PDF 转 Markdown"
+  short_description: "用纯原生文字路线批量转换可读文字层 PDF"
+  default_prompt: "使用 $native-pdf-to-markdown 把这份 PDF 按原生文字路线转成 Markdown，先验证文字层，再按当前页范围执行。"

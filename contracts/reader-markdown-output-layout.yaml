@@ -1,0 +1,25 @@
+contract: reader-markdown-output-layout
+version: 1.1.0
+description: Workflow A 默认交付的最小读者包；纯文本结果可只有 index.md，存在必要读者图片时才创建 assets/。
+root: <output_root>/<package-name>/
+required_files:
+  - index.md
+required_directories: []
+optional_directories:
+  - assets/
+forbidden_files:
+  - manifest.yaml
+  - reports/
+  - evidence/
+  - page-units/
+  - document-temp.md
+  - workflow-a-source-plan.json
+invariants:
+  - index.md 是关键点 Markdown 主文档；来源文件名、页码、哈希和内部诊断不得写入读者层
+  - assets/ 只包含图片文件
+  - index.md 没有图片链接时允许不创建 assets/；不得为了满足目录形状保留空目录或整页纯文字截图
+  - assets/ 中每个文件都必须被 index.md 的 Markdown 图片链接引用
+  - index.md 的每个图片链接必须指向当前包内存在的 assets/ 文件
+  - 页面截图不是默认必需项；只保留模型明确判定仍有独立语义价值且被 Markdown 引用的读者图片
+  - 二维码不作为读者图片，不解码、不裁剪、不生成独立资产
+  - 默认运行不生成 manifest、reports、evidence、page-units 或其他工程过程文件

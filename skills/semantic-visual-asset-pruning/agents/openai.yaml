@@ -1,4 +1,4 @@
 interface:
-  display_name: "视觉资产语义筛选"
-  short_description: "识别并移除已被 Markdown 文字覆盖的冗余页面视觉资产"
-  default_prompt: "使用 $semantic-visual-asset-pruning 筛选 Markdown 资产包中的冗余页面图。"
+  display_name: "清理冗余页面图"
+  short_description: "日常可以说“清理冗余页面图”或“清理多余的文字图片”，需要时再补充范围、预览或删除要求"
+  default_prompt: "清理冗余页面图；也可以说：清理多余的文字图片"

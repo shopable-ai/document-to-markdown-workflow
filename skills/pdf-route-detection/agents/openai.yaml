@@ -1,0 +1,4 @@
+interface:
+  display_name: "PDF 路由检测"
+  short_description: "批量判断 PDF 更适合原生、混合还是视觉转换"
+  default_prompt: "使用 $pdf-route-detection 先做文档级本地预检；执行混合文档时逐页选择 native-only、native-plus-visual 或 visual-only。文字提示仅作候选，必须结合图片对象/面积、bbox 空白、pdfplumber 表格或本地渲染结构；纯文字页不调用视觉模型，逐页失败继续并在最终覆盖报告中列出。"

@@ -1,0 +1,43 @@
+contract: recognition-route-quality-assessment
+version: 0.1.0
+description: 对真实页面识别路线进行人工可复核的结构质量验收；非空输出和文件存在不能替代本契约。
+input:
+  required: [contract, version, source_fingerprint, benchmark_report, assessments, route_selection]
+assessment:
+  required:
+    - route
+    - page
+    - image_sha256
+    - status
+    - dimensions
+    - silent_omission_count
+    - hallucinated_structure_count
+    - advertising_policy
+  status: enum[passed, needs-review]
+  dimensions:
+    required:
+      - heading_hierarchy
+      - paragraph_segmentation
+      - table_of_contents
+      - lists
+      - header_footer
+      - punctuation
+      - cross_page_continuity
+      - anomalous_content_preservation
+    item_required: [verdict, evidence, note]
+    verdict: enum[pass, fail, needs-review, not-applicable]
+  advertising_policy:
+    required: [mode, changed_or_deleted_visible_text]
+    mode: preserve-only
+    changed_or_deleted_visible_text: false
+route_selection:
+  required: [selected_default, rule, fallback]
+  selected_default_before_all_candidates_complete: calibration-pending
+invariants:
+  - 每个可评审 benchmark record 必须有且只有一个同 route、page、image_sha256 的 assessment。
+  - 每个基准页必须评审 Apple Vision OCR 加确定性结构重建结果。
+  - 任一适用质量维度为 fail 或 needs-review 时，该页路线不得为 passed。
+  - silent_omission_count 或 hallucinated_structure_count 大于零时，该页路线不得为 passed。
+  - 广告策略固定 preserve-only，任何可见文字删除或改写都使验收失败。
+  - 小模型或 30B 缺少真实记录时不得选定生产默认路线。
+  - 非空文本、文件存在、Markdown 可打开、模型清单或请求成功均不能替代人工可复核证据。

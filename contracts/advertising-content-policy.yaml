@@ -1,0 +1,54 @@
+contract: advertising-content-policy
+version: 0.1.0
+description: 广告与推广内容的独立后置分类及处理契约；基础提取必须保留全部可见文字。
+stage: advertising-classification-and-treatment
+depends_on:
+  - text-recognition
+  - markdown-structure-reconstruction
+default_mode: preserve-only
+modes:
+  - preserve-only
+  - classify-and-mark
+  - hide-in-reader-view
+  - delete-from-derived-view
+candidate_classes:
+  - contact-information
+  - qr-code-adjacent-copy
+  - promotional-call-to-action
+  - publisher-or-author-branding
+  - document-content
+  - unknown
+input:
+  immutable:
+    - source
+    - page-render
+    - raw-ocr
+    - raw-vision-response
+    - source-manifest
+  required:
+    - source_fingerprint
+    - page
+    - source_span
+output:
+  required:
+    - policy_version
+    - mode
+    - source_fingerprint
+    - page
+    - source_span
+    - candidate_classification
+    - confidence
+    - reason
+    - recommended_action
+    - applied_action
+    - input_sha256
+    - output_sha256
+  confidence: enum[high, medium, low, unknown]
+invariants:
+  - 基础 OCR 和视觉提取提示词不得包含广告删除、隐藏、净化或改写指令。
+  - 微信号、二维码附近说明和推广语必须先作为来源文字保留。
+  - 二维码图形不解码、不裁剪、不作为读者图片，但邻近可见文字不得删除。
+  - preserve-only 模式下 applied_action 必须为 preserve，input_sha256 必须等于 output_sha256。
+  - hide 或 delete 只能作用于派生读者视图，不能修改不可变输入。
+  - candidate_classification 不是来源事实；证据不足时必须为 unknown。
+forbidden_fields: [api_key, authorization, cookie, secret, subscription_url]

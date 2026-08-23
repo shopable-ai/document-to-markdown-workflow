@@ -70,11 +70,35 @@ def test_page_selector_is_deterministic():
     assert parse_page_selector("5,2-4,4") == [2, 3, 4, 5]
 
 
+def test_page_selector_supports_large_documents_beyond_100_pages():
+    assert parse_page_selector("6-135") == list(range(6, 136))
+
+
+def test_page_selector_supports_total_pages_marker():
+    assert parse_page_selector("6-total_pages", total_pages=135) == list(range(6, 136))
+
+
+def test_page_selector_requires_total_pages_for_dynamic_marker():
+    with pytest.raises(PageUnitError, match="requires total_pages"):
+        parse_page_selector("6-total_pages")
+
+
 def test_validate_page_unit_preserves_required_boundaries():
     result = validate_unit_text(page_unit(1, "机会成本模型", "assets/pages/p001.png"), expected_page=1, expected_image="assets/pages/p001.png")
     assert result["status"] == "passed"
     assert result["relation_status"] == "needs-review"
     assert result["checks"]["formula_standalone"] is True
+
+
+def test_validate_text_only_page_unit_without_image():
+    text = page_unit(1, "机会成本模型", "assets/pages/p001.png")
+    text = text.replace("<!-- relation-status: needs-review -->", "<!-- relation-status: needs-review -->\n<!-- reader-image-action: omit -->")
+    text = text.replace("\n## 原始页面图\n\n![原始页面图](assets/pages/p001.png)\n", "")
+
+    result = validate_unit_text(text, expected_page=1)
+
+    assert result["reader_image_action"] == "omit"
+    assert result["image"] is None
 
 
 def test_merge_sorts_units_without_rewriting_text(tmp_path: Path):
@@ -112,3 +136,26 @@ def test_single_page_split_stops_before_later_page_body(tmp_path: Path):
     output = tmp_path / "p001.md"
     split_pages(source, [1], None, output, None)
     assert "assets/pages/p001.png" in output.read_text(encoding="utf-8")
+
+
+def test_split_cli_can_infer_total_pages_for_dynamic_full_batch_selector(tmp_path: Path):
+    source = tmp_path / "index.md"
+    source.write_text(
+        "## 一\n\n正文\n\n![图](assets/pages/p001.png)\n\n"
+        "## 二\n\n正文\n\n![图](assets/pages/p002.png)\n\n"
+        "## 三\n\n正文\n\n![图](assets/pages/p003.png)\n\n"
+        "## 四\n\n正文\n\n![图](assets/pages/p004.png)\n\n"
+        "## 五\n\n正文\n\n![图](assets/pages/p005.png)\n\n"
+        "## 六\n\n正文\n\n![图](assets/pages/p006.png)\n",
+        encoding="utf-8",
+    )
+    gate = tmp_path / "p002-p005-validation.json"
+    gate.write_text(json.dumps({"status": "passed", "scope": "small-batch-2-5"}), encoding="utf-8")
+    paths = split_pages(
+        source,
+        parse_page_selector("6-total_pages", total_pages=6),
+        tmp_path / "units",
+        None,
+        gate,
+    )
+    assert paths == [tmp_path / "units/p006.md"]

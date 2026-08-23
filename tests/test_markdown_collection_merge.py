@@ -63,6 +63,8 @@ def test_collection_merge_preserves_units_and_rewrites_assets(tmp_path: Path):
     assert '<a id="model-002"></a>' in total
     assert "# 测试合集｜合并全文" in total
     assert "# 测试合集｜索引" in index
+    assert "保存 2 个页面单元" in index
+    assert "100 个模型" not in index
     assert "needs-review" not in total
     assert "needs-review" not in index
     assert "assets/page-001.png" in total

@@ -4,40 +4,69 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
 try:
-    from workflow_a_legacy_loader import (
-        media_type_for,
-        parse_pages,
-        pdf_info,
-        pdf_layout_model,
-        pptx_native_model,
-        pptx_slide_count,
-        render_source,
-        render_visibility_evidence,
-        sha256,
-        source_slug,
+    from workflow_a_source_runner import (
+        available_page_numbers,
+        extract_pdf_native,
+        extract_pptx_native,
         now,
-        write_render_fontconfig,
+        parse_pages,
+        render_pages,
+        sha256,
     )
 except ImportError:  # pragma: no cover
-    from .workflow_a_legacy_loader import (
-        media_type_for,
-        parse_pages,
-        pdf_info,
-        pdf_layout_model,
-        pptx_native_model,
-        pptx_slide_count,
-        render_source,
-        render_visibility_evidence,
-        sha256,
-        source_slug,
+    from .workflow_a_source_runner import (
+        available_page_numbers,
+        extract_pdf_native,
+        extract_pptx_native,
         now,
-        write_render_fontconfig,
+        parse_pages,
+        render_pages,
+        sha256,
     )
+
+
+def source_slug(path: Path) -> str:
+    """Create a deterministic evidence-directory name without source semantics."""
+    slug = re.sub(r"[^a-z0-9]+", "-", path.stem.lower()).strip("-")
+    return slug or "source"
+
+
+def media_type_for(path: Path) -> str:
+    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def _native_model(path: Path, kind: str, pages: list[int]) -> dict:
+    return extract_pptx_native(path, pages) if kind == "pptx" else extract_pdf_native(path, pages)
+
+
+def render_visibility_evidence(rendered: dict[int, Path], native: dict, pages: list[int]) -> dict:
+    """Record deterministic coverage without claiming pixel-level OCR proof."""
+    blocks_by_page = {
+        int(page.get("page")): len(page.get("text_blocks") or [])
+        for page in native.get("pages", [])
+        if isinstance(page, dict) and page.get("page") is not None
+    }
+    rows = [
+        {
+            "page": page,
+            "rendered": page in rendered,
+            "native_text_blocks": blocks_by_page.get(page, 0),
+            "visible_text_regions": blocks_by_page.get(page, 0) if page in rendered else 0,
+            "status": "needs-review" if page not in rendered else "not-pixel-verified",
+        }
+        for page in pages
+    ]
+    return {
+        "status": "complete" if all(item["rendered"] for item in rows) else "needs-review",
+        "verification": "render-coverage-only; pixel visibility not independently verified",
+        "pages": rows,
+    }
 
 
 def source_type(path: Path) -> str:
@@ -45,9 +74,7 @@ def source_type(path: Path) -> str:
 
 
 def total_pages(path: Path, kind: str) -> int:
-    if kind == "pptx":
-        return pptx_slide_count(path)
-    return int(pdf_info(path)[0].get("Pages", 0) or 0)
+    return len(available_page_numbers(path, ".pptx" if kind == "pptx" else ".pdf"))
 
 
 def normalized_text(model: dict) -> str:
@@ -61,10 +88,9 @@ def candidate_record(path: Path, pages: list[int], root: Path) -> dict:
     assets = root / f"{source_slug(path)}-assets"
     evidence.mkdir(parents=True, exist_ok=True)
     assets.mkdir(parents=True, exist_ok=True)
-    fontconfig = write_render_fontconfig(evidence)
-    native = pptx_native_model(path, pages, fontconfig) if kind == "pptx" else pdf_layout_model(path, pages)
-    rendered, rendering = render_source(path, kind, assets, evidence, pages, source_slug(path), fontconfig)
-    visibility = render_visibility_evidence(rendered, native)
+    native = _native_model(path, kind, pages)
+    rendered, rendering = render_pages(path, path.suffix.lower(), assets, pages)
+    visibility = render_visibility_evidence(rendered, native, pages)
     text = normalized_text(native)
     char_count = len(text)
     render_coverage = len(rendered) / max(1, len(pages))
@@ -118,9 +144,7 @@ def compare(source_a: Path, source_b: Path, pages: list[int], root: Path) -> dic
 
 def _native_for_compare(path: Path, pages: list[int]) -> dict:
     kind = source_type(path)
-    if kind == "pptx":
-        return pptx_native_model(path, pages)
-    return pdf_layout_model(path, pages)
+    return _native_model(path, kind, pages)
 
 
 def main() -> int:
@@ -138,7 +162,10 @@ def main() -> int:
         parser.error("candidate comparison requires one PPTX and one PDF")
     total = min(total_pages(source_a, source_type(source_a)), total_pages(source_b, source_type(source_b)))
     try:
-        pages = parse_pages(args.pages, total)
+        requested = parse_pages(args.pages)
+        pages = list(range(1, total + 1)) if requested is None else requested
+        if not pages or not set(pages).issubset(set(range(1, total + 1))):
+            raise ValueError(f"selected pages are outside shared candidate range 1-{total}")
     except ValueError as exc:
         parser.error(str(exc))
     output_path = args.output.expanduser().resolve()

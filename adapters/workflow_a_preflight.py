@@ -321,8 +321,8 @@ def run_preflight(
         else:
             current_policy = None
             external_policy = online_policy
-        if current_policy != "fallback-after-mac96-only" or external_policy != "explicit-authorization-only":
-            checks.append(_check("authorization-policy", "cross-cutting", "failed", "当前对话 fallback 或外部在线 provider 的授权策略不完整。", "保留 mac96 优先、当前对话仅在 mac96 失败后使用，并保持外部 provider 显式授权。", severity="P0", evidence=[str(WORKFLOW)]))
+        if current_policy != "explicit-authorized-candidate-only" or external_policy != "explicit-authorization-only":
+            checks.append(_check("authorization-policy", "cross-cutting", "failed", "当前对话候选路线或外部在线 provider 的授权策略不完整。", "当前对话路线必须由当前任务显式授权并经过真实基准/页面质量门；外部 provider 保持显式授权。", severity="P0", evidence=[str(WORKFLOW)]))
         else:
             checks.append(_check("authorization-policy", "cross-cutting", "passed", "当前对话在线视觉模型仅作为 mac96 失败后的单图 fallback，外部 provider 保持显式授权。", "", blocking=False, evidence=[str(WORKFLOW)]))
         route_errors: list[str] = []

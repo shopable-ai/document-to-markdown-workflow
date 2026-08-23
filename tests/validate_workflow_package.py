@@ -78,6 +78,7 @@ def main() -> int:
         "vision-text-transcription.yaml",
         "workflow-a-preflight.yaml",
         "markdown-collection-output-layout.yaml",
+        "ebook-page-pruning.yaml",
     ):
         assert (ROOT / "contracts" / contract_name).is_file(), contract_name
     assert (ROOT / "references/audit-rubric.zh.md").is_file()
@@ -132,6 +133,14 @@ def main() -> int:
 
     for workflow_path in sorted((ROOT / "workflows").glob("*/workflow.yaml")):
         workflow = load(workflow_path)
+        if workflow["id"] not in workflow_entries:
+            registration = workflow.get("registration") or {}
+            assert workflow.get("status") == "independent-unregistered", workflow_path
+            assert registration.get("workflow_registry") is False, workflow_path
+            assert registration.get("skill_registry") is False, workflow_path
+            assert registration.get("tool_registry") is False, workflow_path
+            assert (workflow_path.parent / "README.zh.md").is_file(), workflow_path
+            continue
         assert workflow["id"] in workflow_entries
         assert workflow_entries[workflow["id"]]["path"] == str(workflow_path.relative_to(ROOT))
         readme_path = workflow_path.parent / workflow["readme"]
@@ -142,6 +151,13 @@ def main() -> int:
         assert (workflow_path.parent / workflow["stage_evidence_contract"]).resolve().is_file()
         if workflow["id"] == "document-to-markdown-assets":
             assert (workflow_path.parent / workflow["execution_preflight_contract"]).resolve().is_file()
+            page_unit_execution = workflow["page_unit_execution"]
+            assert page_unit_execution["stage_order"] == [
+                "single-page-1",
+                "small-batch-2-5",
+                "full-batch-6-total_pages",
+            ]
+            assert page_unit_execution["gates"]["full_batch"]["pages"] == "6-total_pages"
         for handoff in workflow.get("handoff_exports", []) + workflow.get("handoff_inputs", []):
             assert (workflow_path.parent / handoff["contract"]).resolve().is_file()
         assert len(workflow["stages"]) == 7
@@ -193,16 +209,17 @@ def main() -> int:
             assert registry_entry["trigger_keywords"] == ["文档转 Markdown"]
             assert registry_entry["daily_trigger"] == "文档转 Markdown"
             observability = registry_entry["execution_observability"]
-            assert observability["final_report"] == "reports/validation-result.json"
+            assert observability["final_report"] is None
             assert observability["statuses"] == ["passed", "needs-review", "failed"]
             assert workflow["entrypoint"]["daily_trigger"] == registry_entry["daily_trigger"]
             assert workflow["entrypoint"]["trigger_keyword"] == "文档转 Markdown"
             assert (workflow_path.parent / workflow["visual_asset_classification_contract"]).resolve().is_file()
             prompt_inputs = workflow["entrypoint"]["prompt_inputs"]
-            assert prompt_inputs[:3] == ["source", "output_root", "pages"]
-            assert set(prompt_inputs[3:]).issubset({"profile", "config"})
-            assert len(prompt_inputs) == len(set(prompt_inputs))
-            assert workflow["execution_observability"]["final_report"] == observability["final_report"]
+            assert prompt_inputs == ["source", "output_root"]
+            assert workflow["entrypoint"]["derived_inputs"]["pages"] == "all"
+            assert workflow["entrypoint"]["derived_inputs"]["profile"] == "references/profiles/source-runner-generic.yaml"
+            assert workflow["entrypoint"]["derived_inputs"]["config"] is None
+            assert workflow["execution_observability"]["final_report"] is None
             quality_gate = workflow.get("quality_gate")
             assert quality_gate["minimum_total"] == 95
             assert quality_gate["target_total"] >= quality_gate["minimum_total"]
@@ -211,17 +228,10 @@ def main() -> int:
             output_layout = (workflow_path.parent / workflow["outputs"]["primary"]["output_layout"]).resolve()
             assert output_layout.is_file(), output_layout
             layout = load(output_layout)
-            assert set(layout["required_files"]) == {
-                "index.md",
-                "manifest.yaml",
-                "reports/processing-report.yaml",
-                "reports/acceptance-report.yaml",
-                "reports/failure-report.yaml",
-            }
-            assert set(layout["required_directories"]) == {
-                "assets/",
-            }
-            assert "reports/validation-result.json" in layout["optional_files"]
+            assert set(layout["required_files"]) == {"index.md"}
+            assert set(layout["required_directories"]) == set()
+            assert set(layout["optional_directories"]) == {"assets/"}
+            assert set(layout["forbidden_files"]) >= {"manifest.yaml", "reports/", "evidence/"}
             stages = {stage["id"]: stage for stage in workflow["stages"]}
             assert stages["A4"]["skills"] == [
                 "vision-page-analysis",
@@ -231,12 +241,14 @@ def main() -> int:
             ]
             assert stages["A4"]["optional_skills"] == ["visual-reconstruction-profile"]
             assert stages["A4"]["fallback_skills"] == ["local-ocr"]
-            assert stages["A4"]["route"] == "mac96-vision-page-analysis-full-single-default"
+            assert stages["A4"]["route"] == "recognition-calibration-then-page-quality-routing"
             vision_contract = (workflow_path.parent / workflow["execution_policy"]["vision_page_analysis"]["contract"]).resolve()
             assert vision_contract.is_file()
             vision_policy = load(vision_contract)
-            assert vision_policy["transport"]["primary"]["target"] == "mac96"
-            assert vision_policy["transport"]["text_fallback"]["target"] == "apple-vision-ocr"
+            assert vision_policy["transport"]["mac96_candidate"]["target"] == "mac96"
+            assert vision_policy["transport"]["apple_vision_candidate"]["target"] == "apple-vision-ocr"
+            assert vision_policy["policy"]["route_selection"]["fixed_priority_forbidden"] is True
+            assert vision_policy["policy"]["advertising_default"] == "preserve-only-no-delete-no-rewrite"
             assert vision_policy["policy"]["single_pass_default"] == "full-mode-one-request"
             assert vision_policy["policy"]["dual_pass_order"] == ["text", "layout"]
             assert "mac96-vision-page-analysis" in tools
@@ -244,28 +256,38 @@ def main() -> int:
             assert tools["language-quality-repair-adapter"]["implementation"] == "available"
             assert tools["language-quality-repair-adapter"]["target"] == "mac96"
             assert tools["language-quality-repair-adapter"]["input_scope"] == "one-current-page-unit-only"
+            assert tools["page-markdown-noise-cleanup-adapter"]["implementation"] == "available"
+            assert tools["page-markdown-noise-cleanup-adapter"]["image_input"] is False
+            noise_policy = workflow["execution_policy"]["page_markdown_noise_cleanup"]
+            assert noise_policy["stage"] == "A5-before-language-quality-repair"
+            assert noise_policy["scan_before_apply"] is True
+            noise_contract = (workflow_path.parent / noise_policy["contract"]).resolve()
+            assert noise_contract.is_file()
+            assert load(noise_contract)["scope"] == "post-page-unit-pre-language-repair"
             assert stages["A5"]["skills"] == [
                 "markdown-structure-builder",
                 "page-markdown-unit",
+                "clean-page-markdown-noise",
                 "markdown-content-repair",
                 "source-asset-linker",
                 "uncertainty-marking",
                 "semantic-visual-asset-pruning",
             ]
-            assert stages["A5"]["route"] == "local-lan-language-model-first-then-explicit-conversation-fallback"
-            assert stages["A5"]["output"] == "page-units/p<page-3-digits>.md, index.md"
+            assert stages["A5"]["route"] == "local-deterministic-noise-cleanup-then-lan-language-model-then-explicit-conversation-fallback"
+            assert stages["A5"]["output"] == "index.md"
             assert stages["A6"]["skills"] == [
                 "semantic-asset-naming",
                 "source-occurrence-registration",
                 "asset-deduplication",
                 "semantic-visual-asset-pruning",
             ]
-            assert stages["A6"]["output"] == "manifest.yaml"
+            assert stages["A6"]["output"] == "optional assets/ (only semantic reader images referenced by index.md)"
             assert stages["A7"]["skills"] == ["asset-package-validation"]
-            assert stages["A7"]["output"] == "reports/processing-report.yaml, reports/acceptance-report.yaml, reports/failure-report.yaml, reports/validation-result.json"
-            assert "stage_evidence" in stages["A7"]["required_fields"]
-            failure_output = next(item for item in workflow["outputs"]["secondary"] if item["type"] == "failure-report")
-            assert failure_output["contract"] == "../../contracts/failure-report.yaml"
+            assert stages["A7"]["output"] == "reader-package structural guard (runner stdout only)"
+            assert stages["A7"]["evidence"] == ["index.md"]
+            image_output = next(item for item in workflow["outputs"]["secondary"] if item["type"] == "reader-images-referenced-by-markdown")
+            assert image_output["status"] == "optional-absent-for-text-only-output"
+            assert image_output["contract"] == "../../contracts/reader-markdown-output-layout.yaml"
         if workflow["id"] == "markdown-to-gpt-image":
             output_layout = (workflow_path.parent / workflow["outputs"]["primary"]["output_layout"]).resolve()
             assert output_layout.is_file(), output_layout

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Source-independent deterministic Workflow A runner.
 
-The execute path intentionally owns only deterministic evidence production:
-source preflight, native extraction, source-owned rendering, media
-registration, Markdown assembly, and package reports. Visual models, OCR,
-language repair, and quality scoring remain explicit ``not-run`` evidence.
+The default execute path writes a reader package only: ``index.md`` and the
+screenshots that Markdown actually references.  Engineering manifests,
+reports, and JSON evidence remain available only through the explicit
+``--engineering-output`` opt-in, so ordinary conversion does not turn its
+output directory into a data-asset workspace.
 """
 from __future__ import annotations
 
@@ -37,9 +38,19 @@ except ImportError:  # pragma: no cover
     Image = None
 
 try:
+    import pdf_task_guard as task_guard
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_task_guard as task_guard
+
+try:
     from pypdf import PdfReader
 except ImportError:  # pragma: no cover
     PdfReader = None
+
+try:
+    from output_naming import resolve_package_target
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from .output_naming import resolve_package_target
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,20 +65,6 @@ P_NS = {
 }
 SUPPORTED_SUFFIXES = {".ppt", ".pptx", ".pdf", ".png", ".jpg", ".jpeg"}
 RUN_STARTED = time.monotonic()
-
-
-def apple_vision_script_path() -> Path | None:
-    """Resolve the Apple Vision OCR script in active-first order.
-
-    The legacy adapter lived beside a copy of the script.  The active runner
-    keeps the same fallback without depending on the legacy adapter itself.
-    """
-    candidates = (
-        Path(__file__).with_name("apple_vision_ocr.swift"),
-        ROOT / "adapters" / "apple_vision_ocr.swift",
-        ROOT / "archive" / "legacy-adapters" / "apple_vision_ocr.swift",
-    )
-    return next((path for path in candidates if path.is_file()), None)
 
 
 def _yaml_python() -> str | None:
@@ -279,9 +276,9 @@ def build_execution_plan(source: Path, pages: str, profile: dict, *, mode: str) 
         },
         "asset_policy": {
             "storage": {
-                "layout": "flat-assets-v1",
+                "layout": "reader-only-flat-assets-v1",
                 "root": "assets/",
-                "classification": "manifest.asset_kind",
+                "classification": "markdown-referenced-screenshot",
             },
             "naming": {
                 "filename_format": "<short-semantic-slug>.<ext>",
@@ -300,6 +297,7 @@ def build_execution_plan(source: Path, pages: str, profile: dict, *, mode: str) 
         "markdown": dict(profile.get("markdown_policy") or {}),
         "validation": dict(profile.get("validation_policy") or {}),
         "calibration": dict(profile.get("calibration_routes") or {}),
+        "output_mode": "reader-only",
         "status": "planned",
         "evidence": {"plan": "workflow-a-source-plan.json", "preflight": None, "validation": None},
         "diagnostics": [
@@ -1201,41 +1199,25 @@ def _candidate_layers(source: Path, pages: list[int], fingerprint: str, native: 
     return visual, ocr, reconciliation
 
 
-def _run_markdown_content_repair(package: Path, pages: list[int], page_assets: dict[int, Path]) -> dict:
-    """Invoke the Markdown Content Repair adapter on assembled index.md."""
-    document_path = package / "index.md"
-    if not document_path.is_file():
-        return {"status": "needs-review", "engine": "markdown-content-repair", "pages": [], "diagnostics": ["index.md is not available for A5 repair."]}
-    try:
-        try:
-            from workflow_a_optimized_runner import parse_document_pages, process_markdown_page
-        except ImportError:  # pragma: no cover - package-style import
-            from .workflow_a_optimized_runner import parse_document_pages, process_markdown_page
-    except ImportError as exc:
-        return {"status": "needs-review", "engine": "markdown-content-repair", "pages": [], "diagnostics": [f"Markdown Content Repair import failed: {exc!r}"]}
-    source_pages = parse_document_pages(document_path.read_text(encoding="utf-8"), pages)
-    processed: list[int] = []
-    failures: list[dict[str, object]] = []
-    items: dict[str, dict] = {}
-    for page in pages:
-        if page not in source_pages or page not in page_assets:
-            continue
-        try:
-            item = process_markdown_page(source_pages[page], package, page)
-            write_json(package / f"evidence/optimized-page-p{page:03d}.json", item)
-            processed.append(page)
-            items[str(page)] = item
-        except Exception as exc:  # pragma: no cover - defensive per-page evidence
-            failures.append({"page": page, "error": repr(exc)})
-    script = apple_vision_script_path()
+def _language_repair_boundary() -> dict:
+    """Describe the explicit A5 boundary without importing another runner.
+
+    The source runner owns deterministic extraction and assembly.  Language
+    repair is an optional, page-scoped follow-up route; importing the former
+    optimized runner here made every ordinary conversion traverse a second
+    script tree and blurred the fixed-entrypoint boundary.
+    """
     return {
-        "status": "complete" if processed and not failures else "needs-review",
-        "engine": "markdown-content-repair",
-        "pages": processed,
-        "items": items,
-        "failures": failures,
-        "diagnostics": ["按现有 Markdown 内容修复规则去重、移除 banner 和无意义碎片；不读取 OCR/视觉 JSON、坐标或页面图，也不推断图示关系。"],
-        "apple_vision_script": str(script) if script else None,
+        "status": "not-run",
+        "engine": "explicit-page-scoped-language-repair",
+        "pages": [],
+        "items": {},
+        "failures": [],
+        "diagnostics": [
+            "active source runner does not invoke a secondary repair runner by default",
+            "run the registered page-scoped repair adapter only as an explicit follow-up",
+        ],
+        "next_action": "人工复核当前页，或显式调用 markdown_content_repair.py；不得把未运行修复当成通过。",
     }
 
 
@@ -1253,7 +1235,7 @@ def execute_boundary(plan: dict, source: Path, output_root: Path) -> dict:
     output_root.mkdir(parents=True, exist_ok=True)
     fingerprint = sha256(source)
     available_pages = None if suffix == ".ppt" else available_page_numbers(source, suffix)
-    package_id = f"source-{fingerprint[:12]}-{suffix.lstrip('.')}"
+    package_id, target = resolve_package_target(output_root, source)
     candidate_comparison_path = None
     if plan.get("candidate_comparison"):
         candidate_comparison_path = Path(str(plan["candidate_comparison"])).expanduser().resolve()
@@ -1282,7 +1264,6 @@ def execute_boundary(plan: dict, source: Path, output_root: Path) -> dict:
             raise ValueError(f"candidate comparison could not be loaded after preflight: {exc}") from exc
         if not isinstance(candidate_comparison, dict):
             raise ValueError("candidate comparison must be a JSON object")
-    target = output_root / package_id
     if target.exists():
         raise ValueError(f"output package already exists: {target}")
     target.mkdir(parents=True)
@@ -1350,17 +1331,18 @@ def execute_boundary(plan: dict, source: Path, output_root: Path) -> dict:
     write_json(target / "evidence/ocr-candidates.json", ocr_candidates)
     write_json(target / "evidence/reconciliation.json", reconciliation)
     write_json(target / "evidence/regions.json", {"status": "not-run", "regions": [], "diagnostics": ["no explicit crop request; no region asset was generated"]})
+    write_json(target / "evidence/smoke-report.json", {
+        "status": "not-run",
+        "source": str(source),
+        "source_fingerprint": fingerprint,
+        "selected_pages": pages,
+        "diagnostics": ["普通单源 deterministic execute 不伪造 smoke 通过；长文档 smoke 由显式 batch 路线负责。"],
+        "next_action": "需要批量或长文档门禁时，显式使用 page-batch smoke 路线。",
+    })
     asset_ids = {page: item["asset_id"] for page, item in zip(sorted(page_paths), page_assets)}
     sections = assemble_markdown(target, source, pages, native, page_paths, asset_ids)
-    repair_execution = _run_markdown_content_repair(target, pages, page_paths)
+    repair_execution = _language_repair_boundary()
     write_json(target / "evidence/markdown-content-repair-execution.json", repair_execution)
-    if repair_execution.get("status") == "complete":
-        try:
-            from workflow_a_optimized_runner import build_document
-        except ImportError:  # pragma: no cover - package-style import
-            from .workflow_a_optimized_runner import build_document
-        repaired_items = {int(page): item for page, item in (repair_execution.get("items") or {}).items()}
-        sections = build_document(target, pages, repaired_items)
     write_json(target / "evidence/language-repair-draft.json", {"status": repair_execution.get("status", "needs-review"), "drafts": repair_execution.get("pages", []), "diagnostics": repair_execution.get("diagnostics", []), "next_action": "人工复核 Markdown 文字和视觉关系"})
     append_progress(progress_path, run_id=package_id, source_fingerprint=fingerprint, stage="markdown_assembly", status="complete", pages=pages, evidence_paths=["index.md", "evidence/reconciliation.json"], next_action="写入 A7 确定性报告")
     invocation = " ".join(sys.argv)
@@ -1382,7 +1364,7 @@ def execute_boundary(plan: dict, source: Path, output_root: Path) -> dict:
         "manifest_version": "0.8.0", "output_layout": "flat-assets-v1", "package_id": package_id, "kind": "markdown-asset-package", "status": "needs-review",
         "source": {"path": str(source), "path_label": source.name, "media_type": mimetypes.guess_type(source.name)[0] or "application/octet-stream", "source_fingerprint": fingerprint, "selected_pages": pages, "total_pages": len(available_pages), "source_page_numbers": available_pages, "source_selection": "single-source", "candidate_comparison": candidate_comparison, "candidate_comparison_evidence": str(candidate_comparison_path) if candidate_comparison_path else None},
         "markdown": {"path": "index.md", "sections": sections}, "assets_manifest": {"path": "manifest.yaml", "type": "source-visual-asset-manifest"}, "assets": assets,
-        "evidence": {"source_inventory": "evidence/source-inventory.json", "native_content_model": "evidence/native-content-model.json", "content_classification": "evidence/content-classification.json", "visual_candidates": "evidence/visual-candidates.json", "ocr_candidates": "evidence/ocr-candidates.json", "reconciliation": "evidence/reconciliation.json", "capability_probe": "evidence/capability-probe.json", "progress": "evidence/progress.jsonl", "markdown_content_repair": "evidence/markdown-content-repair-execution.json"},
+        "evidence": {"source_inventory": "evidence/source-inventory.json", "native_content_model": "evidence/native-content-model.json", "content_classification": "evidence/content-classification.json", "visual_candidates": "evidence/visual-candidates.json", "ocr_candidates": "evidence/ocr-candidates.json", "reconciliation": "evidence/reconciliation.json", "capability_probe": "evidence/capability-probe.json", "smoke_report": "evidence/smoke-report.json", "progress": "evidence/progress.jsonl", "markdown_content_repair": "evidence/markdown-content-repair-execution.json"},
         "processing": {"native_extraction": "complete" if native.get("status") == "complete" else "partial", "ocr_used": False, "visual_review": visual_candidates.get("status"), "execution_path": "needs-review", "fallback_reason": "visual review not-run; OCR status recorded in evidence/ocr-candidates.json", "status": "needs-review", "stage_evidence": stage_evidence, "stage_evidence_contract": "contracts/stage-evidence.yaml", "failure_report": "reports/failure-report.yaml", "model_calls": [], "context_policy": {"one_source_per_run": True}},
         "validation": {"validator_version": "real-output-root", "status": "needs-review", "checks": ["package layout", "source fingerprint", "asset hashes", "Markdown links"]},
         "quality_gate": {"status": "needs-review", "score": None, "reason": "quality audit not-run"}, "quality_report": "reports/quality-report.yaml",
@@ -1399,17 +1381,177 @@ def execute_boundary(plan: dict, source: Path, output_root: Path) -> dict:
     append_progress(progress_path, run_id=package_id, source_fingerprint=fingerprint, stage="independent_validation", status="not-run", pages=pages, evidence_paths=[], next_action="按本轮要求不运行独立 validator")
     validation = {"status": "not-run", "valid": None, "errors": [], "warnings": ["独立 validator 按本轮要求未运行。"]}
     write_json(target / "reports/validation-result.json", validation)
-    manifest["validation"]["status"] = "not-run"
+    # The package validator accepts the independent report's ``not-run``
+    # diagnostic state, while the manifest itself must remain a recognized
+    # package verdict.  Keep the package honest as needs-review until that
+    # independent validator is explicitly executed.
+    manifest["validation"]["status"] = "needs-review"
     write_yaml(target / "manifest.yaml", manifest)
     plan["source"].update({"sha256": fingerprint, "source_fingerprint_status": "computed"})
     plan["scope"]["selected_pages"] = pages
     plan["status"] = "needs-review"
     plan["output_root"], plan["package_path"] = str(output_root), str(target)
-    plan["evidence"] = {"plan": "workflow-a-source-plan.json", "preflight": "evidence/preflight.json", "validation": "reports/validation-result.json", "required_package": ["evidence/source-inventory.json", "evidence/native-content-model.json", "evidence/content-classification.json", "evidence/visual-candidates.json", "evidence/ocr-candidates.json", "evidence/reconciliation.json", "evidence/capability-probe.json", "evidence/progress.jsonl"]}
+    plan["output_mode"] = "engineering"
+    plan["evidence"] = {
+        "mode": "engineering",
+        "written": True,
+        "plan": "workflow-a-source-plan.json",
+        "preflight": "evidence/preflight.json",
+        "validation": "reports/validation-result.json",
+        "required_package": ["evidence/source-inventory.json", "evidence/native-content-model.json", "evidence/content-classification.json", "evidence/visual-candidates.json", "evidence/ocr-candidates.json", "evidence/reconciliation.json", "evidence/capability-probe.json", "evidence/smoke-report.json", "evidence/progress.jsonl"],
+    }
     plan["diagnostics"].extend(["visual_model: not-run", "ocr: not-run", "mac96: not-run", "online_model: not-run"])
     append_progress(progress_path, run_id=package_id, source_fingerprint=fingerprint, stage="independent_validation", status="not-run", pages=pages, evidence_paths=["reports/validation-result.json", "manifest.yaml"], next_action="保持 needs-review；按要求不运行独立 validator")
     write_json(target / "workflow-a-source-plan.json", plan)
     return plan
+
+
+def execute_reader_boundary(plan: dict, source: Path, output_root: Path) -> dict:
+    """Convert one source into the minimal reader-facing package.
+
+    Extraction and rendering happen in a temporary workspace.  The public
+    package is assembled only after Markdown exists, and contains no
+    manifests, reports, evidence, page units, or embedded-media side files.
+    Every copied image is referenced by ``index.md``; unreferenced generated
+    assets never cross the temporary/public boundary.
+    """
+    source, output_root = source.expanduser().resolve(), output_root.expanduser().resolve()
+    suffix = source.suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        raise ValueError(f"unsupported source suffix: {suffix or '<none>'}")
+    if not source.is_file() or not os.access(source, os.R_OK):
+        raise ValueError(f"source is not a readable file: {source}")
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    fingerprint = sha256(source)
+    available_pages = None if suffix == ".ppt" else available_page_numbers(source, suffix)
+    package_id, target = resolve_package_target(output_root, source)
+    candidate_comparison_path = None
+    if plan.get("candidate_comparison"):
+        candidate_comparison_path = Path(str(plan["candidate_comparison"])).expanduser().resolve()
+    preflight, pages = _preflight(
+        source,
+        output_root,
+        package_id,
+        plan["scope"]["pages"],
+        available_pages,
+        candidate_comparison_path,
+    )
+    if preflight.get("failures"):
+        raise ValueError("source preflight failed: " + "; ".join(item.get("message", "") for item in preflight["failures"]))
+    if suffix == ".ppt":
+        available_pages = available_page_numbers(source, suffix)
+        if not pages or not set(pages).issubset(set(available_pages)):
+            raise ValueError(f"selected pages {pages} are outside source range {available_pages}")
+
+    if target.exists():
+        raise ValueError(f"output package already exists: {target}")
+
+    with tempfile.TemporaryDirectory(prefix="workflow-a-reader-") as temp:
+        workspace = Path(temp)
+        working_package = workspace / "package"
+        working_package.mkdir(parents=True)
+        rendered, rendering = render_pages(source, suffix, workspace, pages)
+        if rendering.get("status") != "complete" or sorted(rendered) != sorted(pages):
+            missing = sorted(set(pages) - set(rendered))
+            raise ValueError(f"page rendering failed; missing pages: {missing}")
+
+        if suffix == ".pptx":
+            native = extract_pptx_native(source, pages)
+        elif suffix == ".ppt":
+            native = extract_ppt_native(source, pages)
+        elif suffix == ".pdf":
+            native = extract_pdf_native(source, pages)
+        else:
+            native = extract_image_native(source)
+
+        semantic_aliases = dict((plan.get("asset_policy") or {}).get("semantic_aliases") or {})
+        _assets, page_paths, _page_slugs = _copy_page_assets(
+            source,
+            suffix,
+            rendered,
+            working_package,
+            fingerprint,
+            native,
+            semantic_aliases,
+        )
+        asset_ids = {page: f"reader-page-{page:03d}" for page in page_paths}
+        assemble_markdown(working_package, source, pages, native, page_paths, asset_ids)
+        reader_markdown = working_package / "index.md"
+        if not reader_markdown.is_file() or not reader_markdown.read_text(encoding="utf-8").strip():
+            raise ValueError("reader Markdown assembly produced an empty index.md")
+
+        referenced = _markdown_image_paths(reader_markdown.read_text(encoding="utf-8"), working_package)
+        expected_assets = {path.absolute() for path in page_paths.values()}
+        if referenced != expected_assets:
+            missing = sorted(str(path.relative_to(working_package)) for path in expected_assets - referenced)
+            extra = sorted(str(path.relative_to(working_package)) for path in referenced - expected_assets)
+            raise ValueError(f"reader asset references do not match generated screenshots; missing={missing}, extra={extra}")
+
+        target.mkdir(parents=True)
+        (target / "assets").mkdir()
+        shutil.copy2(reader_markdown, target / "index.md")
+        for image in sorted(referenced):
+            relative = image.relative_to(working_package)
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image, destination)
+
+    plan["source"].update({"sha256": fingerprint, "source_fingerprint_status": "computed"})
+    plan["scope"]["selected_pages"] = pages
+    # A reader-only package is intentionally too small for independent
+    # validation: it has no manifest, reports, or evidence directory.  The
+    # deterministic assembly result is useful, but it cannot satisfy the
+    # production contract's ``passed_requires`` gate on its own.
+    plan["status"] = "needs-review"
+    plan["output_root"], plan["package_path"] = str(output_root), str(target)
+    plan["output_mode"] = "reader-only"
+    plan["validation"].update(
+        {
+            "status": "not-run",
+            "result_path": None,
+            "passed": False,
+            "authority": "independent-validator",
+        }
+    )
+    plan["evidence"] = {
+        "mode": "reader-only",
+        "written": False,
+        "validation": None,
+        "diagnostics": [
+            "engineering evidence is disabled by default",
+            "independent validator was not run; reader-only output remains needs-review",
+        ],
+    }
+    plan["artifacts"] = {
+        "markdown": "index.md",
+        "screenshots": sorted(path.relative_to(target).as_posix() for path in target.glob("assets/*") if path.is_file()),
+    }
+    plan["engineering_artifacts"] = "not-written; use --engineering-output for an explicit diagnostic package"
+    plan["diagnostics"] = [
+        "reader-only output: no manifest, reports, evidence, page-units, or embedded-media side files were written",
+        "visual quality and language repair remain outside this deterministic conversion boundary",
+        "independent validator not-run: passed is not allowed",
+    ]
+    return plan
+
+
+def _markdown_image_paths(text: str, package: Path) -> set[Path]:
+    """Resolve Markdown image links without accepting paths outside package."""
+
+    paths: set[Path] = set()
+    for match in re.finditer(r"!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^) \t]+))", text):
+        raw = match.group(1) or match.group(2) or ""
+        candidate = package / raw
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(package.resolve()):
+            raise ValueError(f"Markdown image link escapes package: {raw}")
+        if not resolved.is_file():
+            raise ValueError(f"Markdown image link does not exist: {raw}")
+        # Keep the workspace's lexical prefix (rather than macOS's /private
+        # realpath alias) so ``relative_to(package)`` remains deterministic.
+        paths.add(candidate.absolute())
+    return paths
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1422,6 +1564,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-comparison", type=Path)
     parser.add_argument("--plan-only", action="store_true", help="do not read source")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--engineering-output",
+        action="store_true",
+        help="explicitly write the legacy manifest/evidence/report package; default is reader-only output",
+    )
     args = parser.parse_args(argv)
     if args.plan_only and args.execute:
         parser.error("--plan-only and --execute are mutually exclusive")
@@ -1436,7 +1583,17 @@ def main(argv: list[str] | None = None) -> int:
             plan["candidate_comparison"] = str(args.candidate_comparison.expanduser().resolve())
         plan["output_root"] = str(args.output_root.expanduser().resolve())
         if args.execute:
-            plan = execute_boundary(plan, args.source, args.output_root)
+            with task_guard.acquire_task_lock(
+                source=args.source.expanduser().resolve(),
+                source_sha256=sha256(args.source.expanduser().resolve()),
+                output_root=args.output_root.expanduser().resolve(),
+                pages=args.pages,
+                entrypoint="workflow_a_source_runner.py",
+            ):
+                if args.engineering_output:
+                    plan = execute_boundary(plan, args.source, args.output_root)
+                else:
+                    plan = execute_reader_boundary(plan, args.source, args.output_root)
     except (OSError, ValueError, TypeError, BadZipFile, ET.ParseError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 2

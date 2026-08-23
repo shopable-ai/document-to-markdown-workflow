@@ -1,4 +1,4 @@
 interface:
   display_name: "单页 Markdown 工作单元"
   short_description: "独立拆分、修复、验收并合并单页 Markdown"
-  default_prompt: "使用 $page-markdown-unit 按单页阶段门处理当前 Markdown 页面单元，保留未确认关系和原始页面图链接。"
+  default_prompt: "使用 $page-markdown-unit 按单页阶段门处理当前 Markdown 页面单元，保留未确认关系、reader image 处置和已有页面图链接；纯文本 omit 页不新增图片。"

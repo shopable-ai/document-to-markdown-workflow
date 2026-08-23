@@ -29,6 +29,7 @@ canonical_chain:
       - user_problems
       - hard_requirements
       - non_goals
+      - optional_downstream_knowledge_base_pruning
     gate:
       id: requirement-complete
       assertion: 背景、目标、用户问题、硬性约束和非目标均已写入中文入口文档。
@@ -59,6 +60,7 @@ canonical_chain:
       - contracts/native-content-model.yaml
       - contracts/reconciliation.yaml
       - contracts/workflow-a-output-layout.yaml
+      - contracts/ebook-page-pruning.yaml
       - references/known-failures.zh.md
     required_fields:
       - input_boundary
@@ -91,6 +93,7 @@ canonical_chain:
       - test_matrix
       - acceptance_questions
       - dependency_order
+      - downstream_knowledge_base_pruning
     gate:
       id: task-complete
       assertion: TASK-TREE 只含需求语言和推进顺序；工程 Task 在 Chain 中单列并回指已确认的需求组；执行任务树先完成单页纵向切片，再扩展多页、多文件和测试门。
@@ -111,6 +114,7 @@ canonical_chain:
       - outputs
       - failure_states
       - handoff_boundary
+      - optional_downstream_steps
     gate:
       id: workflow-complete
       assertion: Workflow 入口、阶段、输出、失败态和独立验收入口相互引用且不重复定义。

@@ -35,7 +35,7 @@
 
 - 1. 先做审计和失败复现
   - 阅读根目录 `AGENTS.md`、`.prompt/README.zh.md`、当前 Workflow A 的 `workflow.yaml`、README、ACCEPTANCE、注册表和 contracts。
-  - 检查 `adapters/workflow_a_runner.py`、`adapters/workflow_a_output_validator.py`、`tests/run_fixture_contract_tests.py`、`tests/test_fixture_contract.py`。
+  - 检查 `adapters/workflow_a_source_runner.py`、`adapters/workflow_a_output_validator.py`、`tests/run_fixture_contract_tests.py`、`tests/test_fixture_contract.py`。
   - 对 PPTX 先只运行代表页，打开/检查生成的 page PNG，定位文字缺失发生在 Office 渲染、PNG 复制、嵌入媒体提取还是 Markdown 链接层；不要用“文件存在”代替视觉证据。
   - 记录现有真实运行只是诊断样本：`runs/real/real-runs-20260814-independent-sources-final-v3/`，不得复制其 `document.md` 或报告作为新结果。
 

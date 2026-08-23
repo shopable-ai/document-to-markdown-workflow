@@ -1,0 +1,166 @@
+id: lan-pdf-markdown-simple
+version: 0.3.0
+title: 局域网视觉 PDF 转 Markdown（简单独立工作流）
+status: independent-unregistered
+purpose: 作为显式 visual-only worker，使用固定局域网视觉模型完成忠实逐页转写、保守页面整理、确定性合并和受限标题修复；不负责页面混合路由。
+
+registration:
+  workflow_registry: false
+  skill_registry: false
+  tool_registry: false
+  replaces_workflow_a: false
+
+input:
+  source: one-readable-pdf
+  run_root: one-independent-run-directory
+  pages: explicit-selector-or-all
+
+entrypoints:
+  thinking_tools_smoke: python3 adapters/lan_pdf_markdown_graph.py --thinking-tools-smoke
+  generic_smoke: python3 adapters/lan_pdf_markdown_graph.py --visual-only --smoke --source <absolute-pdf> --pages <1-3>
+  normal_generation: python3 adapters/lan_pdf_markdown_graph.py --visual-only --source <absolute-pdf> --pages <selector> --auto-run-root --evidence-level compact
+  explicit_graph: python3 adapters/lan_pdf_markdown_graph.py --visual-only --source <absolute-pdf> --run-root <absolute-run-root> --pages <selector> --evidence-level compact
+
+route_boundary:
+  explicit_route: visual-only
+  canonical_mixed_entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <absolute-pdf> --run-root <absolute-existing-or-new-run-root> --pages <selector>
+  forbidden_implicit_behavior:
+    - treat-default-graph-run-as-full-book-visual
+    - overwrite-native-page-unit-with-visual-output
+    - call-visual-model-for-native-only-pages
+
+model_policy:
+  endpoint: http://shopme.local:11434/api/generate
+  model: qwen3-vl:30b-a3b-instruct
+  one_current_page_image_per_request: true
+  stream: true
+  think: false
+  options:
+    temperature: 0
+    num_ctx: 16384
+    num_predict: 4096
+  format_field_present: false
+  pdf_native_text_used_as_prompt: false
+  other_models_allowed: false
+
+content_stages:
+  - id: visual-page-conversion
+    title: 逐页视觉转换
+    input: 当前页完整图片
+    output: 忠实逐页 Markdown
+    rules:
+      - 第一行保留精确页面标记
+      - 有可见标题时使用对应 ATX 标题
+      - 没有可见标题时不得新增标题
+      - 不总结、不解释、不改写、不补写或删除正文
+      - 不读取其他页面正文作为当前页模型上下文
+
+  - id: conservative-page-cleanup
+    title: 页面整理
+    input: 已通过的逐页 Markdown
+    output: 仅删除明确边界噪声后的逐页 Markdown
+    rules:
+      - 跨页只统计页首和页尾的重复短行
+      - 删除操作逐页执行
+      - 只处理重复页眉页脚、孤立页码、整页包裹代码围栏和明确噪声
+      - 未命中页面保持原字节
+
+  - id: deterministic-merge
+    title: 合并原始版 Markdown
+    input: 按页码排序的逐页 Markdown
+    output: document-temp.md
+    rules:
+      - 合并不得重新推断或改写正文
+      - document-temp.md 保留标题修复前版本
+
+  - id: merge-coverage-validation
+    title: 合并页面覆盖检查
+    input: 所选页、page-units/pNNN.md 和 document-temp.md
+    output: reports/merge-coverage.json
+    rules:
+      - 每个所选页必须存在且只存在一个页面单元
+      - 页面单元中的页面标记必须与文件页码一致
+      - document-temp.md 的页面数量、顺序和唯一性必须与所选页完全一致
+      - 缺页、重页、乱序或额外页面均失败关闭
+
+  - id: heading-audit-and-finalization
+    title: 标题审计、必要修复与最终校验
+    input: document-temp.md 和异常页自己的页面图与逐页 Markdown
+    output: index.md
+    rules:
+      - 先用规则查找少量明显异常
+      - 没有异常时不调用模型
+      - 只允许调整 ATX 井号前缀
+      - 页面标记和非标题内容逐字保持
+      - 工程判断只写入报告
+
+layout:
+  page_image: assets/page-NNN.png
+  page_markdown: page-units/pNNN.md
+  page_result: evidence/page-result-pNNN.json
+  page_metrics: evidence/metrics-pNNN.json
+  request_summary: evidence/request-evidence-pNNN.json
+  current_progress: evidence/progress-current.json
+  failure_debug: evidence/debug/pNNN/
+  pre_heading_merge: document-temp.md
+  reader_entry: index.md
+  compact_summary: summary.json
+  heading_report: reports/heading-repair.json
+  merge_coverage_report: reports/merge-coverage.json
+  final_coverage_report: reports/final-coverage.json
+  validation_report: reports/validation-result.json
+
+evidence_levels:
+  compact:
+    successful_page_full_request: false
+    successful_page_raw_response: false
+    failed_page_full_diagnostics: true
+  diagnostic:
+    successful_page_full_request: false
+    successful_page_raw_response_gzip: true
+    failed_page_full_diagnostics: true
+  full:
+    all_page_full_request_and_response: true
+
+resume:
+  page_fact_sources:
+    - assets/page-NNN.png
+    - page-units/pNNN.md
+    - evidence/page-result-pNNN.json
+  revalidate:
+    - source-sha256
+    - page-number
+    - image-sha256
+    - model
+    - prompt-sha256
+    - request-options
+    - request-body-sha256
+  graph_state_is_page_fact_source: false
+
+page_unit_scope:
+  reused:
+    - flat-page-image-naming
+    - isolated-page-markdown-naming
+    - per-page-evidence-naming
+    - deterministic-page-order
+  not_forced:
+    - formal-page-unit-required-sections
+    - source-absent-interpretation
+    - source-absent-examples
+    - source-absent-model-structure
+    - source-absent-review-items
+
+reader_boundary:
+  forbidden_engineering_content:
+    - workflow-status
+    - title-candidates
+    - local-role-classification
+    - confidence
+    - model-diagnostics
+  reports_are_not_reader_content: true
+
+dependencies:
+  langgraph:
+    import: delayed
+    missing_behavior: clear-error-without-installing
+  environment_mutation: false

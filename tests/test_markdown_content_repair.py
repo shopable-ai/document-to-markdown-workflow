@@ -38,6 +38,13 @@ def test_guard_preserves_page_metadata_image_and_uncertain_relation():
     assert repair.validate_repaired_markdown(original, repaired.replace("Unknown/needs-review", "已确认关系"), page=1)
 
 
+def test_guard_accepts_text_only_page_without_image_link():
+    original = page_markdown().replace("\n![原始页面图](<../assets/page-001.png>)\n", "\n")
+    repaired = original.replace("一段  文字。", "一段文字。")
+
+    assert repair.validate_repaired_markdown(original, repaired, page=1) == []
+
+
 def test_guard_rejects_reader_content_invented_by_model():
     original = page_markdown()
     repaired = original.replace("一段  文字。", "这是新增说明。一段文字。")
@@ -45,6 +52,20 @@ def test_guard_rejects_reader_content_invented_by_model():
     errors = repair.validate_repaired_markdown(original, repaired, page=1)
 
     assert any("introduced reader content" in error for error in errors)
+
+
+def test_strip_fence_removes_full_document_yaml_envelope():
+    original = page_markdown()
+
+    assert repair._strip_fence(f"---\n{original}\n---") == original.strip()
+
+
+def test_guard_rejects_unstripped_full_document_yaml_envelope():
+    original = page_markdown()
+
+    errors = repair.validate_repaired_markdown(original, f"---\n{original}\n---", page=1)
+
+    assert "entire page was wrapped in YAML delimiters" in errors
 
 
 def test_lan_success_writes_page_unit_and_records_hashes(monkeypatch, tmp_path: Path):

@@ -1,4 +1,4 @@
 interface:
   display_name: "页面视觉理解"
-  short_description: "优先用 SSH mac96，失败后用当前对话视觉模型，文字层最后用 Apple Vision OCR"
+  short_description: "按真实页面基准选择 OCR 加结构重建、小视觉模型或 30B，并保留三阶段证据"
   default_prompt: "请使用 vision-page-analysis 的 text 模式逐字读取当前这一张页面图，不使用 OCR，也不读取其他文件。"

@@ -1,6 +1,6 @@
 contract: workflow-a-source-runner
 version: 0.3.0
-description: 来源无关的 Workflow A runner 接口；只定义路由、证据和阶段边界，不固化任何文档术语。
+description: 来源无关的 Workflow A runner 接口；默认返回 reader-only 输出摘要，完整工程证据仅在显式 --engineering-output 时落盘。
 status: active
 required:
   runner:
@@ -28,20 +28,11 @@ required:
     content_ladder: array
     language_repair: object
   status: enum[planned, ready, passed, needs-review, failed]
+  output_mode: enum[reader-only, engineering]
   evidence:
-    plan: string
-    preflight: string|null
-    validation: string|null
-    required_package_evidence:
-      - evidence/source-inventory.json
-      - evidence/capability-probe.json
-      - evidence/smoke-report.json
-      - evidence/progress.jsonl
-      - evidence/native-content-model.json
-      - evidence/content-classification.json
-      - evidence/visual-candidates.json
-      - evidence/ocr-candidates.json
-      - evidence/reconciliation.json
+    mode: string
+    written: boolean
+    diagnostics: array
 properties:
   profile:
     required: [id, version, source_types, asset_policy, content_ladder, markdown_policy, validation_policy]
@@ -55,20 +46,28 @@ properties:
     required: [title_source, source_metadata_boundary, dynamic_from_source]
   validation_policy:
     required: [validator, quality_audit_after_assembly]
+  scanned_text_recognition:
+    required: [text_recognition, markdown_structure_reconstruction, advertising_policy, route_selection, raw_evidence_immutable]
+    route_candidates: [apple-vision-ocr-plus-deterministic-structure, small-vision-model, mac96-30b-vision-model]
+    route_selection: real-page-benchmark-and-page-quality-gates
+    advertising_default: preserve-only
 invariants:
   - 新 runner 不得包含任何固定文件名、固定页码、固定标题、固定术语或文档专用关键词。
   - plan-only 不读取 source 内容、不计算 source hash、不渲染、不调用 OCR、不调用任何视觉模型。
   - execute 只能从 profile/config 解析来源类型和阶段能力；所有阶段都必须记录当前 source fingerprint。
-  - execute 的确定性路径必须生成可独立重读的 package；视觉模型、OCR、语言修复和质量审计未执行时只能返回 needs-review。
+  - execute 默认生成 index.md；只有页面存在 Markdown 无法替代的语义视觉时才生成并引用 assets/ 图片，不生成 manifest、reports、evidence、page-units、document-temp.md 或 JSON。
+  - 只有显式 --engineering-output 才生成可独立重读的完整工程 package；视觉模型、OCR、语言修复和质量审计未执行时只能返回 needs-review。
   - 每次 execute 的输入集合只能包含一个 source 文件；一次调用不得接收、拼接、合并或互相补正文的多个文件。
   - PPTX、PDF、PNG/JPG/JPEG fixture 只能通过三个相互独立的单 source 调用进行回归；fixture 矩阵不是业务转换输入。
   - PDF 原生层必须保留 flow/block/line/word 文本与 bbox，并单独登记页面图、嵌入媒体和必要区域资产。
   - 无原生文字层的图片必须生成带 source fingerprint、candidate_layer_state、原因和 next_action 的视觉/OCR raw candidate 证据；不得用空正文声明完成。
   - execute 不得导入、调用或隐式回退到 legacy/document-profile runner。
-  - 页面图文件名必须使用最短可辨识的 <short-semantic-slug>.<ext>；页码、来源哈希、page-render、original-page、source-media、o01 等追溯字段只能进入 manifest/evidence。
+  - 页面图文件名必须使用最短可辨识的 <short-semantic-slug>.<ext>；页码、来源哈希、page-render、original-page、source-media、o01 等追溯字段默认不得进入读者文件名或读者包。
   - 同一导出目录中只有真实同名冲突才追加 -02、-03；不得默认重复页码或 ordinal。
   - 页面标题无法可靠生成英文语义 slug 时必须使用明确的 needs-review 命名状态和稳定占位名，不得静默回退到随机串或技术字段堆叠名。
-  - 原生提取、视觉候选、OCR 候选、语言修复草稿和最终 Markdown 必须分层保存。
+  - 工程模式下原生提取、视觉候选、OCR 候选、语言修复草稿和最终 Markdown 必须分层保存；reader-only 模式只保留最终 Markdown 和确有语义增量的被引用图片，纯文本结果允许没有 assets/。
   - 语言修复不能覆盖 raw layer，也不能把 OCR/视觉候选直接升级为确认事实。
   - 独立 validator 和质量审计位于 Markdown 组装之后；runner 自报状态不能替代 validator。
-  - 高质量在线基准、本地视觉模型复现、质量比较和降本路线属于后期 calibration profile，本轮不得默认执行。
+  - 扫描页的文字识别、Markdown 结构重建、广告分类及处理必须分层保存；识别与结构重建阶段不得删除或改写任何可见文字。
+  - Apple Vision OCR、小视觉模型和 mac96 30B 的主次必须由真实页面基准、结构质量守卫、耗时和资源证据决定，不能由模型参数量、非空输出或历史默认值决定。
+  - 标题层级、正文分段、目录、列表、页眉页脚、标点、跨页连续性和异常内容保留未完成可复核验证时，扫描文字页不得标记 passed。

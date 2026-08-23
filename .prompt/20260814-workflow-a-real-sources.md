@@ -11,12 +11,12 @@ README、ACCEPTANCE、`workflow-registry.yaml`、`tool-registry.yaml` 与相关�
 稳定入口：
 
 ```bash
-python3 adapters/workflow_a_runner.py \
+python3 adapters/workflow_a_source_runner.py \
   --source "/absolute/path/input.pptx" \
   --output-root "/absolute/path/output-root" \
   --pages all
 
-python3 adapters/workflow_a_runner.py \
+python3 adapters/workflow_a_source_runner.py \
   --source "/absolute/path/input.pdf" \
   --output-root "/absolute/path/output-root" \
   --pages all

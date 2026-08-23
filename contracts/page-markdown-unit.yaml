@@ -1,5 +1,5 @@
 contract: page-markdown-unit
-version: 0.1.0
+version: 0.3.0
 description: 单页读者层 Markdown 工作单元、阶段门、确定性合并和派生预览契约。
 status: active
 scope: reader-layer-page-repair-only
@@ -8,6 +8,7 @@ required_metadata:
   - unit_status
   - semantic_title
   - relation_status
+  - reader_image_action
 required_sections:
   - 正文
   - 列表/图示文字
@@ -16,22 +17,41 @@ required_sections:
   - 举例与思考
   - 模型结构
   - 已确认的关系说明
-  - 原始页面图
   - 待核对项
+optional_sections:
+  - 原始页面图
+structural_divider_exception:
+  declaration: frontmatter.type=divider
+  required_body: first-markdown-heading
+  title_source: first-markdown-heading
+  forbidden_frontmatter: [title, semantic_title]
+  forbidden_content: [original-page-image-link]
+  exempt_from: [required_metadata, required_sections]
+  source_asset_deletion:
+    default: retain-for-provenance
+    explicit_user_override:
+      requires: [visual-asset-pruning-report, original-sha256, source-occurrence, active-reader-links-removed]
+      manifest_policy: immutable-original-record
+      validator_policy: pruning-report-overlay
 metadata:
   page_number: integer
   unit_status: enum[passed, needs-review, failed]
   semantic_title: string
   relation_status: enum[confirmed, needs-review, unknown]
-  original_page_image: relative-path
+  reader_image_action: enum[omit, retain, needs-review]
+  original_page_image: relative-path|null
 inputs:
   split:
     source_document: existing-index-md
     selected_pages: explicit-page-selector
-    page_image: existing-source-page-image
+    page_image: existing-source-page-image-when-reader_image_action-is-not-omit
   repair:
     page_unit: one-page-markdown-file
     allowed_reader_evidence: [selected-page-markdown, selected-page-image]
+  noise_cleanup:
+    page_units: selected-page-unit-files
+    allowed_cross_page_inventory: normalized-header-and-footer-boundary-lines-only
+    forbidden_inputs: [page-images, OCR-JSON, bbox, confidence, vision-JSON, manifest]
   merge:
     page_units: one-or-more-page-units
     ordering: ascending-page-number
@@ -40,6 +60,18 @@ outputs:
   derived_preview: document-temp.md
   final_document: index.md
   validation_report: page-validation.json
+  noise_cleanup_report: evidence/page-markdown-noise-cleanup.json
+  reader_image_policy_report: evidence/reader-image-policy.json
+pre_language_noise_cleanup:
+  order: after-page-unit-generation-before-markdown-content-repair
+  skill: skills/clean-page-markdown-noise/SKILL.md
+  adapter: adapters/page_markdown_noise_cleanup.py
+  contract: contracts/page-markdown-noise-cleanup.yaml
+  requirements:
+    - 必须先 scan 并固化当前输入哈希，再允许 apply。
+    - 只删除完整页眉、页脚页码和首尾边界分隔线。
+    - 疑似正文行保留为 needs-review，不得扩大规则后自动删除。
+    - 保留行、页面图链接和 Unknown/needs-review 边界逐字不变。
 phase_gates:
   - id: single-page
     pages: [1]
@@ -51,7 +83,7 @@ phase_gates:
     entry: split-explicit-pages
     exit: page-scope-structural-guard-passed-and-human-review
   - id: full-batch
-    pages: 6-100
+    pages: 6-total_pages
     requires: [small-batch-page-scope-structural-guard-passed, human-review-of-pages-2-5]
     entry: split-explicit-pages
     exit: page-scope-structural-guard-passed-and-human-review
@@ -60,7 +92,7 @@ page_repair_verification:
   separate_test_stage: false
   required_checks:
     - 当前页 Markdown 非空
-    - 原始页面图链接保持不变
+    - reader_image_action 和已有原始页面图链接保持不变；omit 页面不得新增图片链接
     - 页面编号和 Unknown/needs-review 边界保持不变
     - 未新增来源外文字或工程字段
     - 只写回当前 page-unit
@@ -71,6 +103,7 @@ rules:
   page_isolation:
     - 修复输入只能包含当前页面单元和当前页面图。
     - 页面单元不得跨页、跨列或跨未确认视觉容器拼接文字。
+    - 批量页眉页脚盘点只能跨页统计边界短行；不得把其他页面正文发送给模型或作为当前页内容修复输入。
   content_layers:
     - 原始 OCR JSON、bbox、置信度、逐页 Vision JSON、页面图和原始 manifest.yaml 只读。
     - 候选文字、候选标题和未确认关系不得升级为 confirmed。
@@ -83,18 +116,19 @@ rules:
     - 举例与思考
     - 模型结构
     - 已确认的关系说明
-    - 原始页面图
+    - 原始页面图（仅 reader_image_action 不为 omit 时）
     - 待核对项
   relation_safety:
     - 只有有明确视觉证据的关系才能进入已确认的关系说明。
     - 未确认关系必须进入待核对项并标记 Unknown/needs-review。
     - 不得生成未经视觉确认的箭头、层级、流程、矩阵或颜色关系说明。
   deterministic_split:
-    - 页面编号来自固定页面边界和原始页面图链接。
+    - 页面编号来自固定页面边界；图片处置来自显式 reader_image_action 页面决策，而不是来源 asset 是否存在。
     - 选页拆分只写选定页面单元，不把其他页面正文写入单元。
   deterministic_merge:
     - 页面文件按 page_number 升序合并。
-    - 原始页面图链接逐字保持不变。
+    - reader_image_action 逐字保持不变；存在的原始页面图链接逐字保持不变。
+    - 工程证据层保留 page PNG 不得自动推导为读者层必须嵌图；omit 页面在 page-unit、document-temp.md 和 index.md 中都不得回灌页面原图。
     - 合并不得重新推断、摘要、翻译或补写来源中不存在的文字。
     - 合并失败时不得生成成功预览。
   derived_preview:
@@ -104,3 +138,7 @@ rules:
     - unit_status=passed 只表示本页面读者层结构验收通过。
     - relation_status=needs-review 仍必须保留在待核对项。
     - failed 和 needs-review 不得作为下一阶段通过证据。
+  structural_divider:
+    - `type: divider` 只用于仍需保留页码/来源关系的导航分隔页；标题只取第一个 Markdown 标题。
+    - divider 不得重复填写 title/semantic_title，不得保留原始页面图链接，也不得生成正文路由。
+    - 默认仍保留来源图片证据；只有用户明确要求物理删除时，才允许以 visual-asset-pruning report 作为不可变 manifest 之上的删除覆盖层。

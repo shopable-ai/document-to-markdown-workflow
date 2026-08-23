@@ -322,6 +322,22 @@ def test_bounded_native_smoke_accepts_nested_page_package_layout(tmp_path: Path)
     ) == batch_root.resolve()
 
 
+def test_native_page_evidence_resolves_existing_nested_page_package(tmp_path: Path):
+    batch_root = tmp_path / "native-smoke"
+    nested = (
+        batch_root
+        / "pages"
+        / "page-001"
+        / "page-001"
+        / "evidence"
+        / "page-001.json"
+    )
+    nested.parent.mkdir(parents=True)
+    nested.write_text("{}", encoding="utf-8")
+
+    assert graph._native_page_evidence(batch_root, 1) == nested
+
+
 def test_smoke_only_resume_restarts_full_conversion_instead_of_stalling(tmp_path: Path):
     run_root = tmp_path / "run"
     (run_root / graph.INTERNAL_STAGE_ROOT / graph.NATIVE_SMOKE_STAGE).mkdir(parents=True)

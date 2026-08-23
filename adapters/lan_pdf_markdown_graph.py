@@ -1337,13 +1337,22 @@ def _native_resume_decision(
 
 
 def _native_page_evidence(batch_root: Path, page: int) -> Path:
-    return (
+    legacy_path = (
         batch_root
         / "pages"
         / f"page-{page:03d}"
         / "evidence"
         / f"page-{page:03d}.json"
     )
+    nested_path = (
+        batch_root
+        / "pages"
+        / f"page-{page:03d}"
+        / f"page-{page:03d}"
+        / "evidence"
+        / f"page-{page:03d}.json"
+    )
+    return nested_path if nested_path.is_file() and not legacy_path.is_file() else legacy_path
 
 
 def _native_create_page_units(

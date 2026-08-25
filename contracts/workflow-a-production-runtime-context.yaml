@@ -62,7 +62,7 @@ execution:
   long_tasks:
     threshold_seconds: 30
     interaction_contract: contracts/long-task-interaction.yaml
-    manager: python3 adapters/pdf_background_task.py start --task-type <native-pdf|native-pdf-batch|hybrid-pdf|visual-pdf|workflow-a>
+    manager: python3 adapters/pdf_background_task.py start --task-type <native-pdf|native-pdf-batch|local-ocr-pdf|hybrid-pdf|visual-pdf|workflow-a>
     pdf_default_task_type: hybrid-pdf
     default_mode: detached-silent
     after_start: 返回一次 started 摘要后立即结束当前交互，不持续 write_stdin、ps 或进度文件轮询。

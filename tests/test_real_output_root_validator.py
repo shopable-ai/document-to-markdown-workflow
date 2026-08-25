@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 from pathlib import Path
@@ -161,6 +162,203 @@ def make_package(tmp_path: Path) -> Path:
     return package
 
 
+def add_visual_lifecycle_assets(package: Path) -> tuple[str, str]:
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    parent = manifest["assets"][0]
+    parent_path = package / parent["file_path"]
+    suffix = parent_path.suffix.lower()
+
+    crop_name = f"diagram-crop{suffix}"
+    crop_path = package / "assets" / crop_name
+    shutil.copy2(parent_path, crop_path)
+    overlay_path = package / "evidence" / "crop-overlay.json"
+    overlay_path.write_text('{"status":"fixture"}\n', encoding="utf-8")
+    crop = copy.deepcopy(parent)
+    crop_id = "asset-diagram-crop"
+    crop.update(
+        {
+            "asset_id": crop_id,
+            "file_name": crop_name,
+            "file_path": f"assets/{crop_name}",
+            "display_name": "图示裁切图",
+            "asset_kind": "crop",
+            "extraction_method": "region-crop",
+            "status": "available",
+        }
+    )
+    crop["source"]["source_occurrences"][0].update(
+        {
+            "source_occurrence_id": "occ-diagram-crop-01",
+            "parent_asset_id": parent["asset_id"],
+            "region": {"geometry": "100x100+0+0"},
+        }
+    )
+    crop["naming"].update({"semantic_slug": "diagram-crop", "purpose_slug": "source-crop"})
+    crop["derivation"] = {
+        "parent_asset_ids": [parent["asset_id"]],
+        "operation": "region-crop",
+        "parameters": {
+            "geometry": "100x100+0+0",
+            "horizontal_policy": "conservative-locked",
+            "vertical_policy": "trim-first",
+        },
+        "structure_preserved": True,
+        "fallback_asset_id": parent["asset_id"],
+        "status": "complete",
+    }
+    crop["crop_decision"] = {
+        "region_id": "region-diagram-01",
+        "localization_basis": ["caption-anchor", "visible-structure"],
+        "required_elements": ["all nodes", "all arrows", "all labels"],
+        "excludable_elements": ["page header"],
+        "candidate_geometry": "120x120+0+0",
+        "accepted_geometry": "100x100+0+0",
+        "coordinate_space": {
+            "origin": "top-left",
+            "source_width": parent["media"]["width"],
+            "source_height": parent["media"]["height"],
+            "rotation_degrees": 0,
+        },
+        "safety_margins": {"top": 5, "right": 5, "bottom": 5, "left": 5},
+        "edge_checks": {
+            "top": "clear",
+            "right": "clear",
+            "bottom": "clear",
+            "left": "clear",
+            "foreground_touching_edges": [],
+        },
+        "review_evidence": {
+            "source_preview": parent["file_path"],
+            "crop_preview": f"assets/{crop_name}",
+            "overlay_or_equivalent": "evidence/crop-overlay.json",
+            "reviewer": "fixture-review",
+            "reviewed_at": "2026-08-24T00:00:00+08:00",
+        },
+        "adjustment_history": [{"from": "120x120+0+0", "to": "100x100+0+0", "reason": "fixture"}],
+        "status": "accepted",
+    }
+
+    enhanced_name = f"diagram-enhanced{suffix}"
+    enhanced_path = package / "assets" / enhanced_name
+    shutil.copy2(crop_path, enhanced_path)
+    enhanced = copy.deepcopy(crop)
+    enhanced_id = "asset-diagram-enhanced"
+    enhanced.update(
+        {
+            "asset_id": enhanced_id,
+            "file_name": enhanced_name,
+            "file_path": f"assets/{enhanced_name}",
+            "display_name": "图示增强图",
+            "asset_kind": "enhanced-raster",
+            "extraction_method": "deterministic-enhancement",
+        }
+    )
+    enhanced.pop("crop_decision", None)
+    enhanced["source"]["source_occurrences"][0].update(
+        {
+            "source_occurrence_id": "occ-diagram-enhanced-01",
+            "parent_asset_id": crop_id,
+        }
+    )
+    enhanced["naming"].update({"semantic_slug": "diagram-enhanced", "purpose_slug": "reader-fallback"})
+    enhanced["derivation"] = {
+        "parent_asset_ids": [crop_id],
+        "operation": "raster-readability-enhancement",
+        "parameters": {
+            "colorspace": "Gray",
+            "auto_level": True,
+            "brightness_contrast": "5x18",
+            "sharpen": "0x1.2",
+            "tool": "fixture-image-tool",
+            "tool_version": "1",
+        },
+        "structure_preserved": True,
+        "fallback_asset_id": crop_id,
+        "status": "complete",
+    }
+
+    manifest["assets"].extend([crop, enhanced])
+    _write(manifest_path, manifest)
+    return crop_id, enhanced_id
+
+
+def add_figure_coverage(package: Path, records: list[dict], *, batch_status: str, document_status: str) -> None:
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    expected = [record["figure_id"] for record in records]
+    manifest["figure_coverage"] = {
+        "scope": "full-document",
+        "demand_sources": ["raw/source-content-units", "page-units", "index.md", "assets", "manifest.yaml"],
+        "expected_figure_ids": expected,
+        "records": records,
+        "counts": {
+            "expected": len(expected),
+            "passed": sum(record["lifecycle_status"] == "passed" for record in records),
+            "legacy_only": sum(record["asset_status"] == "legacy-only" for record in records),
+            "missing": sum(record["asset_status"] == "missing" for record in records),
+            "markdown_reference_missing": sum(record["markdown_status"] == "reference-missing" for record in records),
+            "needs_review": sum(
+                "needs-review"
+                in {
+                    record["source_page_status"],
+                    record["asset_status"],
+                    record["markdown_status"],
+                    record["lifecycle_status"],
+                }
+                for record in records
+            ),
+            "not_applicable": sum(record["lifecycle_status"] == "not-applicable" for record in records),
+        },
+        "batch_status": batch_status,
+        "document_status": document_status,
+    }
+    _write(manifest_path, manifest)
+
+
+def figure_record(
+    figure_id: str,
+    *,
+    source_page_status: str,
+    asset_status: str,
+    markdown_status: str,
+    lifecycle_status: str,
+    asset_ids: list[str] | None = None,
+) -> dict:
+    return {
+        "figure_id": figure_id,
+        "content_unit_ids": ["page-001"],
+        "demand_evidence": ["raw/source-content-units", "page-units/page-001.md"],
+        "source_page_status": source_page_status,
+        "asset_status": asset_status,
+        "markdown_status": markdown_status,
+        "lifecycle_status": lifecycle_status,
+        "batch_ids": ["batch-001"],
+        "diagnostics": [],
+        "asset_ids": asset_ids or [],
+    }
+
+
+def add_visual_asset_lifecycle(package: Path, *, status: str = "needs-review", task_status: str = "needs-review") -> None:
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    manifest["visual_asset_lifecycle"] = {
+        "enabled": True,
+        "task_evidence": [
+            {
+                "task_id": f"F{index}",
+                "status": task_status,
+                "binding_status": "fixture-procedure-or-code",
+                "evidence_paths": ["manifest.yaml"],
+                "diagnostics": [],
+            }
+            for index in range(9)
+        ],
+        "status": status,
+    }
+    _write(manifest_path, manifest)
+
+
 def test_reader_only_package_requires_only_markdown_and_referenced_images(tmp_path: Path):
     package = tmp_path / "reader"
     (package / "assets").mkdir(parents=True)
@@ -184,7 +382,7 @@ def test_reader_only_text_package_does_not_require_assets_directory(tmp_path: Pa
     assert result.as_dict()["status"] == "passed"
 
 
-def test_reader_only_package_allows_source_named_markdown_alias(tmp_path: Path):
+def test_reader_only_package_rejects_source_named_markdown_alias(tmp_path: Path):
     package = tmp_path / "reader-source-alias"
     package.mkdir()
     content = "# 关键点\n\n只有文字内容。\n"
@@ -193,8 +391,8 @@ def test_reader_only_package_allows_source_named_markdown_alias(tmp_path: Path):
 
     result = validate_package(package)
 
-    assert result.valid, result.errors
-    assert result.as_dict()["status"] == "passed"
+    assert not result.valid
+    assert any("extra markdown file is forbidden" in error for error in result.errors)
 
 
 def test_reader_only_package_rejects_unreferenced_or_engineering_files(tmp_path: Path):
@@ -217,6 +415,169 @@ def test_real_package_validator_accepts_structurally_valid_needs_review_package(
     result = validate_package(make_package(tmp_path))
     assert result.valid, result.errors
     assert result.declared_status == "needs-review"
+
+
+def test_real_package_validator_accepts_reviewed_crop_and_enhanced_lineage(tmp_path):
+    package = make_package(tmp_path)
+    add_visual_lifecycle_assets(package)
+
+    result = validate_package(package)
+
+    assert result.valid, result.errors
+
+
+def test_real_package_validator_accepts_honest_partial_figure_coverage(tmp_path):
+    package = make_package(tmp_path)
+    manifest = _load(package / "manifest.yaml")
+    asset_id = manifest["assets"][0]["asset_id"]
+    records = [
+        figure_record(
+            "1.1",
+            source_page_status="located",
+            asset_status="upgraded",
+            markdown_status="linked",
+            lifecycle_status="passed",
+            asset_ids=[asset_id],
+        ),
+        figure_record(
+            "1.2",
+            source_page_status="missing",
+            asset_status="missing",
+            markdown_status="reference-missing",
+            lifecycle_status="needs-review",
+        ),
+    ]
+    add_figure_coverage(package, records, batch_status="passed", document_status="needs-review")
+
+    result = validate_package(package)
+
+    assert result.valid, result.errors
+
+
+def test_real_package_validator_rejects_document_passed_from_partial_batch(tmp_path):
+    package = make_package(tmp_path)
+    records = [
+        figure_record(
+            "1.2",
+            source_page_status="missing",
+            asset_status="missing",
+            markdown_status="reference-missing",
+            lifecycle_status="needs-review",
+        )
+    ]
+    add_figure_coverage(package, records, batch_status="passed", document_status="passed")
+
+    result = validate_package(package)
+
+    assert any(
+        error.startswith("figure-coverage:") and "document_status passed" in error
+        for error in result.errors
+    )
+
+
+def test_real_package_validator_rejects_missing_expected_figure_record(tmp_path):
+    package = make_package(tmp_path)
+    records = [
+        figure_record(
+            "1.1",
+            source_page_status="located",
+            asset_status="upgraded",
+            markdown_status="linked",
+            lifecycle_status="passed",
+        )
+    ]
+    add_figure_coverage(package, records, batch_status="passed", document_status="needs-review")
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    manifest["figure_coverage"]["expected_figure_ids"].append("1.2")
+    manifest["figure_coverage"]["counts"]["expected"] = 2
+    _write(manifest_path, manifest)
+
+    result = validate_package(package)
+
+    assert any(
+        error.startswith("figure-coverage:") and "missing records" in error
+        for error in result.errors
+    )
+
+
+def test_real_package_validator_requires_coverage_when_figure_lifecycle_is_enabled(tmp_path):
+    package = make_package(tmp_path)
+    add_visual_asset_lifecycle(package)
+
+    result = validate_package(package)
+
+    assert any(
+        error.startswith("visual-asset-lifecycle:") and "requires figure_coverage" in error
+        for error in result.errors
+    )
+
+
+def test_real_package_validator_rejects_complete_lifecycle_with_partial_document_coverage(tmp_path):
+    package = make_package(tmp_path)
+    records = [
+        figure_record(
+            "1.2",
+            source_page_status="missing",
+            asset_status="missing",
+            markdown_status="reference-missing",
+            lifecycle_status="needs-review",
+        )
+    ]
+    add_figure_coverage(package, records, batch_status="passed", document_status="needs-review")
+    add_visual_asset_lifecycle(package, status="complete", task_status="complete")
+
+    result = validate_package(package)
+
+    assert any(
+        error.startswith("visual-asset-lifecycle:") and "document_status passed" in error
+        for error in result.errors
+    )
+
+
+def test_real_package_validator_rejects_available_crop_with_clipped_edge(tmp_path):
+    package = make_package(tmp_path)
+    crop_id, _ = add_visual_lifecycle_assets(package)
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    crop = next(asset for asset in manifest["assets"] if asset["asset_id"] == crop_id)
+    crop["crop_decision"]["edge_checks"]["bottom"] = "clipped"
+    _write(manifest_path, manifest)
+
+    result = validate_package(package)
+
+    assert any(error.startswith("crop-decision:") for error in result.errors)
+
+
+def test_real_package_validator_rejects_crop_geometry_outside_parent(tmp_path):
+    package = make_package(tmp_path)
+    crop_id, _ = add_visual_lifecycle_assets(package)
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    crop = next(asset for asset in manifest["assets"] if asset["asset_id"] == crop_id)
+    parent = next(asset for asset in manifest["assets"] if asset["asset_id"] == crop["derivation"]["parent_asset_ids"][0])
+    geometry = f"100x100+{parent['media']['width']}+0"
+    crop["derivation"]["parameters"]["geometry"] = geometry
+    crop["crop_decision"]["accepted_geometry"] = geometry
+    _write(manifest_path, manifest)
+
+    result = validate_package(package)
+
+    assert any("geometry exceeds parent asset dimensions" in error for error in result.errors)
+
+
+def test_real_package_validator_rejects_available_enhancement_without_structure_proof(tmp_path):
+    package = make_package(tmp_path)
+    _, enhanced_id = add_visual_lifecycle_assets(package)
+    manifest_path = package / "manifest.yaml"
+    manifest = _load(manifest_path)
+    enhanced = next(asset for asset in manifest["assets"] if asset["asset_id"] == enhanced_id)
+    enhanced["derivation"]["structure_preserved"] = False
+    _write(manifest_path, manifest)
+
+    result = validate_package(package)
+
+    assert any(error.startswith("derivation:") for error in result.errors)
 
 
 def test_real_package_validator_does_not_warn_when_all_reader_images_are_explicitly_omitted(tmp_path):

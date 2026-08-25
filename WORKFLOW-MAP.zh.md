@@ -69,6 +69,7 @@ flowchart LR
 |---|---|---|---|
 | 获得与当前源文件对应的 Markdown | 建立单源 Markdown 转换和内容映射 | native content、output layout | 当前源文件无法形成可对应内容即 blocked |
 | 保留源文件中有意义的内容和关系 | 分离文本、结构、页面图、区域图和嵌入媒体 | native content、asset manifest | 内容或视觉证据缺失、断链即 needs-review |
+| 把整页图片升级为可读图区域并可审计地回填 | ET1.4/F0–F8：多来源需求/全书覆盖对账 → 来源页/定点探查/等价证明 → 同页多图候选区域 → crop 决策/四边接受 → 可选增强 → evidence-only 诊断与可选 Mermaid 四重验证 → 历史记录迁入同一 Manifest/读者投影 → 最小内容单元回填/引用差异诊断/再生成 → 独立批次与文档验收 | `references/figure-asset-lifecycle.zh.md`、workflow `figure_asset_lifecycle.task_tree`、figure coverage、probe/diagnostic/migration evidence、crop decision、backfill evidence | 只扫 cleaned、批次状态冒充全书、裸 geometry、同页多图被合并、历史 success 直接映射 passed、诊断图进入 reader assets、Mermaid 未验证、断链或未闭合均不得 passed |
 | 图片资产多格式提取与先成功再降本（可选） | A3/ET1.4：按需为 PPT/PPTX、PDF、独立图片选择无损提取、页面渲染和裁剪；启用时先用授权高质量在线模型建立基准，再用同输入本地模型校准，达标后才走低成本路线 | `references/asset-extraction-strategy.zh.md`、`contracts/asset-extraction-strategy.yaml`、`asset-quality-comparison` | 启用后缺少同输入比较、质量/追溯门或独立审计时，不得声称本地等价或已降本；该可选工作包不阻塞 ET2 多页扩展 |
 | 为图片模型重建保存关键结构/提示词（启用复杂资产时可选） | A4/ET1.4：对启用的复杂结构或明确重建意图的资产生成结构版 + 提示词版 profile，逐字段回指原图/区域/文字证据 | `references/visual-reconstruction-profile.zh.md`、`contracts/visual-reconstruction-profile.yaml`、`evidence/visual-reconstruction-profile.yaml` | 启用后 profile 缺字段、缺来源 span 或存在未决关系时，只能 `needs-review`；未启用不阻塞 ET2 |
 | 让复杂图文内容仍然可以理解和修正 | 建立复杂区域识别、差异记录和局部修复能力 | reconciliation、stage evidence | 关系无法说明且没有保留依据即 needs-review |
@@ -130,6 +131,16 @@ flowchart LR
    重建 `index.md`/`total.md`/集合包。对应 [`contracts/ebook-page-pruning.yaml`](contracts/ebook-page-pruning.yaml)
    和 [`skills/prune-low-value-ebook-pages/SKILL.md`](skills/prune-low-value-ebook-pages/SKILL.md)。
 
+8. **图级视觉资产升级复用 A3–A6**：图片升级不是第三个 Workflow，也不与 OCR/正文清理绑定。
+   每批只在同一个 page-unit、segment 或其他已登记最小单元中处理 1–2 张图，按来源页、保守裁切、
+   可选可读性增强、可选 Mermaid、同一 Manifest 和 Markdown 回填闭环。裁切先锁横向再调纵向；
+   增强不得改变结构；Mermaid 只使用已确认节点—边并保留 PNG fallback。处理阶段由 manifest/evidence
+   表达，正式包仍使用扁平 `assets/`。对应
+   [`references/figure-asset-lifecycle.zh.md`](references/figure-asset-lifecycle.zh.md)。
+   F0 还要对账来源/raw、cleaned/page-unit、派生 Markdown、资产和 Manifest 的全书图号集合；F1
+   保存 legacy 等价和定点 contact sheet；F2 保持同页多图的独立 ID；F5 的放大/节点/OCR probe
+   只作 evidence；F6 把历史逐图记录按哈希迁入唯一 Manifest；F8 分开 batch/document Verdict。
+
 这些是需求门禁到工程门禁的映射，不是对任何真实 Run 的通过结论。
 
 ## 1. 总体业务链路
@@ -141,8 +152,11 @@ flowchart TD
     A0 --> A1["A1 来源预检"]
     A1 --> A2["A2 原生结构提取"]
     A2 --> A3["A3 视觉资产保留与多路线提取"]
+    A3 -. "可选图级闭环：page → crop → enhanced" .-> FL["同一 manifest 资产派生链"]
     A3 --> A4["A4 视觉文本提取与结构复核"]
+    A4 -. "已确认节点-边时可选 Mermaid + PNG fallback" .-> FL
     A4 --> A5["A5 page-unit 噪声清洗、语言修复与 Markdown 组装"]
+    FL -. "回填当前最小 content unit" .-> A5
     A5 --> A6["A6 命名与来源登记"]
     A6 --> A7["A7 资产包验收"]
     A7 --> P["Markdown 资产包 index.md + manifest + assets"]

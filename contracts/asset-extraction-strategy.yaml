@@ -1,6 +1,6 @@
 contract: asset-extraction-strategy
-version: 0.1.0
-description: 多格式图片资产提取、视觉模型校准、质量比较和成本路线选择的证据契约。
+version: 0.4.0
+description: 多格式图片资产提取、来源页到裁切/增强的派生链、视觉模型校准、质量比较和成本路线选择的证据契约。
 required:
   source:
     source_fingerprint: string
@@ -20,10 +20,15 @@ required:
     comparison: string
     audit: string
   status: enum[complete, needs-review, failed, not-run]
+optional:
+  - figure_coverage
+  - source_page_probes
+  - diagnostic_artifacts
+  - historical_manifest_migration
 asset:
   required: [asset_id, asset_kind, source_occurrence_id, source_location, extraction_method, sha256, status]
-  asset_kind: enum[page-render, embedded-media, complex-region, crop, input-image]
-  extraction_method: enum[embedded-lossless, office-render, pdf-render, original-preserved, region-crop, model-understanding]
+  asset_kind: enum[page-render, embedded-media, complex-region, crop, enhanced-raster, input-image]
+  extraction_method: enum[embedded-lossless, office-render, pdf-render, original-preserved, region-crop, deterministic-enhancement, model-understanding]
   source_location: object
   sha256: string
   status: enum[available, needs-review, unavailable]
@@ -31,6 +36,66 @@ asset:
     path: string|null
     mode: enum[structure-and-prompt, structure-only, prompt-only, insufficient-evidence, not-applicable]
     status: enum[available, needs-review, not-applicable, unavailable]
+  derivation:
+    parent_asset_ids: array
+    operation: enum[region-crop, raster-readability-enhancement]|null
+    parameters: object|null
+    structure_preserved: boolean|null
+    fallback_asset_id: string|null
+    status: enum[complete, needs-review, failed, not-applicable]
+  crop_decision: object|null
+figure_coverage:
+  required: [scope, demand_sources, expected_figure_ids, records, counts, batch_status, document_status]
+  scope: enum[content-unit, full-document]
+  demand_sources: array
+  expected_figure_ids: array
+  records: array
+  counts:
+    required: [expected, passed, legacy_only, missing, markdown_reference_missing, needs_review, not_applicable]
+  batch_status: enum[passed, needs-review, failed, not-run]
+  document_status: enum[passed, needs-review, failed, not-run]
+figure_coverage_record:
+  required: [figure_id, content_unit_ids, demand_evidence, source_page_status, asset_status, markdown_status, lifecycle_status, batch_ids, diagnostics]
+  figure_id: string
+  content_unit_ids: array
+  demand_evidence: array
+  source_page_status: enum[located, probe-required, needs-review, missing, not-applicable]
+  asset_status: enum[upgraded, legacy-only, source-page-only, missing, needs-review, not-applicable]
+  markdown_status: enum[linked, reference-missing, needs-review, not-applicable]
+  lifecycle_status: enum[passed, needs-review, failed, not-run, not-applicable]
+  batch_ids: array
+  diagnostics: array
+source_page_probe:
+  required: [probe_id, trigger, source_fingerprint, candidate_pages, page_renders, contact_sheet, coordinate_authority, findings, selected_pages, status]
+  trigger: enum[text-layer-miss, page-map-uncertain, legacy-source-missing, manual-review]
+  candidate_pages: array
+  page_renders: array
+  contact_sheet:
+    required: [path, sha256, page_order, preview_dimensions, full_resolution_dimensions, status]
+    status: enum[available, needs-review, not-created]
+  coordinate_authority: enum[page-selection-only-not-crop-geometry]
+  findings: array
+  selected_pages: array
+  status: enum[complete, needs-review, failed, not-run]
+diagnostic_artifact:
+  required: [artifact_id, kind, file_path, sha256, parent_asset_ids, purpose, method, parameters, coordinate_transform, reader_projection, retention_status, status]
+  kind: enum[contact-sheet, magnified-raster, node-subcrop, ocr-probe, crop-overlay, comparison-preview]
+  parent_asset_ids: array
+  method: string
+  parameters: object
+  coordinate_transform: object|null
+  reader_projection: enum[evidence-only]
+  retention_status: enum[retain-until-resolved, retain-for-audit, eligible-for-hash-locked-prune]
+  status: enum[available, needs-review, unavailable]
+historical_manifest_migration:
+  required: [source_records, target_manifest_path, identity_mapping, status_mapping, conflicts, active_identity_store, status]
+  source_records: array
+  target_manifest_path: enum[manifest.yaml]
+  identity_mapping: array
+  status_mapping: array
+  conflicts: array
+  active_identity_store: enum[single-target-manifest]
+  status: enum[complete, needs-review, failed, not-run]
 route:
   required: [route_id, role, implementation, authorization, input_assets, prompt_or_schema_version, status]
   role: enum[deterministic, calibration-baseline, local-candidate, budget-fallback]
@@ -52,3 +117,16 @@ invariants:
   - 资产 status=available 时 source_location、sha256 和实际文件必须可重读
   - 未授权的在线路线只能为 planned 或 needs-review，不得写成 attempted/passed
   - 复杂结构或明确需要重建的资产若没有 reconstruction_profile，只能保留为 needs-review，不能声称已保存可复用结构或提示词
+  - 图级升级按一个 content unit 中 1–2 张图推进；需求盘点、source page、候选区域、crop decision、enhanced、可选 derived representation、同一 manifest、reader projection、Markdown binding 和验收未形成闭环前不得扩大批次
+  - 图级升级必须按 workflow.yaml 的 F0–F8 任务树记录执行绑定和证据；procedure-only、未接线或人工复核步骤不得伪装成 code-backed complete
+  - crop 必须先消费候选区域和 crop_decision，再保存父页面资产和 WxH+X+Y geometry；默认先锁横向、后调整纵向，两侧存在箭头、标签、括号或流程线时宁可留白
+  - crop 的 available 不仅要求 geometry 合法，还要求四边复核、来源/crop 对照证据和 accepted 决策；前景触边且无解释时最多为 needs-review
+  - enhanced-raster 只允许确定性可读性增强，不得改变节点、箭头、层级或文字；效果变差时保留 crop 为首选 fallback
+  - 来源项目的 pages/crops/enhanced/derived 分层只描述处理生命周期；正式工程包和读者包仍使用现有扁平 assets/ 与单一 manifest.yaml
+  - 图级需求必须对账原始最小来源单元、清理后单元、派生文档、现有资产和 Manifest；任何一个来源缺少引用都不能从 expected_figure_ids 静默删除图号
+  - batch_status=passed 只表示当前 1–2 张图闭合；只有全部 expected_figure_ids 均有记录、没有 missing/reference-missing/needs-review，且每项 lifecycle_status 为 passed 或有证据的 not-applicable 时，document_status 才能为 passed
+  - 定点页探查必须记录候选页、页面图和 contact sheet 的页序与 SHA-256；contact sheet 只作为工程 evidence，不投影到读者 assets/
+  - contact sheet 和 preview thumbnail 只允许选页，不得直接提供正式 crop geometry；缩略图标注必须记录 preview 到带哈希全分辨率 parent 的 scale/rotation transform，并在 parent 坐标空间重新定位和四边复核
+  - 放大图、节点子图、OCR probe、crop overlay 和比较预览是 diagnostic_artifacts；OCR/视觉候选不得据此猜测节点、箭头、层级或文字，诊断文件不得成为读者资产
+  - 同一来源页包含多个图时复用一个 page-render parent，但每个图必须有独立 figure_id、region_id、source_occurrence_id、ordinal 和 crop decision；不得按页码去重为一个图
+  - 历史逐图 Manifest 迁移时保留源记录路径与哈希作为 evidence-only，并合并到唯一 manifest.yaml；历史 success 在未重新通过当前来源、裁切、派生和 Markdown 门禁前归一化为 needs-review

@@ -144,6 +144,24 @@ Office 渲染和异常诊断仍保存在比较证据中。差异未达到阈值�
 2. **来源视觉资产落盘**
    - 先保存整页渲染图；只有整页图不足以支持关系复核时才生成 regions，按来源页实际引用保留 embedded 资产。
    - 每个资产必须进入 manifest，并可回到来源页、区域或对象。
+   - 按需升级单张图时，每批限定为同一个最小内容单元中的 1–2 张图，执行
+     `需求盘点 → 来源页 → 候选区域 → crop 决策/接受 → 可选增强 → 可选 Mermaid → 同一 Manifest/读者投影 → 最小内容单元回填/再生成 → 验收`。
+   - 候选区域先由 `complex-region-detection` 或等价人工定位产生；裁切先锁横向、后调纵向并逐边复核，
+     增强只改善可读性并保留 crop fallback。Mermaid 只使用已确认节点—边，
+     任何未决文字/关系都保留 PNG 和 `needs-review`。
+   - F0 对账来源/raw、cleaned/page-unit、派生 Markdown、资产和同一 Manifest，维护独立的
+     batch/document coverage；cleaned/final 丢失的图号仍在 expected 集合中。F1 的定点页探查保存
+     page/contact-sheet 页序与哈希，legacy 副本保存等价证明。F2 同页多图共享 page parent 但保持
+     独立 ID。F5 诊断放大图/节点子图/OCR probe 仅作 evidence。F6 历史逐图记录只按哈希迁入唯一
+     Manifest，历史 success 先归一化 needs-review。F8 批次通过不得冒充全书完成。
+   - reader crop 完成后，必须再运行一次“纯文字图二次门”：优先使用 OCR 坐标、Markdown 邻近上下文、
+     空白带和非文字墨迹做确定性审计，只判断当前被引用 crop 是否仍然只是文字截图。
+     输出只能是 `candidate-remove`、`crop-required`、`retain` 或 `needs-review`。
+     `candidate-remove` 才能进入删图计划；`crop-required` 继续收裁；`retain` 保留；
+     `needs-review` 保守停下。不得因为第一次裁图评分 >=95 就跳过这道门。
+   - 局域网视觉大模型不是这一步的默认入口。只有 OCR 低置信、文字与结构边界不清、或疑似复杂关系被误判时，
+     才允许把单张 crop 作为例外交给局域网视觉模型补判；它不能直接授权删除。
+   - `pages/crops/enhanced/derived` 仅是来源案例的处理分层；正式包不创建对应子目录，仍使用扁平 `assets/`。
 
 3. **视觉模型候选路线：`vision-page-analysis`**
    - `mode=full`、`pass_strategy=single` 是单个视觉模型适配器的调用方式，不代表 mac96 是文档级默认路线。
@@ -171,6 +189,8 @@ Office 渲染和异常诊断仍保存在比较证据中。差异未达到阈值�
    - 每页按“标题 → 主题/范围 → 核心文字、列表、表格、分区 → 图示关系说明 → 来源与不确定性 → 【需要保留的】原始页面图/按需复杂区域图/嵌入图片 → 待核对/未知形式”输出。
    - 图片不得置于正文文字之前；这只调整阅读顺序，不减少视觉资产保留要求。
    - A4 必须记录实际复核范围；真实失败、冲突或未裁决关系才进入 `needs-review`。模型没有返回可选 `unknown_forms` 字段、未执行开放集合扫描或整页图已足够，不能单独制造 `needs-review`。
+   - 图级回填的主编辑面是当前 page-unit/segment/content unit。可靠 Mermaid 写在 PNG fallback 前；
+     不可靠时只写 crop/enhanced PNG。`document-temp.md`、`index.md` 和整书 final 必须从最小单元重新生成。
 
 ## 结果判定和下一步
 

@@ -49,6 +49,7 @@ from page_markdown_noise_cleanup import (  # noqa: E402
     cleanup_directory as cleanup_page_markdown_noise,
     load_profile as load_noise_cleanup_profile,
 )
+import pdf_resource_slots as resource_slots  # noqa: E402
 
 PROGRESS_CURRENT_NAME = "progress-current.json"
 DEFAULT_NOISE_CLEANUP_PROFILE = ROOT / "references" / "reader-noise-profile.yaml"
@@ -891,6 +892,7 @@ def validate_page_markdown_checkpoint(target: Path, *, expected_pages: list[int]
             raise RuntimeError(f"single-page Markdown has no body text for page {page}")
 
 
+@resource_slots.uses_local_pdf_slot("mac96-vision-pdf-to-markdown")
 def run(args: argparse.Namespace) -> Path:
     source = args.source.expanduser().resolve()
     if not source.is_file():

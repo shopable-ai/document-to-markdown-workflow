@@ -24,6 +24,8 @@ order: 10
 - 输出必须包含来源、状态和可诊断错误信息。
 - 每次出现至少登记 `source_occurrence_id`、`source_file`、`page`/`region`、`object_ids`、`parent_asset_id`、`ordinal` 和状态。
 - 同一内容在不同页面出现时保留多条 occurrence；同一 occurrence 的重命名、搬迁或去重不得新造来源事实。
+- 同一页面含多个图时允许它们共享 page-render parent，但每个图必须有不同 figure/region/occurrence
+  ID 和稳定 ordinal；页面相同、哈希相同或图形相似都不能把多个来源出现合并为一个。
 - 不覆盖来源文件，不写入密钥或认证信息。
 - 无法可靠完成时显式返回 `Unknown`、`needs-review` 或对应失败态。
 

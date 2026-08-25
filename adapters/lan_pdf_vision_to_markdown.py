@@ -15,6 +15,7 @@ import datetime as dt
 import gzip
 import hashlib
 import http.client
+import importlib
 import json
 import logging
 import math
@@ -31,8 +32,16 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterable
 from urllib.parse import urlparse
 
+from PIL import Image
+
+try:
+    import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_resource_slots as resource_slots
+
 
 EXPECTED_MODEL = "qwen3-vl:30b-a3b-instruct"
+APPLE_VISION_ROUTE = "apple-vision-ocr"
 DEFAULT_OLLAMA_URL = "http://shopme.local:11434"
 DEFAULT_DPI = 220
 DEFAULT_NUM_CTX = 16384
@@ -48,6 +57,17 @@ PLACEHOLDER_VISUAL_RE = re.compile(r"^<!--\s*(Image|Table)\b", re.IGNORECASE)
 CAPTION_LINE_RE = re.compile(
     r"^(图|表)\s*[0-9一二三四五六七八九十百千]+(?:[-—–.][0-9一二三四五六七八九十百千]+)?\b"
 )
+
+
+def _load_heading_repair_module():
+    try:
+        return importlib.import_module("adapters.lan_markdown_heading_repair")
+    except ModuleNotFoundError as exc:
+        if exc.name != "adapters":
+            raise
+        return importlib.import_module("lan_markdown_heading_repair")
+
+
 ISOLATED_PAGE_NUMBER_RE = re.compile(
     r"^\s*(?:第\s*)?[—–-]?\s*(?:\d{1,4}|[一二三四五六七八九十百千]+)\s*"
     r"(?:页)?\s*[—–-]?\s*$"
@@ -264,6 +284,19 @@ def project_page_image_reference(text: str, page: int, reference: str | None) ->
     return "\n".join(_collapse_blank_runs(projected)).rstrip() + "\n"
 
 
+def unwrap_outer_markdown_fence(text: str) -> tuple[str, bool]:
+    """Remove one complete outer Markdown fence while preserving its body."""
+    normalized = text.replace("\r\n", "\n")
+    lines = normalized.splitlines()
+    if (
+        len(lines) >= 2
+        and lines[0].strip().lower() in {"```", "```md", "```markdown"}
+        and lines[-1].strip() == "```"
+    ):
+        return "\n".join(lines[1:-1]).strip() + "\n", True
+    return normalized, False
+
+
 def get_pdf_page_count(source: Path) -> int:
     executable = shutil.which("pdfinfo")
     if not executable:
@@ -389,6 +422,7 @@ def render_or_reuse_page(source: Path, page: int, dpi: int, target: Path) -> dic
     }
 
 
+@resource_slots.uses_visual_model_slot("lan-ollama-vision-request")
 def send_streaming_request(
     payload_body: bytes,
     *,
@@ -804,6 +838,27 @@ def classify_reader_image_action(page: int, markdown: str, *, asset_present: boo
     )
 
 
+def _near_blank_page_image(path: Path) -> tuple[bool, dict[str, Any]]:
+    """Confirm a near-white page using a bounded grayscale histogram."""
+
+    with Image.open(path) as image:
+        grayscale = image.convert("L")
+        grayscale.thumbnail((512, 512))
+        histogram = grayscale.histogram()
+        pixel_count = max(1, grayscale.width * grayscale.height)
+        dark_pixels = sum(histogram[:245])
+        strong_dark_pixels = sum(histogram[:220])
+    dark_ratio = dark_pixels / pixel_count
+    strong_dark_ratio = strong_dark_pixels / pixel_count
+    metrics = {
+        "sample_width": grayscale.width,
+        "sample_height": grayscale.height,
+        "dark_pixel_ratio_lt_245": round(dark_ratio, 8),
+        "strong_dark_pixel_ratio_lt_220": round(strong_dark_ratio, 8),
+    }
+    return dark_ratio <= 0.001 and strong_dark_ratio <= 0.0005, metrics
+
+
 def classify_reader_images(
     *, run_root: Path, pages: list[int] | None = None
 ) -> dict[str, Any]:
@@ -819,15 +874,57 @@ def classify_reader_images(
         paths = page_paths(run_root, page)
         if not paths["markdown"].is_file() or not paths["result"].is_file():
             raise RunFailure(f"第 {page} 页缺少页面单元或 page-result 证据")
-        decision = classify_reader_image_action(
-            page,
-            paths["markdown"].read_text(encoding="utf-8"),
-            asset_present=paths["asset"].is_file(),
+        result = json.loads(paths["result"].read_text(encoding="utf-8"))
+        resolution = result.get("review_resolution") or {}
+        structure_path = run_root / str(result.get("structure_evidence_path") or "")
+        structure = (
+            json.loads(structure_path.read_text(encoding="utf-8"))
+            if result.get("route") == APPLE_VISION_ROUTE and structure_path.is_file()
+            else {}
         )
+        blank_page = bool(
+            structure.get("status") == "passed"
+            and (structure.get("structure_inventory") or {}).get("page_kind")
+            == "image-only-no-recognized-text"
+            and paths["asset"].is_file()
+        )
+        blank_metrics: dict[str, Any] = {}
+        if blank_page:
+            blank_page, blank_metrics = _near_blank_page_image(paths["asset"])
+        if blank_page:
+            decision = _reader_image_policy_record(
+                page,
+                "omit",
+                decision_source="ocr-near-blank-page-confirmation",
+                reason_codes=["confirmed-near-blank-page"],
+                asset_present=True,
+                semantic_text_coverage="empty-page",
+                layout_dependency="none",
+                metrics=blank_metrics,
+            )
+        elif (
+            result.get("route") == APPLE_VISION_ROUTE
+            and resolution.get("status") == "passed"
+            and resolution.get("source_image_retained") is True
+        ):
+            decision = _reader_image_policy_record(
+                page,
+                "retain",
+                decision_source="ocr-review-source-image-retention",
+                reason_codes=["uncertain-ocr-source-image-retained"],
+                asset_present=paths["asset"].is_file(),
+                semantic_text_coverage="needs-review",
+                layout_dependency="source-image-required",
+            )
+        else:
+            decision = classify_reader_image_action(
+                page,
+                paths["markdown"].read_text(encoding="utf-8"),
+                asset_present=paths["asset"].is_file(),
+            )
         counts[decision["reader_image_action"]] += 1
         if decision["reader_image_action"] == "needs-review":
             needs_review_pages.append(page)
-        result = json.loads(paths["result"].read_text(encoding="utf-8"))
         stored = result.get("reader_image")
         reader_image_record = {
             "action": decision["reader_image_action"],
@@ -1151,7 +1248,47 @@ def validate_saved_page(source_sha256: str, run_root: Path, page: int) -> dict[s
         raise RunFailure(f"第 {page} 页 page_state 不允许跳过：{result.get('page_state')}")
     if result.get("page") != page:
         raise RunFailure(f"第 {page} 页证据页码不一致")
-    if pruned is None:
+    is_local_ocr = result.get("route") == APPLE_VISION_ROUTE
+    if is_local_ocr:
+        if pruned is not None:
+            raise RunFailure(f"第 {page} 页本机 OCR 证据不允许缺失来源页面图")
+        asset_sha256 = sha256_file(paths["asset"])
+        if request.get("route") != APPLE_VISION_ROUTE:
+            raise RunFailure(f"第 {page} 页本机 OCR 路由证据不一致")
+        if request.get("image_sha256") != asset_sha256:
+            raise RunFailure(f"第 {page} 页本机 OCR 输入图片哈希不一致")
+        if request.get("remote_model_calls") != []:
+            raise RunFailure(f"第 {page} 页本机 OCR 证据包含远程模型调用")
+        raw_path = run_root / str(result.get("ocr_evidence_path") or "")
+        structure_path = run_root / str(result.get("structure_evidence_path") or "")
+        for label, evidence_path, expected_sha in (
+            ("OCR", raw_path, result.get("ocr_evidence_sha256")),
+            ("结构", structure_path, result.get("structure_evidence_sha256")),
+        ):
+            if (
+                not evidence_path.is_file()
+                or evidence_path.stat().st_size == 0
+                or sha256_file(evidence_path) != expected_sha
+            ):
+                raise RunFailure(f"第 {page} 页{label}证据缺失或哈希不一致")
+        ocr_payload = json.loads(raw_path.read_text(encoding="utf-8"))
+        structure = json.loads(structure_path.read_text(encoding="utf-8"))
+        if ocr_payload.get("status") != "complete":
+            raise RunFailure(f"第 {page} 页本机 OCR 未完成")
+        if structure.get("status") != "passed":
+            resolution = result.get("review_resolution") or {}
+            if not (
+                structure.get("status") == "needs-review"
+                and resolution.get("status") == "passed"
+                and resolution.get("source_image_retained") is True
+                and resolution.get("candidate_accounting_complete") is True
+                and policy["reader_image_action"] in {"retain", "needs-review"}
+            ):
+                raise RunFailure(f"第 {page} 页 OCR 结构仍需复核")
+        accounting = structure.get("candidate_accounting") or {}
+        if accounting.get("unmapped_indices") or accounting.get("duplicate_indices"):
+            raise RunFailure(f"第 {page} 页 OCR 候选映射不完整")
+    elif pruned is None:
         image_bytes = paths["asset"].read_bytes()
         request_variants = request_payload_variants(page, image_bytes)
         if not any(
@@ -1278,8 +1415,11 @@ def _convert_one_page(
             aggregate = send_streaming_request(
                 body, timeout_seconds=timeout_seconds, raw_stream=raw_stream
             )
+        model_text, fence_unwrapped = unwrap_outer_markdown_fence(
+            str(aggregate.get("response") or "")
+        )
         markdown = project_page_image_reference(
-            str(aggregate.get("response") or ""),
+            model_text,
             page,
             page_unit_image_reference(page),
         )
@@ -1325,6 +1465,7 @@ def _convert_one_page(
             "metrics_path": str(paths["metrics"]),
             "validation": validation,
             "marker_normalized": marker_normalized,
+            "outer_markdown_fence_unwrapped": fence_unwrapped,
             "finished_at": utc_now(),
         }
         write_json(paths["result"], result)
@@ -1458,9 +1599,11 @@ def _summary(
     image_match = True
     image_count = 0
     request_seconds: list[float] = []
+    routes: set[str] = set()
     for result_path in sorted((run_root / "evidence").glob("page-result-p[0-9][0-9][0-9].json")):
         result = json.loads(result_path.read_text(encoding="utf-8"))
         page = int(result.get("page") or 0)
+        routes.add(str(result.get("route") or "ollama-vision"))
         if result.get("status") == "passed":
             passed_pages.append(page)
         else:
@@ -1503,13 +1646,20 @@ def _summary(
             "sha256": sha256_file(pruning_path),
             "counts": pruning.get("counts"),
         }
-    return {
-        "status": status,
-        "source": {"path": str(source), "sha256": source_sha256},
-        "total_pages": total_pages,
-        "passed_pages": len(passed_pages),
-        "failed_pages": sorted(failed_pages),
-        "request": {
+    request_summary: dict[str, Any]
+    if routes == {APPLE_VISION_ROUTE}:
+        request_summary = {
+            "route": APPLE_VISION_ROUTE,
+            "engine": "Apple Vision VNRecognizeTextRequest",
+            "model": "not-applicable",
+            "recognition_level": "accurate",
+            "languages": ["zh-Hans", "en-US"],
+            "uses_language_correction": True,
+            "remote_model_calls": [],
+            "used_pdf_native_text": False,
+        }
+    else:
+        request_summary = {
             "endpoint": f"{DEFAULT_OLLAMA_URL}/api/generate",
             "model": EXPECTED_MODEL,
             "stream": True,
@@ -1521,7 +1671,14 @@ def _summary(
             },
             "format_present": False,
             "used_pdf_native_text": False,
-        },
+        }
+    return {
+        "status": status,
+        "source": {"path": str(source), "sha256": source_sha256},
+        "total_pages": total_pages,
+        "passed_pages": len(passed_pages),
+        "failed_pages": sorted(failed_pages),
+        "request": request_summary,
         "images": {
             "count": image_count,
             "hash_conclusion": "all-match-page-evidence" if image_match else "mismatch",
@@ -1536,6 +1693,7 @@ def _summary(
     }
 
 
+@resource_slots.uses_local_pdf_slot("lan-visual-pdf-to-markdown")
 def run_visual_conversion(
     *,
     source: Path,
@@ -1708,7 +1866,7 @@ def run_visual_conversion(
         try:
             cleanup = run_page_cleanup(run_root=run_root, pages=pages)
             merged = merge_document(run_root=run_root, pages=pages)
-            from adapters import lan_markdown_heading_repair as heading_repair
+            heading_repair = _load_heading_repair_module()
 
             heading = heading_repair.run_heading_repair(
                 run_root=run_root,
@@ -1926,7 +2084,7 @@ def run_page_cleanup(
 def repair_page_image_references(
     *, run_root: Path, pages: list[int] | None = None
 ) -> dict[str, Any]:
-    """Retrofit the current fail-closed page-image policy without changing body text."""
+    """Retrofit page-image policy, annotating only independently confirmed blank pages."""
     run_root = run_root.expanduser().resolve()
     selected = pages or discover_page_units(run_root)
     if selected != sorted(set(selected)):
@@ -1944,6 +2102,13 @@ def repair_page_image_references(
             page,
             policy["page_unit_reference"],
         )
+        confirmed_blank = "confirmed-near-blank-page" in policy["reason_codes"]
+        added_blank_annotation = bool(
+            confirmed_blank
+            and not [line for line in _page_semantic_lines(after, page) if line.strip()]
+        )
+        if added_blank_annotation:
+            after = f"<!-- page:{page} -->\n\n*（空白页）*\n"
         before_body = [
             line
             for line in before.replace("\r\n", "\n").splitlines()
@@ -1956,7 +2121,7 @@ def repair_page_image_references(
             if line.strip()
             and not _is_current_page_image_target(_markdown_image_target(line), page)
         ]
-        if before_body != after_body:
+        if before_body != after_body and not added_blank_annotation:
             raise RunFailure(f"第 {page} 页图片引用修复会改变非图片正文")
         validation = validate_page_markdown(
             after,

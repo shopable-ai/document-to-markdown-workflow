@@ -1,0 +1,52 @@
+version = 1
+timeout_seconds = 300
+default_route_order = ["lan-ollama", "lan-ollama-ssh", "codex-default"]
+
+[routes.lan-ollama]
+transport = "ollama-generate"
+proxy_policy = "direct"
+thinking_env = "MARKDOWN_LAN_THINKING"
+thinking = false
+max_output_tokens_env = "MARKDOWN_LAN_MAX_OUTPUT_TOKENS"
+max_output_tokens = 16384
+base_url_env = "MARKDOWN_LAN_BASE_URL"
+model_env = "MARKDOWN_LAN_MODEL"
+model = "qwen3.6:latest"
+api_key_env = "MARKDOWN_LAN_API_KEY"
+
+[routes.lan-ollama-ssh]
+transport = "ollama-generate-ssh"
+thinking_env = "MARKDOWN_LAN_THINKING"
+thinking = false
+max_output_tokens_env = "MARKDOWN_LAN_MAX_OUTPUT_TOKENS"
+max_output_tokens = 16384
+model_env = "MARKDOWN_LAN_MODEL"
+model = "qwen3.6:latest"
+ssh_host_env = "MARKDOWN_LAN_SSH_HOST"
+ssh_host = "mac96"
+ssh_endpoint_env = "MARKDOWN_LAN_SSH_ENDPOINT"
+ssh_endpoint = "http://127.0.0.1:11434/api/generate"
+
+[routes.lan-openai-chat]
+transport = "openai-chat-completions"
+proxy_policy = "direct"
+max_output_tokens = 16384
+base_url_env = "MARKDOWN_OPENAI_COMPATIBLE_BASE_URL"
+model_env = "MARKDOWN_OPENAI_COMPATIBLE_MODEL"
+api_key_env = "MARKDOWN_OPENAI_COMPATIBLE_API_KEY"
+
+[routes.lan-openai-responses]
+transport = "openai-responses"
+proxy_policy = "direct"
+max_output_tokens = 16384
+base_url_env = "MARKDOWN_OPENAI_COMPATIBLE_BASE_URL"
+model_env = "MARKDOWN_OPENAI_COMPATIBLE_MODEL"
+api_key_env = "MARKDOWN_OPENAI_COMPATIBLE_API_KEY"
+
+[routes.codex-default]
+transport = "codex-cli"
+profile_env = "MARKDOWN_CODEX_PROFILE"
+model_env = "MARKDOWN_CODEX_MODEL"
+
+[routes.current-conversation]
+transport = "current-conversation"

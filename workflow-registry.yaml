@@ -22,7 +22,7 @@ workflows:
     plan_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --plan-only
     default_pages: all
     production_runtime_contract: contracts/workflow-a-production-runtime-context.yaml
-    background_task_entrypoint: python3 adapters/pdf_background_task.py start --task-type <workflow-a|native-pdf|native-pdf-batch|hybrid-pdf|visual-pdf> --source <pdf> --output-root <dir> --pages <selector>
+    background_task_entrypoint: python3 adapters/pdf_background_task.py start --task-type <workflow-a|native-pdf|native-pdf-batch|local-ocr-pdf|hybrid-pdf|visual-pdf> --source <pdf> --output-root <dir> --pages <selector>
     background_task_contract: contracts/long-task-interaction.yaml
     batch_entrypoint: python3 adapters/workflow_a_batch.py --source <file-1> --source <file-2> --output-root <dir> --pages all
     batch_entrypoint_status: blocked-until-generic-execute-promotion

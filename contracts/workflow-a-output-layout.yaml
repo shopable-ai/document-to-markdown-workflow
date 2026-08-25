@@ -11,6 +11,7 @@ required_files:
 optional_files:
   - reports/validation-result.json
   - reports/quality-report.yaml
+  - reports/markdown-post-merge-formatting.json
   - evidence/preflight.json
   - document-temp.md
 required_directories:
@@ -45,3 +46,5 @@ invariants:
   - mac96 分页执行路径中，每个已完成页面必须同时存在 vision-page-analysis JSON、vision-text-transcription JSON 和 page-units Markdown
   - page-units/ 只能包含显式处理的页面；不得为修复一页把其他页面正文写入当前单元
   - document-temp.md 必须由页面单元按固定页码顺序确定性合并，不得覆盖 index.md
+  - 合并后的终态整理发生在 document-temp.md 之后、index.md 落盘之前；该步骤只能做保守 Markdown 整理，不得改图片路径、页面顺序或把同内容终稿复制成第二个 Markdown 文件名
+  - 启用模型终态整理时必须遵守 markdown-post-merge-model-routing 契约；所有模型输出通过页面标记、图片引用、长度和围栏守卫后才能原子写入 index.md

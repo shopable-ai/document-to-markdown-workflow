@@ -49,6 +49,15 @@ Agent 读取本文件后，日常关键词直接进入 `contracts/workflow-a-pro
 - 用户说停止、取消、不用继续或不要再跑时，立即调用 `cancel <run_id>`；只在 PID、进程组和 worker identity 一致时终止整个进程组，确认残留进程并返回一次取消摘要后结束。
 - 消息只允许出现在启动、真实异常、用户主动查询、完成或取消事件；完整规则见 `contracts/long-task-interaction.yaml`。
 
+### 批量转换固定入口与续跑目录
+
+- 同一批来源集合只能有一个当前入口目录，用 `<output_root>/conversions/_current/` 记录 `CURRENT_PATHS.md` 和历史目录登记表；后续续接必须先读该入口，再读 `<output_root>/conversions/_consolidated/source-consolidation.json`。
+- `_consolidated/` 只保存来源级 strict acceptance 总账和已选 run root，不保存每本 PDF 的工程包；工程包继续保留在路线固定批次根的 `runs/` 下。
+- 路线恢复批次使用稳定名称，例如 `<output_root>/conversions/native-only`、`hybrid`、`vision-only`。除首次路线检测或用户明确要求保留实验批次外，不得默认创建 `*-<timestamp>` 恢复目录。
+- 继续未完成集合前，先基于所有既有 run root 刷新来源级去重总账；只对未 strict accepted 的来源续跑。旧 `results.json`、stale `running`、smoke、needs-review、failed 或空 `index.md` 不能作为完成依据。
+- 正在写入的固定批次根不得移动或重排。需要目录收束时，只新增 `_current` 指针和登记表；等运行停止后再刷新 `_consolidated`。
+- 最终读者层目录（如 `Markdown成品`）只能在 `_consolidated` 显示 100% 来源 strict accepted 后创建和导出。
+
 ## Workflow A 稳定入口
 
 Workflow A 的唯一推荐生产入口是“固定 Workflow 提示词 + 单一 `source` + `output_root`”。

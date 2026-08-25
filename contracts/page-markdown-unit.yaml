@@ -1,6 +1,6 @@
 contract: page-markdown-unit
-version: 0.3.0
-description: 单页读者层 Markdown 工作单元、阶段门、确定性合并和派生预览契约。
+version: 0.5.0
+description: 单页读者层 Markdown 工作单元、图级 Mermaid/PNG 回填、阶段门、确定性合并和派生预览契约。
 status: active
 scope: reader-layer-page-repair-only
 required_metadata:
@@ -19,6 +19,7 @@ required_sections:
   - 已确认的关系说明
   - 待核对项
 optional_sections:
+  - 结构化图示（Mermaid）
   - 原始页面图
 structural_divider_exception:
   declaration: frontmatter.type=divider
@@ -62,6 +63,21 @@ outputs:
   validation_report: page-validation.json
   noise_cleanup_report: evidence/page-markdown-noise-cleanup.json
   reader_image_policy_report: evidence/reader-image-policy.json
+conditional_outputs:
+  visual_asset_backfill_evidence:
+    when: figure-asset-lifecycle-enabled
+    path: evidence/visual-asset-backfill.json
+visual_asset_backfill_evidence:
+  required: [content_unit_id, markdown_path, before_sha256, after_sha256, inserted_asset_ids, mermaid_representation_ids, link_checks, merge_check, status]
+  content_unit_id: string
+  markdown_path: string
+  before_sha256: string
+  after_sha256: string
+  inserted_asset_ids: array
+  mermaid_representation_ids: array
+  link_checks: array
+  merge_check: enum[passed, needs-review, failed, not-run]
+  status: enum[passed, needs-review, failed]
 pre_language_noise_cleanup:
   order: after-page-unit-generation-before-markdown-content-repair
   skill: skills/clean-page-markdown-noise/SKILL.md
@@ -116,8 +132,16 @@ rules:
     - 举例与思考
     - 模型结构
     - 已确认的关系说明
+    - 结构化图示（Mermaid，仅 derived representation 可用时）
     - 原始页面图（仅 reader_image_action 不为 omit 时）
     - 待核对项
+  visual_asset_backfill:
+    - 回填只修改当前 page-unit；图级处理可用 manifest 登记的 segment 或其他最小 content_unit_id，但不得直接把 document-temp.md/index.md/final 当作主编辑面。
+    - Mermaid 可靠时，顺序固定为 fenced mermaid block、PNG fallback 图片链接、图题；PNG 必须是同一 manifest 中可用的 crop 或 enhanced-raster。
+    - Mermaid 不可靠、文字不稳定或关系未裁决时，不写 Mermaid block，只写可用 crop/enhanced PNG；工程层记录 Unknown/needs-review。
+    - page-unit 中图片使用 ../assets/<file>；page-unit 合并本身逐字保留链接，不在此步骤改写路径；根 index.md 的下游读者投影使用 assets/<file>，不得创建 pages/crops/enhanced/derived 子目录。
+    - Markdown 缺少预期图片引用时不得删除来源资产；先停止回填并检查页面单元生成、写出或合并环节。
+    - 回填必须记录当前 content unit 的前后 SHA-256、插入的 asset/representation ID、每条相对链接解析结果和确定性合并复核；只有全部链接 resolved 且合并逐字保留 Mermaid/fallback 时才能 passed。
   relation_safety:
     - 只有有明确视觉证据的关系才能进入已确认的关系说明。
     - 未确认关系必须进入待核对项并标记 Unknown/needs-review。
@@ -131,6 +155,7 @@ rules:
     - 工程证据层保留 page PNG 不得自动推导为读者层必须嵌图；omit 页面在 page-unit、document-temp.md 和 index.md 中都不得回灌页面原图。
     - 合并不得重新推断、摘要、翻译或补写来源中不存在的文字。
     - 合并失败时不得生成成功预览。
+    - fenced Mermaid block、紧随其后的 PNG fallback 和图题必须逐字保留；合并器不得重新生成 Mermaid、改变边或删除 fallback。
   derived_preview:
     - document-temp.md 只是页面单元的确定性派生预览。
     - document-temp.md 不得覆盖、替代或成为 index.md 的事实来源。
@@ -139,6 +164,6 @@ rules:
     - relation_status=needs-review 仍必须保留在待核对项。
     - failed 和 needs-review 不得作为下一阶段通过证据。
   structural_divider:
-    - `type: divider` 只用于仍需保留页码/来源关系的导航分隔页；标题只取第一个 Markdown 标题。
+    - "`type: divider` 只用于仍需保留页码/来源关系的导航分隔页；标题只取第一个 Markdown 标题。"
     - divider 不得重复填写 title/semantic_title，不得保留原始页面图链接，也不得生成正文路由。
     - 默认仍保留来源图片证据；只有用户明确要求物理删除时，才允许以 visual-asset-pruning report 作为不可变 manifest 之上的删除覆盖层。

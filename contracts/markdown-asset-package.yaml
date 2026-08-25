@@ -1,5 +1,5 @@
 contract: markdown-asset-package
-version: 0.1.0
+version: 0.4.0
 description: Workflow A 显式 --engineering-output 模式的完整资产包；默认 reader-only 输出使用 reader-markdown-output-layout。
 output_layout: workflow-a-output-layout.yaml
 required:
@@ -37,6 +37,23 @@ optional:
   - visual_reconstruction_profiles
   - markdown_content_repair: reviews/markdown-content-repair.yaml
   - visual_asset_pruning: evidence/visual-asset-pruning.json
+  - visual_asset_lifecycle: workflow F0-F8 task evidence + manifest.yaml assets + optional evidence/visual-reconstruction-profile.yaml + visual-asset-backfill evidence
+  - figure_coverage: manifest.figure_coverage and optional evidence/figure-coverage.json
+  - source_page_probes: optional evidence/source-page-probe-<id>.json
+  - diagnostic_artifacts: optional engineering evidence records; never reader assets
+  - historical_manifest_migration: optional evidence/historical-manifest-migration.json
+visual_asset_lifecycle:
+  required: [enabled, task_evidence, status]
+  enabled: boolean
+  task_evidence: array
+  status: enum[complete, needs-review, failed, not-run]
+visual_asset_lifecycle_task_evidence:
+  required: [task_id, status, binding_status, evidence_paths, diagnostics]
+  task_id: enum[F0, F1, F2, F3, F4, F5, F6, F7, F8]
+  status: enum[complete, needs-review, failed, not-run]
+  binding_status: string
+  evidence_paths: array
+  diagnostics: array
 section_item:
   required: [section_id, title, body, source_occurrences, visual_asset_ids, confidence, reader_order, unknown_forms]
   confidence: enum[high, medium, low, unknown]
@@ -66,3 +83,14 @@ invariants:
   - 存在 reviews/markdown-content-repair.yaml 时必须符合 contracts/markdown-content-repair.yaml；`deferred` 和 `rejected` 的提取文字候选、页码或审核状态不得回写 index.md
   - visual_reconstruction_profiles 中的每个 profile 必须满足 contracts/visual-reconstruction-profile.yaml，并且 source.asset_id 必须存在于 manifest.yaml
   - 同源候选比较后只能生成一个业务 package；未选来源只能作为候选比较和差异证据保存
+  - 启用图级资产升级时，同一 manifest.yaml 必须闭合 page-render → crop → optional enhanced-raster → optional Mermaid derived representation 的父子关系；任何派生项都不得替代或删除来源页证据
+  - 图级升级的 stage evidence 必须覆盖 workflow.yaml 的 F0–F8，并保存每步 execution binding；procedure-only、无仓库 entrypoint 或 not-run 步骤不得被总状态升级为 code-backed complete
+  - crop/complex-region 必须先有候选区域和 accepted crop decision；只有 geometry 合法而无四边复核和来源/crop 对照时不得 available
+  - 可用 Mermaid 必须有语法、实际渲染、来源语义逐项对照和 PNG fallback 链接四类 passed 证据
+  - 图级生命周期的主编辑目标必须是 page-unit、segment 或其他 manifest 登记的最小 content_unit_id；index.md/document-temp.md/final 只能从这些单元确定性生成，不得成为长期手工事实源
+  - Mermaid 回填必须同时保留可解析到 manifest asset_id 的 PNG fallback；Mermaid 不可靠时只能链接 crop/enhanced PNG，不得强行生成节点或边
+  - figure_coverage 不是第二个资产 Manifest；它只对账 raw/source units、cleaned/page units、派生 Markdown、现有 assets 和同一 manifest.yaml 中的图号需求及状态
+  - 当前批次 passed 不得把 manifest.figure_coverage.document_status 升级为 passed；全书 expected figure ID 未全部分类、存在 missing/reference-missing/needs-review，或历史 success 尚未按当前门禁重验时，document_status 必须为 needs-review/failed
+  - source page probe、contact sheet、放大图、节点子图、OCR probe、overlay 和比较预览只进入 evidence；不得复制到扁平读者 assets/，也不得被 Markdown reader binding 引用
+  - 历史逐图 JSON/YAML 只能作为带路径与 SHA-256 的迁移证据；稳定资产记录必须合并到当前唯一 manifest.yaml，冲突或无法映射的历史状态进入 needs-review
+  - visual_asset_lifecycle.enabled=true 时必须同时存在 F0–F8 task_evidence 和 figure_coverage；任一 task not-run/needs-review、coverage 未通过或视觉人工门未闭合时 lifecycle status 不得 complete

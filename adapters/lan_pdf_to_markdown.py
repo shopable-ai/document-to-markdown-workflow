@@ -10,6 +10,7 @@ output directory into a data-asset workspace.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import html
 import json
@@ -41,6 +42,11 @@ try:
     import pdf_task_guard as task_guard
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import pdf_task_guard as task_guard
+
+try:
+    import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_resource_slots as resource_slots
 
 try:
     import pdf_route_detection as page_router
@@ -238,7 +244,13 @@ def parse_pages(selector: str) -> list[int] | None:
     return sorted(pages)
 
 
-def execute_pure_native(source: Path, output_root: Path, pages_selector: str) -> dict:
+def execute_pure_native(
+    source: Path,
+    output_root: Path,
+    pages_selector: str,
+    *,
+    write_source_markdown_alias: bool = True,
+) -> dict:
     """Write source-native Markdown without rendering, OCR, or model calls."""
     source = source.expanduser().resolve()
     output_root = output_root.expanduser().resolve()
@@ -303,7 +315,11 @@ def execute_pure_native(source: Path, output_root: Path, pages_selector: str) ->
     markdown = "\n".join(markdown_parts).rstrip() + "\n"
     canonical_markdown = package / "index.md"
     canonical_markdown.write_text(markdown, encoding="utf-8")
-    source_named_markdown = _write_source_named_markdown(package, source, canonical_markdown)
+    source_named_markdown = (
+        _write_source_named_markdown(package, source, canonical_markdown)
+        if write_source_markdown_alias
+        else None
+    )
     table_count = None
     if pdfplumber_module:
         table_count = sum(item["table_count_pdfplumber_find_tables"] for item in page_records)
@@ -1694,6 +1710,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--no-model", action="store_true", help="pure PDF-native extraction; never render or call a model")
     parser.add_argument(
+        "--no-source-markdown-alias",
+        action="store_true",
+        help="internal batch mode: keep only index.md instead of an identical source-named copy",
+    )
+    parser.add_argument(
         "--engineering-output",
         action="store_true",
         help="explicitly write the legacy manifest/evidence/report package; default is reader-only output",
@@ -1704,14 +1725,27 @@ def main(argv: list[str] | None = None) -> int:
     mode = "execute" if args.execute else "plan-only"
     try:
         if args.no_model:
-            with task_guard.acquire_task_lock(
-                source=args.source.expanduser().resolve(),
-                source_sha256=sha256(args.source.expanduser().resolve()),
+            source = args.source.expanduser().resolve()
+            local_slot = (
+                resource_slots.acquire_local_pdf_slot(
+                    purpose="deterministic-native-pdf-to-markdown"
+                )
+                if source.suffix.lower() == ".pdf"
+                else nullcontext()
+            )
+            with local_slot, task_guard.acquire_task_lock(
+                source=source,
+                source_sha256=sha256(source),
                 output_root=args.output_root.expanduser().resolve(),
                 pages=args.pages,
                 entrypoint="lan_pdf_to_markdown.py",
             ):
-                result = execute_pure_native(args.source, args.output_root, args.pages)
+                result = execute_pure_native(
+                    args.source,
+                    args.output_root,
+                    args.pages,
+                    write_source_markdown_alias=not args.no_source_markdown_alias,
+                )
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["status"] == "passed" else 1
         profile = load_yaml(args.profile.expanduser().resolve())
@@ -1723,9 +1757,17 @@ def main(argv: list[str] | None = None) -> int:
             plan["candidate_comparison"] = str(args.candidate_comparison.expanduser().resolve())
         plan["output_root"] = str(args.output_root.expanduser().resolve())
         if args.execute:
-            with task_guard.acquire_task_lock(
-                source=args.source.expanduser().resolve(),
-                source_sha256=sha256(args.source.expanduser().resolve()),
+            source = args.source.expanduser().resolve()
+            local_slot = (
+                resource_slots.acquire_local_pdf_slot(
+                    purpose="workflow-a-pdf-to-markdown"
+                )
+                if source.suffix.lower() == ".pdf"
+                else nullcontext()
+            )
+            with local_slot, task_guard.acquire_task_lock(
+                source=source,
+                source_sha256=sha256(source),
                 output_root=args.output_root.expanduser().resolve(),
                 pages=args.pages,
                 entrypoint="lan_pdf_to_markdown.py",

@@ -1,0 +1,122 @@
+format_version: "1.0"
+goal_id: "212-sales-script-knowledge-layer-20260824"
+status: pending
+
+objective: >-
+  在不修改389个已验收Markdown及其资产的前提下，通过本地批处理完成清单、重复检测、
+  多维分类、话术单元提取、可追溯综合和独立验收，生成可阅读、可检索、可供RAG使用的派生知识层；
+  语料正文不得发送给外部云模型。
+
+paths:
+  project_root: "/Users/a0000/Documents/workspace_agent/workflow/workflow-document-markdown-visual-assets"
+  input_root: "/Users/a0000/Downloads/212销冠话术/Markdown转换结果/最终完整交付/完整Markdown"
+  package_root: "/Users/a0000/Downloads/212销冠话术/Markdown转换结果/最终完整交付"
+  output_root: "/Users/a0000/Downloads/212销冠话术/Markdown转换结果/最终完整交付/知识化整理"
+  conversion_manifest: "/Users/a0000/Downloads/212销冠话术/Markdown转换结果/最终完整交付/完整Markdown清单.json"
+  copy_validation: "/Users/a0000/Downloads/212销冠话术/Markdown转换结果/最终完整交付/最终复制验收报告.json"
+
+input_baseline:
+  markdown_files: 389
+  markdown_bytes: 8926114
+  markdown_characters: 3515506
+  tree_files: 3739
+  tree_bytes: 251108525
+  tree_sha256: "11c2e9ac04bd8f1dba5dad1c6d939dd89b71ae015ea50d7704724a24d643925a"
+  exact_normalized_duplicate_groups: 2
+  repeated_paragraph_classes_min_length_40: 1565
+  documents_with_cross_document_repeated_paragraphs: 151
+
+execution_policy:
+  input_mode: read_only
+  output_root_must_be_new_or_resumable_by_matching_state: true
+  corpus_text_to_external_cloud_model: forbidden
+  preferred_semantic_route: verified_local_or_lan_model
+  deterministic_steps_use_local_batch: true
+  detailed_results_stay_on_disk: true
+  max_corpus_samples_returned_to_codex_per_round: 20
+  max_corpus_characters_returned_to_codex_per_round: 20000
+  long_task_polling: forbidden
+  source_images_default: do_not_open
+
+required_outputs:
+  - README.md
+  - 00-总目录.md
+  - taxonomy.yaml
+  - source-index.jsonl
+  - topic-index.json
+  - duplicate-clusters.json
+  - 主题库/
+  - 话术卡片/
+  - 索引/source-to-topic.json
+  - 索引/phrase-to-source.json
+  - reports/inventory.json
+  - reports/processing.json
+  - reports/token-usage.json
+  - reports/validation-result.json
+  - .state/progress-current.json
+  - .state/progress.jsonl
+
+knowledge_unit_required_fields:
+  - id
+  - content_type
+  - sales_stage
+  - channel
+  - industry
+  - scenario
+  - customer_signal
+  - objective
+  - wording
+  - next_step
+  - risk_tags
+  - source_refs
+  - confidence
+
+allowed_content_types:
+  - verbatim
+  - normalized
+  - canonical-synthesis
+
+acceptance_checks:
+  - id: input-tree-immutable
+    pass_when: >-
+      处理前后input_root的树文件数为3739、总字节数为251108525，且树SHA-256均为
+      11c2e9ac04bd8f1dba5dad1c6d939dd89b71ae015ea50d7704724a24d643925a。
+  - id: source-inventory-complete
+    pass_when: >-
+      source-index.jsonl恰有389条唯一来源；每条路径存在；每个来源状态为processed、unclassified或needs-review之一；
+      failed=0且silent_drop=0。
+  - id: taxonomy-valid
+    pass_when: >-
+      taxonomy.yaml可解析，一级主题数量在8到20之间；389个来源均有至少一个主题标签，
+      或有非空的unclassified_reason/needs_review_reason。
+  - id: duplicate-analysis-traceable
+    pass_when: >-
+      duplicate-clusters.json可解析；精确/规范化重复组均记录canonical_id、member_sources、算法和参数；
+      不修改或删除任何原始文件；同名但正文证据不足的文件不得自动合并。
+  - id: knowledge-units-grounded
+    pass_when: >-
+      所有话术单元ID唯一、必填字段完整、source_refs非空；每个来源路径可解析，摘录哈希可从对应来源复算；
+      unsupported_unit_count=0且dangling_source_ref_count=0。
+  - id: synthesis-separated
+    pass_when: >-
+      所有AI综合内容明确标记canonical-synthesis且至少引用两个支持来源；verbatim与normalized内容不被伪装成综合稿；
+      synthesis_without_evidence_count=0。
+  - id: bidirectional-index-complete
+    pass_when: >-
+      source-to-topic.json覆盖389个来源；phrase-to-source.json覆盖全部话术单元；
+      两个方向的ID和路径均无悬空项。
+  - id: markdown-deliverables-readable
+    pass_when: >-
+      README.md、00-总目录.md、主题库和话术卡片中不存在零字节Markdown、无效UTF-8、重复一级标题或损坏的本地链接。
+  - id: cloud-corpus-boundary
+    pass_when: >-
+      reports/token-usage.json明确记录corpus_text_external_cloud_calls=0和corpus_text_external_cloud_characters=0；
+      本地/LAN调用与Codex对话用量分开报告，未知数值写unknown而不是估算为账单事实。
+  - id: final-reports-pass
+    pass_when: >-
+      reports/processing.json显示total=389、completed=389、failed=0、pending=0；
+      reports/validation-result.json的status为passed、errors为空，且不存在仍运行的相关处理进程。
+
+completion_rule: >-
+  只有全部acceptance_checks逐项passed才允许把本目标更新为complete。
+  任一检查失败时必须保持failed或needs-review，修复并重新运行独立验证；不得以目录存在、试产物完成或模型自报成功代替验收。

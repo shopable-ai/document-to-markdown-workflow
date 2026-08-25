@@ -59,6 +59,27 @@ page_unit_execution:
     ordering: ascending-page-number
     deterministic: true
     may_reinfer_or_rewrite_source_text: false
+  post_merge_formatting:
+    stage: A5-after-merge-before-final-index
+    adapter: ../../adapters/markdown_post_merge_formatter.py
+    prompt: ../../references/prompts/markdown-post-merge-formatting.zh.txt
+    runtime_prompt: ../../references/prompts/markdown-post-merge-formatting-runtime.zh.txt
+    model_routing_contract: ../../contracts/markdown-post-merge-model-routing.yaml
+    model_route_config: ../../config/markdown-post-merge-models.toml
+    environment_example: ../../.env.example
+    provider_guide: ../../references/model-provider-configuration.zh.md
+    input: document-temp-heading-repair-output
+    output: index.md
+    default_mode: deterministic
+    configured_modes: [deterministic, model-optional, model-required]
+    route_selection: environment-override-then-configured-order
+    auto_route_order: [lan-ollama, lan-ollama-ssh, codex-default]
+    constraints:
+      - 只允许保守 Markdown 整理，不得改图片路径
+      - 不得改变页面顺序或页面标记覆盖
+      - 不得再生成同内容的 source-named Markdown alias
+      - 模型输出通过完整结构守卫后才能原子写入 index.md
+      - current-conversation 不得由子脚本伪装成可调用 provider
   preview:
     path: document-temp.md
     role: derived-review-preview
@@ -90,6 +111,7 @@ knowledge_base_page_pruning:
   rebuild_required: [index.md, total.md, reader-collection]
 asset_extraction_strategy_reference: ../../references/asset-extraction-strategy.zh.md
 asset_extraction_strategy_contract: ../../contracts/asset-extraction-strategy.yaml
+figure_asset_lifecycle_reference: ../../references/figure-asset-lifecycle.zh.md
 visual_asset_pruning_reference: ../../skills/semantic-visual-asset-pruning/SKILL.md
 visual_asset_pruning_contract: ../../contracts/visual-asset-pruning.yaml
 visual_asset_classification_contract: ../../contracts/visual-asset-classification.yaml
@@ -189,10 +211,13 @@ execution_policy:
     stage: A5-before-A6
     default: preview-only
     apply_requires: explicit-page-decision-and-apply
-    preserve: [source-fingerprint, source-rendering-evidence, rejected-asset-hashes, source-assets, manifest-assets, source-occurrences]
-    apply_effect: reader-links-and-section-bindings-only
+    preserve: [source-fingerprint, original-source-documents, rejected-asset-hashes, manifest-assets, source-occurrences]
+    apply_effect: reader-links-and-section-bindings;reader-only-simple-packages-may-crop-relink-and-delete-regenerable-engineering-page-renders
     exclude_examples: [cover, table-of-contents, text-covered-page]
-    retain_examples: [diagram, table, flow, relation-dense-layout, color-coded-structure]
+    crop_examples: [mixed-text-and-diagram, mixed-text-and-table, local-flow-in-body-page]
+    retain_examples: [whole-page-diagram, whole-page-table, inseparable-relation-dense-layout, inseparable-color-coded-structure]
+    crop_required_gate: deterministic-ocr-layout-first;lan-vision-candidate-only-on-low-confidence;minimum-score-95;all-hard-checks-passed
+    engineering_page_delete_gate: source-kind-regenerable-engineering-page-render;crop-created;markdown-relinked;all-output-assets-referenced;rollback-on-any-failure
   asset_extraction:
     principle: 先成功，再降本；确定性资产提取与视觉内容理解分开，不用模型输出覆盖原始资产
     reference: ../../references/asset-extraction-strategy.zh.md
@@ -207,6 +232,120 @@ execution_policy:
       image:
         deterministic: [original-preserved, region-crop-when-needed]
         visual_understanding_input: original-or-region-crop
+    figure_asset_lifecycle:
+      status: optional-within-existing-workflow
+      creates_new_workflow: false
+      creates_second_manifest: false
+      batch_scope: one-content-unit-and-1-to-2-figures
+      coverage_scope: raw-or-source-content-units-plus-cleaned-or-page-units-plus-derived-markdown-plus-assets-plus-single-manifest
+      batch_completion_does_not_imply_document_completion: true
+      order: [figure-demand-inventory, source-page-resolution, figure-region-localization, crop-decision-and-acceptance, enhancement-optional, mermaid-optional, manifest-and-reader-projection, markdown-backfill-and-regeneration, batch-validation-and-close]
+      task_tree:
+        - id: F0
+          task: figure-demand-inventory
+          children: [scan-raw-or-source-and-current-content-unit-figure-mentions, compare-cleaned-and-derived-markdown-references, reconcile-links-assets-and-single-manifest, update-document-figure-coverage-ledger, lock-1-to-2-figure-batch]
+          binding:
+            skills: [source-inventory]
+            tools: []
+            code: []
+            status: procedure-only-no-dedicated-figure-inventory-adapter
+          evidence: [content_unit_id, demand_sources, expected_figure_ids, figure_coverage_records, current_markdown_links, missing_or_legacy_assets, batch_status, document_status]
+          gate: 原始/来源单元、清理后最小单元、派生 Markdown、现有资产与同一 Manifest 尚未对账时停止；cleaned/final 缺失引用不得从 expected figure IDs 删除，批次状态不得冒充全书状态
+        - id: F1
+          task: source-page-resolution
+          children: [reuse-traceable-page-render, verify-legacy-copy-equivalence, targeted-page-probe-and-contact-sheet-when-location-uncertain, targeted-page-render-only-when-missing, preserve-source-hash-and-page-map]
+          binding:
+            skills: [page-rendering, source-occurrence-registration]
+            tools: [office-page-renderer, manifest-writer]
+            code: [adapters/workflow_a_source_runner.py]
+            status: code-backed-for-page-render;manual-for-historical-legacy-page-copy
+          evidence: [page-render-asset, source_occurrence_id, source_fingerprint, pdf_page, optional_printed_page, source_equivalence, optional_source_page_probe]
+          gate: 不存在可打开、可定位且哈希匹配的来源页时停止；legacy/page 副本无等价证明或定点探查缺候选页、页序、哈希与选择结论时最多 needs-review
+        - id: F2
+          task: figure-region-localization
+          children: [identify-caption-and-visual-anchors, allocate-distinct-region-and-occurrence-for-each-same-page-figure, list-required-and-excludable-elements, propose-conservative-region]
+          binding:
+            skills: [complex-region-detection]
+            tools: []
+            code: []
+            status: skill-contract-plus-human-or-visual-candidate;no-dedicated-repository-adapter
+          evidence: [figure_id, region_id, source_occurrence_id, ordinal, parent_asset_id, candidate_geometry, trigger_basis, required_elements, excludable_elements, confidence, diagnostics]
+          gate: 候选区域没有来源锚点、覆盖元素或诊断时不得进入裁切；同页多图可以复用 page parent，但不得按页码或哈希合并 figure/region/occurrence/crop decision
+        - id: F3
+          task: crop-decision-and-acceptance
+          children: [render-conservative-crop-candidate, adjust-vertical-before-horizontal, compare-source-and-crop, review-top-right-bottom-left, audit-text-heavy-reader-crop, accept-or-needs-review]
+          binding:
+            skills: [region-cropping]
+            tools: [image-region-cropper, reader-asset-text-auditor]
+            code: [skills/region-cropping/scripts/apply_reader_asset_crops.py, skills/region-cropping/scripts/audit_text_heavy_reader_assets.py]
+            status: reader-only-code-backed-with-text-heavy-second-gate;not-lifecycle-compatible-or-orchestrated-for-workflow-a-manifest;human-approval-required
+          evidence: [crop_decision, candidate_geometry, accepted_geometry, coordinate_space, safety_margins, edge_checks, review_evidence, adjustment_history, text-heavy-reader-asset-audit]
+          gate: 四边任一为 clipped/unknown，或前景触边没有显式解释时不得 available；reader-only 简化包每个区域必须至少 95 分且全部硬检查通过，并在 reader crop 二次门中逐图输出 candidate-remove/crop-required/retain/needs-review。只有 candidate-remove、删除置信分至少 95、字符与顺序覆盖及无结构增量等硬门全部通过时才可进入删除计划；audit evidence 95 分不能替代 crop visual quality 95 分。换链和新资产引用校验后才可删除 regenerable engineering page render；该工具仍不得单独作为 Workflow A manifest 工程生命周期完成证据
+        - id: F4
+          task: enhancement-optional
+          children: [apply-recorded-deterministic-parameters, compare-crop-and-enhanced, select-enhanced-or-crop-fallback]
+          binding:
+            skills: [region-cropping]
+            tools: []
+            code: []
+            status: procedure-only;no-dedicated-enhancement-entrypoint
+          evidence: [tool, tool_version, parameters, comparison_evidence, structure_preserved, fallback_asset_id]
+          gate: 未证明结构保持或可读性改善时回退 crop 并标 needs-review
+        - id: F5
+          task: mermaid-optional
+          children: [decide-structural-suitability, create-evidence-only-magnification-or-node-probes-when-needed, bind-each-node-label-edge-to-evidence, parse-and-render, semantic-source-comparison, keep-png-fallback]
+          binding:
+            skills: [visual-reconstruction-profile]
+            tools: []
+            code: []
+            status: contract-and-manual-procedure;no-workflow-a-mermaid-generator-or-render-validator
+          evidence: [diagnostic_artifacts, derived_representation, syntax_validation, render_validation, semantic_comparison, uncertainty, fallback_asset_id]
+          gate: 放大图、节点子图和 OCR probe 只作 evidence-only 候选；语法、渲染、来源语义或 PNG fallback 任一未通过时不得回填 Mermaid
+        - id: F6
+          task: manifest-and-reader-projection
+          children: [migrate-historical-per-figure-records-as-evidence-only, normalize-legacy-status, register-all-lineage-in-one-manifest, select-primary-raster-and-png-fallback, project-only-reader-assets-to-flat-assets]
+          binding:
+            skills: [source-occurrence-registration, semantic-asset-naming, source-asset-linker, markdown-asset-copy]
+            tools: [manifest-writer, markdown-writer]
+            code: [adapters/workflow_a_source_runner.py, adapters/markdown_collection_merge.py]
+            status: base-manifest-and-reader-projection-code-backed;figure-derivation-update-not-orchestrated
+          evidence: [historical_manifest_migration, manifest.yaml, asset_ids, derivation, markdown_bindings, reader_asset_selection]
+          gate: 不得建立第二个 Manifest；历史逐图记录未保存路径/哈希、legacy success 未归一化为 needs-review 后重验、读者选择未解释或资产/哈希/父子关系断链时停止
+        - id: F7
+          task: markdown-backfill-and-regeneration
+          children: [edit-current-minimum-content-unit, verify-mermaid-png-caption-order, verify-relative-links, compare-source-versus-current-figure-demands, diagnose-missing-reference-stage, merge-verbatim, regenerate-derived-reader-document]
+          binding:
+            skills: [page-markdown-unit, markdown-structure-builder, source-asset-linker]
+            tools: [markdown-writer]
+            code: [adapters/page_markdown_units.py, adapters/markdown_collection_merge.py]
+            status: manual-or-producer-specific-backfill;code-backed-merge-and-reader-projection
+          evidence: [markdown_backfill_evidence, before_sha256, after_sha256, demand_diff, missing_reference_diagnostics, resolved_links, deterministic_merge_report]
+          gate: 主编辑面不是最小内容单元、链接不可解析、来源需求在清理/写出/合并链丢失且未诊断，或合并改变 Mermaid/fallback 时失败；引用丢失不得删除来源资产
+        - id: F8
+          task: batch-validation-and-close
+          children: [reread-complete-lineage, synchronize-progress-evidence, assign-batch-verdict, update-document-coverage-ledger, compute-separate-document-verdict, unlock-next-batch]
+          binding:
+            skills: [asset-package-validation]
+            tools: []
+            code: [adapters/workflow_a_output_validator.py, tests/validate_real_output_root.py]
+            status: code-backed-contract-and-link-validation;human-visual-review-required
+          evidence: [stage_evidence, validation_result, progress_evidence, batch_status, document_status, unresolved_figure_ids]
+          gate: 完整链、人工视觉门或独立 validator 任一未闭合时不扩大批次；全书 expected figure IDs 未全部分类或仍有 missing/reference-missing/needs-review 时 document_status 不得 passed
+      source_evidence_required: true
+      crop_policy: candidate-region-required;horizontal-conservative-locked-then-vertical-trim;four-edge-review-required
+      enhancement_policy: readability-only-no-structural-change;comparison-evidence-required;crop-fallback-on-regression
+      mermaid_policy: confirmed-node-edge-structures-only;syntax-render-semantic-and-png-fallback-validation-required
+      probe_policy: targeted-candidate-pages-only;page-order-and-hashes-required;contact-sheet-evidence-only-and-page-selection-only;crop-geometry-must-be-revalidated-on-full-resolution-parent
+      diagnostic_artifact_policy: magnification-node-subcrop-ocr-probe-overlay-and-comparison-are-evidence-only-never-reader-assets
+      same_page_multi_figure_policy: reuse-page-parent-but-keep-distinct-figure-region-occurrence-ordinal-and-crop-decision
+      historical_manifest_policy: import-per-figure-records-as-hash-addressed-evidence-only;merge-into-single-manifest;normalize-success-to-needs-review-until-current-gates-pass
+      document_completion_gate: all-expected-figures-accounted-for;no-missing-reference-missing-or-needs-review;each-passed-or-justified-not-applicable
+      implementation_claim_policy: code-backed-only-when-entrypoint-and-current-evidence-exist
+      edit_surface: page-unit-or-segment-or-other-manifest-content-unit
+      derived_documents: [document-temp.md, index.md, final]
+      reader_asset_layout: flat-assets-v1
+      lifecycle_directory_replication: forbidden
+      reference: ../../references/figure-asset-lifecycle.zh.md
     route_order:
       - id: high-quality-online-baseline
         role: calibration-only
@@ -566,7 +705,7 @@ stages:
     output: assets/
     evidence: [assets/]
     conditional_evidence: [evidence/rendering.json, evidence/asset-registration.json]
-    gate: 渲染生产者启动后，当前页只有在页面图可打开且已复制到扁平 assets/ 后才能启动该页 A4/A5；后续页可以与当前页模型处理并行生成；可读的已有页面图直接复用并跳过重渲染；页面图、嵌入媒体和按需复杂区域图统一落在扁平 assets/，类型和来源位置由 manifest.asset_kind 与 source_occurrences 区分；没有区域裁剪需求时不创建空目录
+    gate: 渲染生产者启动后，当前页只有在页面图可打开且已复制到扁平 assets/ 后才能启动该页 A4/A5；后续页可以与当前页模型处理并行生成；可读的已有页面图直接复用并跳过重渲染；页面图、嵌入媒体、按需复杂区域/crop 和可选 enhanced-raster 统一落在扁平 assets/，类型、父子派生、geometry、增强参数和来源位置由同一 manifest 的 asset_kind、derivation 与 source_occurrences 区分；裁切默认先锁横向再调纵向，增强只改善可读性且必须保留 crop fallback；没有区域裁剪需求时不创建空目录
     required_fields: [assets, coverage, renderer, status, diagnostics]
     score_dimensions: [visual-fidelity, coverage, provenance, integrity]
   - id: A4
@@ -585,7 +724,7 @@ stages:
     engineering_output_only: true
     conditional_evidence: [evidence/vision-page-analysis.json, evidence/visual-reconstruction-profile.yaml]
     contract: ../../contracts/reconciliation.yaml
-    gate: 原生结构先行；扫描页必须把文字识别、Markdown 结构重建、广告分类及处理分开。Apple Vision OCR、小视觉模型和 30B 都是候选路线，按真实页面基准和页面质量守卫选择；非空输出、模型参数量或一次成功请求都不能决定主路线。标题、自然段、目录、列表、页眉页脚、标点、跨页连续性或异常文字保留失败时升级到下一条已校准且已授权路线。提取与结构重建阶段保留全部可见文字，广告策略默认 preserve-only，不删除或改写。
+    gate: 原生结构先行；扫描页必须把文字识别、Markdown 结构重建、广告分类及处理分开。Apple Vision OCR、小视觉模型和 30B 都是候选路线，按真实页面基准和页面质量守卫选择；非空输出、模型参数量或一次成功请求都不能决定主路线。标题、自然段、目录、列表、页眉页脚、标点、跨页连续性或异常文字保留失败时升级到下一条已校准且已授权路线。提取与结构重建阶段保留全部可见文字，广告策略默认 preserve-only，不删除或改写。可选 Mermaid 只消费已确认的节点、文字和边；任一结构未裁决时保留 PNG 并标记 needs-review，不回填 Mermaid。
     required_fields: [native_input, ocr_input, reconciled_items, conflicts, unresolved, unknown_forms, coverage_notes, status, diagnostics]
     score_dimensions: [source-separation, conflict-safety, relation-fidelity, reconstruction-traceability, reviewability]
   - id: A5
@@ -601,7 +740,7 @@ stages:
     output: index.md
     evidence: [index.md]
     conditional_evidence: [evidence/page-markdown-noise-cleanup.json, reviews/markdown-content-repair.yaml]
-    gate: 读者层 Markdown 写关键点，并只在 reader_image_policy 要求时附页面图；page-unit 生成后先执行确定性页眉页脚清洗，scan 后才 apply，疑似正文行保留为 needs-review，页面图链接和保留行逐字不变，然后才允许进入语言模型内容修复。text-only 且 Markdown 足够时不得写整页截图，二维码不得解码、裁剪或作为图片链接。不得写入来源文件名、哈希、bbox、对象 ID、OCR/视觉诊断或工程路径。默认不生成 page-units、evidence、manifest 或 reports；需要语言修复、视觉复核或完整工程登记时，必须显式切换到后续工程输出路线。
+    gate: 读者层 Markdown 写关键点，并只在 reader_image_policy 要求时附视觉资产；混合正文与局部复杂视觉必须为 crop-required，优先使用 OCR 坐标/图题/确定性布局生成最小充分 crop，不得把整页工程图直接留在 reader assets。图级升级只回填当前 page-unit/segment/content unit，Mermaid 可用时按 Mermaid → PNG fallback → 图题写入，不可用时只写 crop/enhanced PNG。page-unit 生成后先执行确定性页眉页脚清洗，scan 后才 apply，疑似正文行保留为 needs-review，页面图链接、Mermaid block、fallback 和保留行逐字不变，然后才允许进入语言模型内容修复。text-only 且 Markdown 足够时不得写整页截图，二维码不得解码、裁剪或作为图片链接。不得写入来源文件名、哈希、bbox、对象 ID、OCR/视觉诊断或工程路径。默认不生成 page-units、evidence、manifest 或 reports；需要语言修复、视觉复核或完整工程登记时，必须显式切换到后续工程输出路线。
     required_fields: [source_package_id, sections, links, unresolved, unknown_forms, reader_order, status]
     score_dimensions: [retrievability, semantic-structure, link-integrity, uncertainty-preservation]
   - id: A6
@@ -617,7 +756,7 @@ stages:
     evidence: [index.md]
     conditional_evidence: [assets/]
     engineering_output_only: true
-    gate: file_name 使用 references/naming-policy.zh.md 的短语义格式、display_name 保留中文语义；稳定 ID、来源指纹、哈希、asset kind、用途、ordinal 和 source_occurrences 进入 manifest，命名不得依赖原始文件名或随机前缀；pruning 后仍须保留被移除读者链接对应的来源资产登记和哈希
+    gate: file_name 使用 references/naming-policy.zh.md 的短语义格式、display_name 保留中文语义；稳定 ID、来源指纹、哈希、asset kind、用途、ordinal、source_occurrences、derivation、可选 Mermaid representation 和 markdown_bindings 进入同一个 manifest，命名不得依赖原始文件名或随机前缀；Workflow A manifest 包在 pruning 或 Markdown 引用缺失后仍须保留来源 page-render、派生资产登记和哈希；reader-only 简化包可在 crop/relink/result 全通过后删除可再生工程页图，但原始来源文件不可删
     required_fields: [manifest_version, package_id, source, assets, status, diagnostics]
     score_dimensions: [naming-stability, occurrence-traceability, dedup-safety, integrity]
   - id: A7
@@ -632,7 +771,7 @@ stages:
     output: reader-package structural guard (runner stdout only)
     evidence: [index.md]
     conditional_evidence: [assets/]
-    gate: 通过 workflows/document-to-markdown-assets/ACCEPTANCE.zh.md；存在复杂结构或重建意图时，profile 的结构/提示词/来源证据也必须通过独立重读
+    gate: 通过 workflows/document-to-markdown-assets/ACCEPTANCE.zh.md；存在图级升级时必须按 F0–F8 重读需求盘点、source page、候选区域、crop decision/四边复核、纯文字 reader crop 二次门、enhanced 比较、optional Mermaid 验证、同一 manifest/读者投影、Markdown binding/确定性再生成和批次闭合；二次门存在 needs-review、删除资格硬门失败或 audit evidence score<95 时不得 passed。存在复杂结构或重建意图时，profile 的结构/提示词/来源证据和 PNG fallback 也必须通过独立重读
     required_fields: [status, evidence_level, checks, failures, warnings, stage_evidence, repair_tasks, reaudit, recovery, diagnostics]
     score_dimensions: [contract-completeness, cross-stage-consistency, failure-safety, evidence-honesty]
 profiles:

@@ -50,6 +50,21 @@ def test_reconstructs_title_paragraph_and_list_without_losing_visible_text():
     }
 
 
+def test_reconstruct_joins_wrapped_chinese_line_despite_normal_book_line_spacing():
+    result = structure.reconstruct(
+        payload(
+            candidate("答：现在全国的房子都没销", x=0.1, y=0.74, height=0.022),
+            candidate("量了。", x=0.1, y=0.68, height=0.022),
+            candidate("为什么？", x=0.1, y=0.62, height=0.022),
+        ),
+        page=10,
+    )
+
+    assert "答：现在全国的房子都没销量了。" in result["markdown"]
+    assert "没销\n\n量了" not in result["markdown"]
+    assert "量了。\n\n为什么？" in result["markdown"]
+
+
 def test_directory_rows_keep_chapters_cases_and_right_column_page_numbers():
     result = structure.reconstruct(
         payload(

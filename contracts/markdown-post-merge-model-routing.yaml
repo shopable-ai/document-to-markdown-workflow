@@ -1,0 +1,161 @@
+contract: markdown-post-merge-model-routing
+version: 1.0.0
+status: active
+description: 合并后 Markdown 整理的模型选择、调用、回退、结构守卫和审计契约。
+
+stage_boundary:
+  after: [document-temp.md-merge, heading-repair]
+  before: index.md-final-delivery
+  adapter: adapters/markdown_post_merge_formatter.py
+  router: adapters/markdown_model_router.py
+  prompt: references/prompts/markdown-post-merge-formatting.zh.txt
+  runtime_prompt: references/prompts/markdown-post-merge-formatting-runtime.zh.txt
+
+configuration:
+  dotenv:
+    path: .env
+    committed: false
+    example: .env.example
+    behavior: only-fill-missing-process-environment
+    parser: shell-free-key-value-subset
+  route_catalog:
+    path: config/markdown-post-merge-models.toml
+    committed: true
+    contains_secrets: false
+    proxy_policy_values: [direct, environment]
+  codex_provider_configuration:
+    location: user-level-CODEX_HOME-only
+    selection: codex-exec---profile
+    provider_flag: forbidden-no-general---provider-option
+
+environment:
+  MARKDOWN_FORMATTER_MODE:
+    values: [deterministic, model-optional, model-required]
+    default: deterministic
+  MARKDOWN_FORMATTER_ROUTE:
+    values: [auto, route-id]
+    default: auto
+    explicit_route_disables_fallback: true
+  MARKDOWN_FORMATTER_TIMEOUT_SECONDS:
+    type: positive-integer
+    default: 300
+  MARKDOWN_FORMATTER_MAX_CHARS:
+    type: positive-integer
+    default: 12000
+    chunk_boundary: page-marker
+  machine_local_or_secret_values:
+    - MARKDOWN_LAN_BASE_URL
+    - MARKDOWN_LAN_MODEL
+    - MARKDOWN_LAN_API_KEY
+    - MARKDOWN_LAN_THINKING
+    - MARKDOWN_LAN_MAX_OUTPUT_TOKENS
+    - MARKDOWN_LAN_SSH_HOST
+    - MARKDOWN_LAN_SSH_ENDPOINT
+    - MARKDOWN_OPENAI_COMPATIBLE_BASE_URL
+    - MARKDOWN_OPENAI_COMPATIBLE_API_KEY
+    - MARKDOWN_OPENAI_COMPATIBLE_MODEL
+    - MARKDOWN_CODEX_PROFILE
+    - MARKDOWN_CODEX_MODEL
+
+transports:
+  ollama-generate:
+    protocol: POST-/api/generate
+    intended_use: LAN-Ollama
+    proxy_policy: direct
+    thinking_default: false
+    max_output_tokens_default: 16384
+  ollama-generate-ssh:
+    protocol: ssh-mac96-stdin-to-remote-curl-/api/generate
+    endpoint_constraint: loopback-http-only
+    prompt_transport: stdin-json-not-command-argument
+    intended_use: direct-LAN-failure-before-Codex-fallback
+  openai-chat-completions:
+    protocol: POST-/chat/completions
+    intended_use: OpenAI-compatible-LAN-or-relay
+    default_catalog_proxy_policy: direct
+  openai-responses:
+    protocol: POST-/responses
+    intended_use: Responses-compatible-LAN-or-relay
+    default_catalog_proxy_policy: direct
+  codex-cli:
+    command: codex exec --ephemeral --sandbox read-only --profile <optional> --model <optional>
+    default_semantics: fresh-Codex-run-using-current-machine-user-config
+    same_conversation: false
+  current-conversation:
+    callable_by_child_script: false
+    result: handled-failure-requiring-explicit-import-or-current-task-handoff
+
+routing:
+  auto:
+    order_source: config.default_route_order
+    continue_on: [unavailable, timeout, provider-error, invalid-response, structural-guard-rejection]
+  explicit:
+    selector: MARKDOWN_FORMATTER_ROUTE-or---route
+    fallback: none
+  model_optional:
+    all_routes_failed: deterministic-formatting-with-audited-fallback
+  model_required:
+    all_routes_failed: fail-without-replacing-existing-destination
+
+write_guard:
+  required:
+    - nonempty-output
+    - page-marker-sequence-identical
+    - image-reference-path-sequence-identical
+    - output-length-ratio-between-0.5-and-2.0
+    - balanced-code-fences
+    - protected-placeholder-sequence-identical-before-deterministic-restore
+  write_method: atomic-replace-after-all-guards-pass
+  post_model_normalization: deterministic-conservative-formatting
+  forbidden:
+    - modify-image-path
+    - change-page-order
+    - truncate-document
+    - expose-secret-in-report
+    - create-source-named-markdown-alias
+
+report:
+  path: reports/markdown-post-merge-formatting.json
+  required_fields:
+    - status
+    - mode
+    - method
+    - model_applied
+    - selected_routes
+    - model_attempts
+    - chunk_count
+    - deterministic_fallback_chunks
+    - policy_sources
+  attempt_fields: [chunk, route, transport, model, profile, proxy_policy, thinking, max_output_tokens, ssh_host, status, duration_ms, error]
+  forbidden_fields: [api_key, authorization, bearer_token, cookie, secret]
+
+quality_gate:
+  minimum_total: 95
+  target_total: 100
+  dimensions:
+    configuration_and_secret_safety: 20
+    route_selection_correctness: 20
+    output_integrity: 25
+    fallback_and_failure_safety: 20
+    observability_tests_and_documentation: 15
+  hard_requirements:
+    - no-secret-in-repository-or-report
+    - explicit-route-fails-closed
+    - image-and-page-order-guards-pass
+    - model-required-does-not-replace-on-failure
+    - real-codex-default-generation-verified
+    - real-lan-generation-verified
+    - real-ssh-mac96-fallback-verified
+
+invariants:
+  - .env 和进程环境只能提供机器本地值、密钥与显式运行覆盖；路线目录及默认顺序必须进入可提交配置。
+  - Codex 官方和非官方 provider 都通过用户级 profile 管理；仓库不得写入或复制用户认证配置。
+  - LAN route 必须显式直连，不能依赖不同 HTTP 客户端对 NO_PROXY 通配符的解释差异。
+  - LAN 直连失败、超时或结构拒绝后必须先尝试 ssh mac96 内部 loopback Ollama，之后才允许进入 Codex fallback。
+  - SSH Ollama 的提示词和请求体只能通过 stdin 传输，不得写入命令参数或报告。
+  - 通用提示词是治理来源；逐分块调用使用等价的精简运行投影，避免重复示例触发无界思考和超时。
+  - codex-default 表示新启动一次 Codex CLI 并继承当前机器配置，不等于回调当前对话模型。
+  - current-conversation 不可由子脚本递归调用，不得将其伪装为成功 fallback。
+  - 模型输出只有通过完整结构守卫后才能成为 index.md；失败结果不得覆盖已有终稿。
+  - 页面标记和图片引用在送模前替换为受保护占位符，模型输出通过占位符守卫后才能确定性恢复原值。
+  - 合规模型输出仍需经过确定性保守归一化，避免模型原样返回导致基础断行和空行修复未生效。

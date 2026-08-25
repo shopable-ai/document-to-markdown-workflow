@@ -147,7 +147,10 @@ OCR 区域、DPI 和 mac96/SSH/Ollama 逻辑不得扩散到 generic path。
       └─ 视觉层失败：保留 unavailable/needs-review，不用 OCR 伪造关系
       → 真实冲突或关系未裁决时才使用 `needs-review`
       → 复杂结构/重建意图：visual-reconstruction-profile（结构版 + 提示词版）
-  → A5 page-units 批量确定性页眉页脚清洗 → 逐页语言修复 → index.md
+  → A5 page-units 批量确定性页眉页脚清洗 → 逐页语言修复 → document-temp.md
+      → heading repair 与合并后保守格式化（提示词约束只作为整理边界，不改图片路径/页序）
+      → 可按 .env 选择局域网模型、Codex CLI profile/default 或确定性降级
+      → 最终只落一份正式稿 index.md
   → A6 可选 assets/（只复制 index.md 引用且有语义增量的图片）
   → A7 结构守卫（stdout 摘要）
 ```
@@ -172,6 +175,8 @@ SSH/mac96、在线模型或 OCR。
 - `failed`：不能声称转换完成。
 
 执行优先级和降级规则见 [WORKFLOW-A-EXECUTION.zh.md](WORKFLOW-A-EXECUTION.zh.md)；新对话续接提示词见 [tests/prompts/continue-workflow-a-mac96-first.zh.md](tests/prompts/continue-workflow-a-mac96-first.zh.md)。
+合并后模型格式化的环境变量、provider profile、回退和审计规则见
+[`references/model-provider-configuration.zh.md`](references/model-provider-configuration.zh.md)。
 
 ## 当前交付边界
 

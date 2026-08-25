@@ -57,9 +57,12 @@ EVIDENCE_LEVELS = {
     "L3-remote-visual",
     "L4-image-generation",
 }
-ASSET_KINDS = {"page-render", "embedded-media", "complex-region", "crop", "input-image"}
+ASSET_KINDS = {"page-render", "embedded-media", "complex-region", "crop", "enhanced-raster", "input-image"}
 ASSET_STATUSES = {"available", "needs-review", "unavailable"}
 OCCURRENCE_STATUSES = {"located", "needs-review", "unknown"}
+DERIVATION_STATUSES = {"complete", "needs-review", "failed"}
+CROP_EDGE_STATUSES = {"clear", "intentional-contact", "clipped", "unknown"}
+GEOMETRY_RE = re.compile(r"^[1-9][0-9]*x[1-9][0-9]*\+[0-9]+\+[0-9]+$")
 FAILURE_STATUSES = {"none", "needs-review", "failed"}
 FAILURE_CODES = {
     "source-invalid",
@@ -357,6 +360,8 @@ class _Validator:
         for path in self.root.iterdir():
             if path.name in READER_FORBIDDEN_NAMES or path.name.startswith("evidence") or path.name.startswith("reports"):
                 self.error("reader-layout", f"engineering output is forbidden in reader-only package: {path.name}")
+            elif path.is_file() and path.suffix.lower() == ".md" and path.name != "index.md":
+                self.error("reader-layout", f"extra markdown file is forbidden in reader-only package: {path.name}")
             elif path.is_file() and path.suffix.lower() in {".json", ".yaml", ".yml"}:
                 self.error("reader-layout", f"data-asset file is forbidden in reader-only package: {path.name}")
 
@@ -388,6 +393,8 @@ class _Validator:
         if status is not None and not isinstance(status, str):
             self.error("manifest.status", "manifest status must be a string when present")
         self.validate_assets(data.get("assets"), package_id, source)
+        self.validate_figure_coverage(data.get("figure_coverage"), status)
+        self.validate_visual_asset_lifecycle(data.get("visual_asset_lifecycle"), data.get("figure_coverage"))
         self.validate_reconstruction_profiles(data.get("visual_reconstruction_profiles"))
         self.validate_markdown(data.get("markdown"), package_id)
         self.validate_processing(data.get("processing"), status)
@@ -402,6 +409,204 @@ class _Validator:
                     self.error("manifest.validation", f"validation missing {key}")
             if validation.get("status") not in {"passed", "needs-review", "failed", "fixture-contract-only"}:
                 self.error("manifest.validation", "validation.status is not a recognized state")
+
+    def validate_figure_coverage(self, coverage: Any, manifest_status: Any) -> None:
+        """Validate optional document-level figure demand reconciliation.
+
+        F0 owns demand extraction.  This validator only checks that a declared
+        ledger is internally complete and that a passed document verdict is
+        not inferred from one passed batch.
+        """
+        if coverage is None:
+            return
+        data = _mapping(coverage)
+        if data is None:
+            self.error("figure-coverage", "figure_coverage must be a mapping")
+            return
+        required = (
+            "scope",
+            "demand_sources",
+            "expected_figure_ids",
+            "records",
+            "counts",
+            "batch_status",
+            "document_status",
+        )
+        for key in required:
+            if key not in data:
+                self.error("figure-coverage", f"figure_coverage missing {key}")
+        if data.get("scope") not in {"content-unit", "full-document"}:
+            self.error("figure-coverage", "figure_coverage.scope is invalid")
+        demand_sources = data.get("demand_sources")
+        if not isinstance(demand_sources, list) or not demand_sources:
+            self.error("figure-coverage", "figure_coverage.demand_sources must be a non-empty list")
+        expected = data.get("expected_figure_ids")
+        if not isinstance(expected, list) or not expected or not all(isinstance(value, str) and value for value in expected):
+            self.error("figure-coverage", "expected_figure_ids must be a non-empty string list")
+            expected_ids: set[str] = set()
+        else:
+            expected_ids = set(expected)
+            if len(expected_ids) != len(expected):
+                self.error("figure-coverage", "expected_figure_ids contains duplicates")
+        if data.get("batch_status") not in {"passed", "needs-review", "failed", "not-run"}:
+            self.error("figure-coverage", "batch_status is invalid")
+        if data.get("document_status") not in {"passed", "needs-review", "failed", "not-run"}:
+            self.error("figure-coverage", "document_status is invalid")
+
+        record_ids: set[str] = set()
+        valid_records: list[dict[str, Any]] = []
+        records = data.get("records")
+        if not isinstance(records, list):
+            self.error("figure-coverage", "figure_coverage.records must be a list")
+            records = []
+        record_required = (
+            "figure_id",
+            "content_unit_ids",
+            "demand_evidence",
+            "source_page_status",
+            "asset_status",
+            "markdown_status",
+            "lifecycle_status",
+            "batch_ids",
+            "diagnostics",
+        )
+        for index, record in enumerate(records):
+            item = _mapping(record)
+            if item is None:
+                self.error("figure-coverage", f"records[{index}] must be a mapping")
+                continue
+            for key in record_required:
+                if key not in item:
+                    self.error("figure-coverage", f"records[{index}] missing {key}")
+            figure_id = item.get("figure_id")
+            if not isinstance(figure_id, str) or not figure_id:
+                self.error("figure-coverage", f"records[{index}].figure_id is required")
+                continue
+            if figure_id in record_ids:
+                self.error("figure-coverage", f"duplicate figure coverage record: {figure_id}")
+            record_ids.add(figure_id)
+            valid_records.append(item)
+            for key in ("content_unit_ids", "demand_evidence", "batch_ids", "diagnostics"):
+                if not isinstance(item.get(key), list):
+                    self.error("figure-coverage", f"{figure_id}.{key} must be a list")
+            if not item.get("content_unit_ids") or not item.get("demand_evidence"):
+                self.error("figure-coverage", f"{figure_id} requires content unit and demand evidence")
+            if item.get("source_page_status") not in {"located", "probe-required", "needs-review", "missing", "not-applicable"}:
+                self.error("figure-coverage", f"{figure_id}.source_page_status is invalid")
+            if item.get("asset_status") not in {"upgraded", "legacy-only", "source-page-only", "missing", "needs-review", "not-applicable"}:
+                self.error("figure-coverage", f"{figure_id}.asset_status is invalid")
+            if item.get("markdown_status") not in {"linked", "reference-missing", "needs-review", "not-applicable"}:
+                self.error("figure-coverage", f"{figure_id}.markdown_status is invalid")
+            if item.get("lifecycle_status") not in {"passed", "needs-review", "failed", "not-run", "not-applicable"}:
+                self.error("figure-coverage", f"{figure_id}.lifecycle_status is invalid")
+            asset_ids = item.get("asset_ids", [])
+            if not isinstance(asset_ids, list):
+                self.error("figure-coverage", f"{figure_id}.asset_ids must be a list")
+            else:
+                if item.get("asset_status") == "upgraded" and not asset_ids:
+                    self.error("figure-coverage", f"{figure_id} upgraded status requires asset_ids")
+                for asset_id in asset_ids:
+                    if asset_id not in self.asset_ids:
+                        self.error("figure-coverage", f"{figure_id} references unknown asset_id {asset_id}")
+
+        missing_records = expected_ids - record_ids
+        unexpected_records = record_ids - expected_ids
+        if missing_records:
+            self.error("figure-coverage", f"expected figures missing records: {sorted(missing_records)}")
+        if unexpected_records:
+            self.error("figure-coverage", f"records not declared in expected_figure_ids: {sorted(unexpected_records)}")
+
+        counts = _mapping(data.get("counts"))
+        required_counts = {
+            "expected": len(expected_ids),
+            "passed": sum(item.get("lifecycle_status") == "passed" for item in valid_records),
+            "legacy_only": sum(item.get("asset_status") == "legacy-only" for item in valid_records),
+            "missing": sum(item.get("asset_status") == "missing" for item in valid_records),
+            "markdown_reference_missing": sum(item.get("markdown_status") == "reference-missing" for item in valid_records),
+            "needs_review": sum(
+                "needs-review" in {item.get("source_page_status"), item.get("asset_status"), item.get("markdown_status"), item.get("lifecycle_status")}
+                for item in valid_records
+            ),
+            "not_applicable": sum(item.get("lifecycle_status") == "not-applicable" for item in valid_records),
+        }
+        if counts is None:
+            self.error("figure-coverage", "figure_coverage.counts must be a mapping")
+        else:
+            for key, actual in required_counts.items():
+                if counts.get(key) != actual:
+                    self.error("figure-coverage", f"counts.{key} must equal {actual}")
+
+        document_passable = (
+            bool(expected_ids)
+            and record_ids == expected_ids
+            and all(item.get("lifecycle_status") in {"passed", "not-applicable"} for item in valid_records)
+            and all(item.get("source_page_status") in {"located", "not-applicable"} for item in valid_records)
+            and all(item.get("asset_status") in {"upgraded", "not-applicable"} for item in valid_records)
+            and all(item.get("markdown_status") in {"linked", "not-applicable"} for item in valid_records)
+        )
+        if data.get("document_status") == "passed" and not document_passable:
+            self.error("figure-coverage", "document_status passed requires every expected figure to pass or be justified not-applicable")
+        if manifest_status == "complete" and data.get("document_status") != "passed":
+            self.error("figure-coverage", "manifest complete is incompatible with incomplete figure coverage")
+
+    def validate_visual_asset_lifecycle(self, lifecycle: Any, coverage: Any) -> None:
+        if lifecycle is None:
+            return
+        data = _mapping(lifecycle)
+        if data is None:
+            self.error("visual-asset-lifecycle", "visual_asset_lifecycle must be a mapping")
+            return
+        for key in ("enabled", "task_evidence", "status"):
+            if key not in data:
+                self.error("visual-asset-lifecycle", f"visual_asset_lifecycle missing {key}")
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            self.error("visual-asset-lifecycle", "visual_asset_lifecycle.enabled must be boolean")
+        if data.get("status") not in {"complete", "needs-review", "failed", "not-run"}:
+            self.error("visual-asset-lifecycle", "visual_asset_lifecycle.status is invalid")
+        tasks = data.get("task_evidence")
+        if not isinstance(tasks, list):
+            self.error("visual-asset-lifecycle", "visual_asset_lifecycle.task_evidence must be a list")
+            tasks = []
+        task_ids: set[str] = set()
+        task_statuses: list[str] = []
+        for index, task in enumerate(tasks):
+            item = _mapping(task)
+            if item is None:
+                self.error("visual-asset-lifecycle", f"task_evidence[{index}] must be a mapping")
+                continue
+            for key in ("task_id", "status", "binding_status", "evidence_paths", "diagnostics"):
+                if key not in item:
+                    self.error("visual-asset-lifecycle", f"task_evidence[{index}] missing {key}")
+            task_id = item.get("task_id")
+            if task_id not in {f"F{value}" for value in range(9)}:
+                self.error("visual-asset-lifecycle", f"task_evidence[{index}].task_id is invalid")
+            elif task_id in task_ids:
+                self.error("visual-asset-lifecycle", f"duplicate task evidence: {task_id}")
+            else:
+                task_ids.add(task_id)
+            task_status = item.get("status")
+            if task_status not in {"complete", "needs-review", "failed", "not-run"}:
+                self.error("visual-asset-lifecycle", f"{task_id}.status is invalid")
+            else:
+                task_statuses.append(task_status)
+            if not isinstance(item.get("binding_status"), str) or not item.get("binding_status"):
+                self.error("visual-asset-lifecycle", f"{task_id}.binding_status is required")
+            for key in ("evidence_paths", "diagnostics"):
+                if not isinstance(item.get(key), list):
+                    self.error("visual-asset-lifecycle", f"{task_id}.{key} must be a list")
+        if enabled:
+            expected_tasks = {f"F{value}" for value in range(9)}
+            if task_ids != expected_tasks:
+                self.error("visual-asset-lifecycle", f"enabled lifecycle requires F0-F8 task evidence; found {sorted(task_ids)}")
+            if _mapping(coverage) is None:
+                self.error("visual-asset-lifecycle", "enabled lifecycle requires figure_coverage")
+        if data.get("status") == "complete":
+            coverage_data = _mapping(coverage) or {}
+            if not enabled or task_ids != {f"F{value}" for value in range(9)} or any(value != "complete" for value in task_statuses):
+                self.error("visual-asset-lifecycle", "complete lifecycle requires enabled F0-F8 complete task evidence")
+            if coverage_data.get("document_status") != "passed":
+                self.error("visual-asset-lifecycle", "complete lifecycle requires figure_coverage.document_status passed")
 
     def validate_asset_layout(self, manifest: dict[str, Any]) -> None:
         """Require flat assets for new packages while keeping old packages readable."""
@@ -570,7 +775,72 @@ class _Validator:
                 self.error("reconstruction-profile", f"profiles[{index}] has invalid status")
             if item.get("status") == "needs-review" and not item.get("uncertainty"):
                 self.error("reconstruction-profile", f"profiles[{index}] needs uncertainty entries")
+            self.validate_derived_representations(index, item.get("derived_representations"))
             self.validate_forbidden_fields(item, f"visual-reconstruction-profiles[{index}]")
+
+    def validate_derived_representations(self, profile_index: int, representations: Any) -> None:
+        if representations is None:
+            return
+        if not isinstance(representations, list):
+            self.error("derived-representation", f"profiles[{profile_index}].derived_representations must be a list")
+            return
+        for index, representation in enumerate(representations):
+            item = _mapping(representation)
+            label = f"profiles[{profile_index}].derived_representations[{index}]"
+            if item is None:
+                self.error("derived-representation", f"{label} must be a mapping")
+                continue
+            required = (
+                "representation_id",
+                "kind",
+                "path",
+                "source_asset_ids",
+                "status",
+                "confidence",
+                "fallback_asset_id",
+                "markdown_targets",
+                "validation",
+                "diagnostics",
+            )
+            for key in required:
+                if key not in item:
+                    self.error("derived-representation", f"{label} missing {key}")
+            if item.get("kind") != "mermaid":
+                self.error("derived-representation", f"{label}.kind must be mermaid")
+            source_ids = item.get("source_asset_ids")
+            if not isinstance(source_ids, list) or not source_ids:
+                self.error("derived-representation", f"{label}.source_asset_ids must be non-empty")
+            else:
+                for asset_id in source_ids:
+                    if asset_id not in self.asset_ids:
+                        self.error("derived-representation", f"{label} references unknown source asset {asset_id}")
+            fallback_id = item.get("fallback_asset_id")
+            if fallback_id not in self.asset_ids:
+                self.error("derived-representation", f"{label} references unknown fallback asset {fallback_id}")
+            elif self.asset_by_id[fallback_id].get("asset_kind") not in {"crop", "enhanced-raster"}:
+                self.error("derived-representation", f"{label} fallback must be crop or enhanced-raster")
+            if item.get("status") == "available":
+                self.package_path(item.get("path"), f"{label}.path")
+                if not isinstance(item.get("markdown_targets"), list) or not item["markdown_targets"]:
+                    self.error("derived-representation", f"available {label} requires markdown_targets")
+
+            validation = _mapping(item.get("validation"))
+            if validation is None:
+                self.error("derived-representation", f"{label}.validation must be a mapping")
+                continue
+            for key in ("syntax", "render", "semantic_comparison", "fallback_link"):
+                if _mapping(validation.get(key)) is None:
+                    self.error("derived-representation", f"{label}.validation.{key} must be a mapping")
+            if item.get("status") != "available":
+                continue
+            for key in ("syntax", "render", "semantic_comparison", "fallback_link"):
+                check = _mapping(validation.get(key)) or {}
+                if check.get("status") != "passed":
+                    self.error("derived-representation", f"available {label} requires validation.{key}=passed")
+            semantic = _mapping(validation.get("semantic_comparison")) or {}
+            for dimension in ("nodes", "labels", "edges", "directions", "hierarchy"):
+                if semantic.get(dimension) not in {"confirmed", "not-applicable"}:
+                    self.error("derived-representation", f"available {label} has unresolved semantic {dimension}")
 
     def validate_assets(self, assets: Any, package_id: Any, source: dict[str, Any] | None) -> None:
         if not isinstance(assets, list) or not assets:
@@ -644,12 +914,201 @@ class _Validator:
                     self.error("asset.source", f"{asset_id}.source_fingerprint does not match manifest source")
                 self.validate_occurrences(asset_id, item, asset_source)
             self.validate_media(asset_id, item, file_path, status)
+            self.validate_derivation(asset_id, item)
+            self.validate_markdown_bindings(asset_id, item)
         for asset_id, item in self.asset_by_id.items():
             source_data = _mapping(item.get("source")) or {}
             for occurrence in source_data.get("source_occurrences", []) or []:
                 parent = occurrence.get("parent_asset_id")
                 if parent is not None and parent not in self.asset_ids:
                     self.error("provenance", f"{asset_id} occurrence parent_asset_id is unknown: {parent}")
+            derivation = _mapping(item.get("derivation")) or {}
+            parent_ids = derivation.get("parent_asset_ids", []) or []
+            for parent in parent_ids:
+                if parent not in self.asset_ids:
+                    self.error("derivation", f"{asset_id} derivation parent_asset_id is unknown: {parent}")
+            kind = item.get("asset_kind")
+            known_parents = [self.asset_by_id[parent] for parent in parent_ids if parent in self.asset_by_id]
+            if kind in {"crop", "complex-region"} and known_parents:
+                allowed_parent_kinds = {"page-render", "embedded-media", "input-image"}
+                if any(parent.get("asset_kind") not in allowed_parent_kinds for parent in known_parents):
+                    self.error("derivation", f"{asset_id} crop parent must be page-render, embedded-media, or input-image")
+                parameters = _mapping(derivation.get("parameters")) or {}
+                geometry = parameters.get("geometry")
+                match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)\+([0-9]+)\+([0-9]+)", str(geometry))
+                if match:
+                    width, height, x, y = (int(value) for value in match.groups())
+                    parent_media = _mapping(known_parents[0].get("media")) or {}
+                    parent_width, parent_height = parent_media.get("width"), parent_media.get("height")
+                    if isinstance(parent_width, int) and isinstance(parent_height, int):
+                        if x + width > parent_width or y + height > parent_height:
+                            self.error("crop-decision", f"{asset_id} geometry exceeds parent asset dimensions")
+                    decision = _mapping(item.get("crop_decision")) or {}
+                    coordinate = _mapping(decision.get("coordinate_space")) or {}
+                    if coordinate.get("source_width") != parent_width or coordinate.get("source_height") != parent_height:
+                        self.error("crop-decision", f"{asset_id} coordinate space does not match parent media dimensions")
+            if kind == "enhanced-raster" and known_parents:
+                if any(parent.get("asset_kind") not in {"crop", "complex-region"} for parent in known_parents):
+                    self.error("derivation", f"{asset_id} enhanced parent must be crop or complex-region")
+            fallback = derivation.get("fallback_asset_id")
+            if fallback is not None and fallback not in self.asset_ids:
+                self.error("derivation", f"{asset_id} fallback_asset_id is unknown: {fallback}")
+            if item.get("asset_kind") == "enhanced-raster" and fallback in self.asset_by_id:
+                if self.asset_by_id[fallback].get("asset_kind") not in {"crop", "complex-region"}:
+                    self.error("derivation", f"{asset_id} fallback must be a crop or complex-region asset")
+                if fallback not in parent_ids:
+                    self.error("derivation", f"{asset_id} fallback must be one of its crop parent assets")
+
+    def validate_derivation(self, asset_id: str, item: dict[str, Any]) -> None:
+        kind = item.get("asset_kind")
+        if kind not in {"crop", "complex-region", "enhanced-raster"}:
+            return
+        derivation = _mapping(item.get("derivation"))
+        if derivation is None:
+            self.error("derivation", f"{asset_id} requires derivation")
+            return
+        for key in ("parent_asset_ids", "operation", "parameters", "structure_preserved", "fallback_asset_id", "status"):
+            if key not in derivation:
+                self.error("derivation", f"{asset_id} derivation missing {key}")
+        parents = derivation.get("parent_asset_ids")
+        if not isinstance(parents, list) or not parents or not all(isinstance(value, str) and value for value in parents):
+            self.error("derivation", f"{asset_id} derivation.parent_asset_ids must be a non-empty string list")
+        if derivation.get("status") not in DERIVATION_STATUSES:
+            self.error("derivation", f"{asset_id} derivation.status is invalid")
+        if item.get("status") == "available" and derivation.get("status") != "complete":
+            self.error("derivation", f"available asset {asset_id} requires complete derivation")
+
+        parameters = _mapping(derivation.get("parameters"))
+        if parameters is None:
+            self.error("derivation", f"{asset_id} derivation.parameters must be a mapping")
+            return
+        if kind in {"crop", "complex-region"}:
+            if derivation.get("operation") != "region-crop":
+                self.error("derivation", f"{asset_id} crop operation must be region-crop")
+            geometry = parameters.get("geometry")
+            if not isinstance(geometry, str) or not GEOMETRY_RE.fullmatch(geometry):
+                self.error("crop-decision", f"{asset_id} has invalid WxH+X+Y geometry")
+            self.validate_crop_decision(asset_id, item, geometry)
+        elif kind == "enhanced-raster":
+            if derivation.get("operation") != "raster-readability-enhancement":
+                self.error("derivation", f"{asset_id} enhancement operation is invalid")
+            required_parameters = ("colorspace", "auto_level", "brightness_contrast", "sharpen", "tool", "tool_version")
+            for key in required_parameters:
+                if key not in parameters:
+                    self.error("derivation", f"{asset_id} enhancement parameters missing {key}")
+            if item.get("status") == "available" and derivation.get("structure_preserved") is not True:
+                self.error("derivation", f"available enhanced asset {asset_id} requires structure_preserved=true")
+            if not isinstance(derivation.get("fallback_asset_id"), str) or not derivation["fallback_asset_id"]:
+                self.error("derivation", f"enhanced asset {asset_id} requires crop fallback_asset_id")
+
+    def validate_crop_decision(self, asset_id: str, item: dict[str, Any], geometry: Any) -> None:
+        decision = _mapping(item.get("crop_decision"))
+        if decision is None:
+            self.error("crop-decision", f"{asset_id} requires crop_decision")
+            return
+        required = (
+            "region_id",
+            "localization_basis",
+            "required_elements",
+            "excludable_elements",
+            "candidate_geometry",
+            "accepted_geometry",
+            "coordinate_space",
+            "safety_margins",
+            "edge_checks",
+            "review_evidence",
+            "adjustment_history",
+            "status",
+        )
+        for key in required:
+            if key not in decision:
+                self.error("crop-decision", f"{asset_id} crop_decision missing {key}")
+        if not isinstance(decision.get("region_id"), str) or not decision["region_id"].strip():
+            self.error("crop-decision", f"{asset_id} crop_decision.region_id is required")
+        for key in ("localization_basis", "required_elements", "excludable_elements", "adjustment_history"):
+            if not isinstance(decision.get(key), list):
+                self.error("crop-decision", f"{asset_id} crop_decision.{key} must be a list")
+        for key in ("localization_basis", "required_elements"):
+            if isinstance(decision.get(key), list) and not decision[key]:
+                self.error("crop-decision", f"{asset_id} crop_decision.{key} must not be empty")
+        if decision.get("status") not in {"accepted", "needs-review", "rejected"}:
+            self.error("crop-decision", f"{asset_id} crop_decision.status is invalid")
+        if not isinstance(decision.get("candidate_geometry"), str) or not GEOMETRY_RE.fullmatch(decision["candidate_geometry"]):
+            self.error("crop-decision", f"{asset_id} candidate_geometry is invalid")
+
+        coordinate = _mapping(decision.get("coordinate_space"))
+        if coordinate is None:
+            self.error("crop-decision", f"{asset_id} coordinate_space must be a mapping")
+        else:
+            if coordinate.get("origin") != "top-left":
+                self.error("crop-decision", f"{asset_id} coordinate origin must be top-left")
+            for key in ("source_width", "source_height"):
+                if not isinstance(coordinate.get(key), int) or coordinate[key] <= 0:
+                    self.error("crop-decision", f"{asset_id} coordinate_space.{key} must be positive")
+            if not isinstance(coordinate.get("rotation_degrees"), int):
+                self.error("crop-decision", f"{asset_id} rotation_degrees must be an integer")
+
+        margins = _mapping(decision.get("safety_margins"))
+        if margins is None:
+            self.error("crop-decision", f"{asset_id} safety_margins must be a mapping")
+        else:
+            for side in ("top", "right", "bottom", "left"):
+                if not isinstance(margins.get(side), int) or margins[side] < 0:
+                    self.error("crop-decision", f"{asset_id} safety margin {side} must be non-negative")
+
+        edge_checks = _mapping(decision.get("edge_checks"))
+        if edge_checks is None:
+            self.error("crop-decision", f"{asset_id} edge_checks must be a mapping")
+        else:
+            for side in ("top", "right", "bottom", "left"):
+                if edge_checks.get(side) not in CROP_EDGE_STATUSES:
+                    self.error("crop-decision", f"{asset_id} edge check {side} is invalid")
+            touching = edge_checks.get("foreground_touching_edges")
+            if not isinstance(touching, list) or any(side not in {"top", "right", "bottom", "left"} for side in touching):
+                self.error("crop-decision", f"{asset_id} foreground_touching_edges is invalid")
+                touching = []
+            for side in touching:
+                if edge_checks.get(side) != "intentional-contact":
+                    self.error("crop-decision", f"{asset_id} foreground touches {side} without intentional-contact evidence")
+
+        review = _mapping(decision.get("review_evidence"))
+        if review is None:
+            self.error("crop-decision", f"{asset_id} review_evidence must be a mapping")
+        else:
+            for key in ("source_preview", "crop_preview", "overlay_or_equivalent", "reviewer", "reviewed_at"):
+                if not isinstance(review.get(key), str) or not review[key].strip():
+                    self.error("crop-decision", f"{asset_id} review_evidence.{key} is required")
+            for key in ("source_preview", "crop_preview", "overlay_or_equivalent"):
+                if isinstance(review.get(key), str) and review[key].strip():
+                    self.package_path(review[key], f"{asset_id}.crop_decision.review_evidence.{key}")
+
+        if item.get("status") == "available":
+            if decision.get("status") != "accepted":
+                self.error("crop-decision", f"available crop {asset_id} requires accepted decision")
+            if decision.get("accepted_geometry") != geometry:
+                self.error("crop-decision", f"{asset_id} accepted_geometry must equal derivation geometry")
+            if edge_checks is not None:
+                for side in ("top", "right", "bottom", "left"):
+                    if edge_checks.get(side) in {"clipped", "unknown"}:
+                        self.error("crop-decision", f"available crop {asset_id} has unresolved {side} edge")
+
+    def validate_markdown_bindings(self, asset_id: str, item: dict[str, Any]) -> None:
+        bindings = item.get("markdown_bindings")
+        if bindings is None:
+            return
+        if not isinstance(bindings, list):
+            self.error("markdown-binding", f"{asset_id}.markdown_bindings must be a list")
+            return
+        for index, binding in enumerate(bindings):
+            record = _mapping(binding)
+            if record is None:
+                self.error("markdown-binding", f"{asset_id}.markdown_bindings[{index}] must be a mapping")
+                continue
+            for key in ("content_unit_id", "markdown_path", "role", "relative_path", "link_check", "status"):
+                if key not in record:
+                    self.error("markdown-binding", f"{asset_id}.markdown_bindings[{index}] missing {key}")
+            if record.get("status") == "linked" and record.get("link_check") != "resolved":
+                self.error("markdown-binding", f"{asset_id} linked binding requires link_check=resolved")
 
     def validate_occurrences(self, asset_id: str, item: dict[str, Any], source: dict[str, Any]) -> None:
         occurrences = source.get("source_occurrences")

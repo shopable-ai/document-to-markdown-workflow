@@ -125,3 +125,47 @@ def test_heading_repair_matches_vision_projection_after_heading_promotion(tmp_pa
 
     assert result["status"] == "passed"
     assert (run_root / "index.md").read_text(encoding="utf-8") == expected_merge
+
+
+def test_heading_repair_runs_post_merge_formatting_without_breaking_pages_or_images(tmp_path: Path):
+    run_root = tmp_path / "run"
+    page_units = run_root / "page-units"
+    reports = run_root / "reports"
+    page_units.mkdir(parents=True)
+    reports.mkdir(parents=True)
+
+    page_one = page_units / "p001.md"
+    page_one.write_text(
+        "<!-- page:1 -->\n\n"
+        "第一部分\n\n"
+        "这一 行\n"
+        "需要 合并\n\n"
+        "![第1页原始页面图](../assets/page-001.png)\n",
+        encoding="utf-8",
+    )
+    page_two = page_units / "p002.md"
+    page_two.write_text(
+        "<!-- page:2 -->\n\n"
+        "第二部分\n\n"
+        "第二 页\n"
+        "正文\n",
+        encoding="utf-8",
+    )
+    write_page_result(run_root, 1, "retain")
+    write_page_result(run_root, 2, "omit")
+    (run_root / "document-temp.md").write_text(
+        repair._deterministic_merge(run_root, [(1, page_one), (2, page_two)]),
+        encoding="utf-8",
+    )
+
+    result = repair.run_heading_repair(run_root=run_root, use_model=False)
+
+    assert result["status"] == "passed"
+    assert result["post_merge_formatting"]["status"] == "passed"
+    assert result["formatting_validation"]["passed"] is True
+    index_text = (run_root / "index.md").read_text(encoding="utf-8")
+    assert "<!-- page:1 -->" in index_text
+    assert "<!-- page:2 -->" in index_text
+    assert "![第1页原始页面图](assets/page-001.png)" in index_text
+    assert "这一 行需要 合并" in index_text
+    assert "第二 页正文" in index_text

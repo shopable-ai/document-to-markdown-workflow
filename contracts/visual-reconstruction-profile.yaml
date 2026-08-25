@@ -1,7 +1,7 @@
 contract: visual-reconstruction-profile
-version: 0.1.0
-description: 复杂视觉资产的结构化重建信息与可复用图像模型提示词契约。
-purpose: 在保留原图的同时，保存足以指导后续图像模型重建的可核对结构、文字、样式和提示词。
+version: 0.4.0
+description: 复杂视觉资产的结构化重建信息、可复用图像模型提示词与可选 Mermaid 派生表达契约。
+purpose: 在保留原图和 PNG fallback 的同时，保存足以指导后续图像模型或 Mermaid 保守重建的可核对结构、文字、样式和提示词。
 required:
   profile_id: string
   source:
@@ -53,6 +53,8 @@ optional:
   - model_notes
   - derivation_notes
   - generated_image_reference
+  - derived_representations
+  - text_corroboration
 forbidden_fields:
   - api_key
   - authorization
@@ -68,6 +70,38 @@ element:
 relation:
   required: [relation_id, from, to, type, direction, evidence, confidence]
   confidence: enum[high, medium, low, unknown]
+text_corroboration:
+  required: [source_spans, allowed_uses, forbidden_uses, conflicts, status]
+  source_spans: array
+  allowed_uses: array
+  forbidden_uses: array
+  conflicts: array
+  status: enum[confirmed, needs-review, not-used]
+derived_representation:
+  required: [representation_id, kind, path, source_asset_ids, status, confidence, fallback_asset_id, markdown_targets, validation, diagnostics]
+  kind: enum[mermaid]
+  path: string|null
+  source_asset_ids: array
+  status: enum[available, needs-review, not-applicable, unavailable]
+  confidence: enum[high, medium, low, unknown]
+  fallback_asset_id: string
+  markdown_targets: array
+  validation:
+    required: [syntax, render, semantic_comparison, fallback_link]
+    syntax:
+      required: [status, tool, tool_version, evidence_path]
+      status: enum[passed, needs-review, failed, not-run]
+    render:
+      required: [status, evidence_path]
+      status: enum[passed, needs-review, failed, not-run]
+    semantic_comparison:
+      required: [status, nodes, labels, edges, directions, hierarchy, evidence_path, reviewer]
+      status: enum[passed, needs-review, failed, not-run]
+      dimension_status: enum[confirmed, needs-review, not-applicable]
+    fallback_link:
+      required: [status, resolved_asset_id, resolved_path]
+      status: enum[passed, needs-review, failed, not-run]
+  diagnostics: array
 invariants:
   - source.asset_sha256 必须与 asset_path 的实际 SHA-256 一致；profile 不能替代原图或裁剪图
   - 每个 zones、visual_elements、relations 和 exact_visible_strings 项必须带 evidence 或明确的 Unknown
@@ -78,3 +112,11 @@ invariants:
   - prompt_version、evidence.extraction_route 和 evidence.schema_version 必须可追溯
   - profile 不证明任何生成图片与来源像素等价；它只提供可复核的重建输入
   - 不得包含 api_key、authorization、cookie、secret 或 subscription_url
+  - Mermaid 只适用于结构清晰的 flow、hierarchy、timeline、concept-map 或其他明确节点-边关系；复杂排版隐喻、文字不可靠或关系未裁决时不得标为 available
+  - Mermaid 使用的每个节点、标签和边必须回指 composition、visual_elements、relations、exact_visible_strings 及其 evidence；影响结构的 uncertainty 非空时状态必须为 needs-review，且不得回填读者 Markdown
+  - kind=mermaid 且 status=available 时 path、markdown_targets 和 fallback_asset_id 不得为空；fallback_asset_id 必须指向同一 manifest 中可用的 crop 或 enhanced-raster PNG
+  - kind=mermaid 且 status=available 时 validation.syntax、validation.render、validation.semantic_comparison 和 validation.fallback_link 必须全部 passed；语法通过只能证明可解析，不能替代来源语义对照
+  - semantic_comparison 必须分别确认 nodes、labels、edges、directions 和 hierarchy；不适用维度可为 not-applicable，任何 needs-review 都使 derived representation 状态最多为 needs-review
+  - Mermaid 是可选派生表达，不能替代 source page、crop、enhanced-raster 或 PNG fallback，也不能因为语法可解析就证明图示关系正确
+  - 邻近正文只有在保存精确 source span 且与可见图形不冲突时，才可用于标签拼写或消歧；不得据正文新增图片中未确认的节点、边、方向、层级或文字
+  - 正文、OCR、视觉候选和图片证据冲突时必须保存 text_corroboration.conflicts 并将相关关系或 derived representation 标为 needs-review，不得静默选择较顺畅的解释

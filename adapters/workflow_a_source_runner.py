@@ -10,6 +10,7 @@ output directory into a data-asset workspace.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import html
 import json
@@ -41,6 +42,11 @@ try:
     import pdf_task_guard as task_guard
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import pdf_task_guard as task_guard
+
+try:
+    import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_resource_slots as resource_slots
 
 try:
     from pypdf import PdfReader
@@ -1583,9 +1589,17 @@ def main(argv: list[str] | None = None) -> int:
             plan["candidate_comparison"] = str(args.candidate_comparison.expanduser().resolve())
         plan["output_root"] = str(args.output_root.expanduser().resolve())
         if args.execute:
-            with task_guard.acquire_task_lock(
-                source=args.source.expanduser().resolve(),
-                source_sha256=sha256(args.source.expanduser().resolve()),
+            source = args.source.expanduser().resolve()
+            local_slot = (
+                resource_slots.acquire_local_pdf_slot(
+                    purpose="workflow-a-source-runner-pdf"
+                )
+                if source.suffix.lower() == ".pdf"
+                else nullcontext()
+            )
+            with local_slot, task_guard.acquire_task_lock(
+                source=source,
+                source_sha256=sha256(source),
                 output_root=args.output_root.expanduser().resolve(),
                 pages=args.pages,
                 entrypoint="workflow_a_source_runner.py",

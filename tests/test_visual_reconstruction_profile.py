@@ -24,6 +24,14 @@ def test_profile_contract_preserves_structure_prompt_and_evidence_fields():
     assert {"api_key", "authorization", "cookie", "secret", "subscription_url"}.issubset(
         set(contract["forbidden_fields"]) if "forbidden_fields" in contract else set()
     )
+    assert "derived_representations" in contract["optional"]
+    derived = contract["derived_representation"]
+    assert derived["kind"] == "enum[mermaid]"
+    assert {"fallback_asset_id", "markdown_targets", "source_asset_ids", "validation"}.issubset(derived["required"])
+    assert derived["validation"]["required"] == ["syntax", "render", "semantic_comparison", "fallback_link"]
+    invariants = " ".join(contract["invariants"])
+    assert "明确节点-边关系" in invariants
+    assert "crop 或 enhanced-raster PNG" in invariants
 
 
 def test_workflow_a_profile_output_can_be_consumed_by_workflow_b():
@@ -39,3 +47,8 @@ def test_workflow_a_profile_output_can_be_consumed_by_workflow_b():
     references = next(item for item in workflow_b["inputs"] if item["name"] == "reference_assets")
     assert "visual-reconstruction-profile" in references["types"]
     assert any(item["name"] == "visual_reconstruction_profile" for item in workflow_b["inputs"])
+    lifecycle = workflow_a["execution_policy"]["asset_extraction"]["figure_asset_lifecycle"]
+    assert lifecycle["mermaid_policy"] == (
+        "confirmed-node-edge-structures-only;"
+        "syntax-render-semantic-and-png-fallback-validation-required"
+    )

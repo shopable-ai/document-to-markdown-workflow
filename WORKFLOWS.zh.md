@@ -59,6 +59,19 @@ A1 来源预检
 
 核心原则：原生结构优先；扫描文字页将文字识别、Markdown 结构重建、广告分类及处理分层，Apple Vision OCR 加结构重建、mac96 小视觉模型和 30B 按真实页面基准选路由；复杂图必须保留视觉证据；落盘文件名使用稳定英文 `file_name`，中文语义放在 `display_name`，稳定 ID、来源出现记录与哈希放入 manifest。
 
+Workflow A 内可按需启用图级视觉资产升级，但不增加 Workflow：每批在一个 page-unit、segment
+或其他最小来源单元中处理 1–2 张图，按 `需求盘点 → 来源页 → 候选区域 → crop 决策/接受 →
+optional enhanced-raster → optional Mermaid → 同一 manifest/读者资产选择 → Markdown 回填/再生成 → 验收`
+闭环。来源项目的阶段目录不复制进正式包；工程包和
+读者包继续使用扁平 `assets/`，Mermaid 始终保留 PNG fallback。该工作包不改变 native-first、
+`--no-model` 或逐页 PDF 路由，也不触发整书 OCR。
+
+F0 不是只扫当前 cleaned Markdown：它必须对账原始/来源最小单元、当前 page-unit/segment、派生
+Markdown、现有资产和同一 Manifest，维护文档级 `figure_coverage`。定点 contact sheet、放大图、
+节点子图和 OCR probe 只作 evidence；同页多图保持不同 figure/region/occurrence ID；历史逐图
+Manifest 只作为带哈希的迁移证据合入唯一 `manifest.yaml`。F8 分别给出 batch/document 状态，
+当前 1–2 张图通过不等于整本完成。
+
 已有读者层 Markdown 的页面修复采用独立页面单元覆盖层：先处理第 1 页并独立验收，
 再开放第 2–5 页小批量；第 2–5 页人工复核通过后，才允许第 6–total_pages 页。页面合并按固定页序
 确定性执行，`document-temp.md` 只是可审阅派生预览，不替代最终 `index.md`。

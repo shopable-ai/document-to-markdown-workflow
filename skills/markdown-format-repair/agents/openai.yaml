@@ -1,7 +1,7 @@
 interface:
   display_name: "Markdown 格式修复"
-  short_description: "修复 AI/OCR 生成的 Markdown 噪声并保留图片引用"
-  default_prompt: "使用 $markdown-format-repair 修复当前 Markdown 的 AI/OCR 噪声、层级和重复内容，同时保持所有图片引用不变。"
+  short_description: "整理完整 Markdown 文档并保留正文与图片引用"
+  default_prompt: "使用 $markdown-format-repair 整理并修复当前 Markdown 的标题、排版、OCR 或转换异常、表格、换行和页面杂质，同时保持正文含义与全部图片引用不变。"
 
 policy:
   allow_implicit_invocation: true

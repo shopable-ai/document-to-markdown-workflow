@@ -6,6 +6,7 @@
 
 - [ ] `index.md` 非空，包含可读的关键点 Markdown。
 - [ ] `index.md` 的每个图片链接都存在且指向当前包内的截图。
+- [ ] 默认最终正式稿只有 `index.md`；不得额外生成同内容的 source-named Markdown、副本或“最终版/修正版”别名。
 - [ ] 若存在 `assets/`，其中没有未被 `index.md` 引用的文件，且不包含嵌套目录或非图片文件；若 `index.md` 没有图片链接，允许 `assets/` 不存在。
 - [ ] `page_content_type=text-only`、Markdown 可完整表达且没有语义视觉/未决关系的页面不含整页截图链接；二维码不解码、不裁剪、不作为读者图片。
 - [ ] 默认输出中不存在 `manifest.yaml`、`reports/`、`evidence/`、`page-units/`、`document-temp.md`、JSON 或 YAML。
@@ -58,8 +59,33 @@
 - [ ] 页面 Markdown 修复不单独运行 pytest 或页面独立 validator；修复适配器内的结构守卫和规定阶段的人工查看是该步骤的验证边界。完整资产包仍由 A7 独立验收。
 - [ ] 对单个视觉模型，关系密集、图表复杂、颜色/空间编码重要或明确要求高置信度时，才显式使用 `pass_strategy=dual`；Apple Vision OCR 只能提供原始文字和坐标候选，必须经过独立结构重建，且不得用 OCR 伪造视觉结构。
 - [ ] 复杂图、图文混排或关系密集区域有整页图或必要的局部图证据；整页图已足够时不生成 `complex-region`/`crop` 文件，并在报告中记录该判断。
+- [ ] 混合正文与局部复杂视觉不得仅以 `retain` 把整页工程截图留在读者 `assets/`；必须标记 `crop-required` 并生成最小充分区域图。只有全页关系不可分割时才保留整页。
+- [ ] 裁图候选默认先使用 Apple Vision OCR 坐标、图/表题锚点、空白带/墨迹密度/连通区域等确定性方法；局域网视觉模型只为低置信例外提供候选坐标，不直接授权删除，也不逐页重复读取已进入 Markdown 的正文。
+- [ ] reader-only 简化包的每个裁图质量分至少 95/100，且视觉内容、必要标签、图题/上下文、四边安全、正文污染五项硬检查全部通过；横置图的旋转参数、源图删除前哈希和输出哈希可重读。
+- [ ] 每个已引用 reader crop 均有 `evidence/text-heavy-reader-asset-audit.json` 二次门记录；默认 `auto` 路线使用 Apple Vision 坐标 OCR，失败或低置信时本机回退 Tesseract，全程默认模型 token 为 0。
+- [ ] 二次门同时检查 Markdown 字符覆盖和顺序覆盖、非文字墨迹/包围面积/横纵结构线、建议裁切框和来源哈希；稀疏箭头/坐标轴不得因墨迹比例低而忽略，只有简单线性顺序已在 Markdown 中明确表达时才算视觉增量已覆盖。相同字符乱序、OCR 低置信或结构边界不清必须 `needs-review`，不得自动删除。
+- [ ] 只有 `candidate-remove`、`decision_confidence_score >= 95`、`deletion_eligible=true` 且全部 deletion gates 通过的 reader crop 才可进入 hash 锁定删除计划；`crop-required` 继续裁、`retain` 保留、`needs-review` 失败关闭。audit evidence 95 分与 crop visual quality 95 分分别验收，不得互相替代。
+- [ ] 物理清理只通过独立 `--apply-plan` 调用执行；应用前重读 Markdown/图片 SHA-256、原引用行、删除分和全部硬门，先移除 Markdown 引用、后删除图片，失败时恢复两者并写出 removal result。
+- [ ] 只有 `regenerable-engineering-page-render` 可在全部裁图生成、Markdown 精确换链、全部新资产被引用并通过回滚门后删除；原始 PDF/PPTX/独立图片不得删除。最终 reader `assets/` 中无未引用图和残留 `page-NNN` 整页工程图。
+- [ ] 启用图级视觉资产升级时，每批只覆盖同一个 page-unit、segment 或其他已登记最小来源单元中的 1–2 张图；前一批 F0 需求盘点 → F1 来源页 → F2 区域定位 → F3 crop 接受 → F4 可选增强 → F5 可选 Mermaid → F6 同一 Manifest/读者投影 → F7 回填/再生成 → F8 验收未闭合时不得扩大。
+- [ ] F0 已记录当前 content unit、图号/图注、现有 Markdown 链接、Manifest 资产、legacy/缺失分类和批次锁；尚无专用 adapter 时如实标为 procedure-only，不伪装成代码执行。
+- [ ] F0 的 `expected_figure_ids` 来自原始/来源最小单元、cleaned/page-unit、派生 Markdown、现有资产和同一 Manifest 的对账并集；cleaned/final 缺失但来源存在的图号仍标为 `markdown-reference-missing`，不得静默移出需求集合或删除图片。
+- [ ] `figure_coverage` 中每个 expected figure ID 恰好有一条 content unit、来源页、资产、Markdown、生命周期和批次状态记录；`batch_status` 与 `document_status` 分开，单批 passed 不得推导全书 passed。
+- [ ] 现有图片与同批页图尺寸一致或仍含页眉、页码、章节标题、正文段落时，按整页图候选复核；判断不清时保留来源页图并进入 `needs-review`。
+- [ ] F1 复用 legacy 页图副本时记录两端路径/SHA-256 和 `source_equivalence`；仅在双方哈希一致时写 `byte-identical`，发生渲染或转换时保存工具、参数和来源链。
+- [ ] F1 页定位不确定时仅探查候选页，保存候选页列表、明确页序、页面图和 contact sheet 哈希、发现与选择结论；contact sheet 只作 evidence，不进入读者 `assets/`。
+- [ ] contact sheet/thumbnail 只用于选页；预览图候选框保存 preview/full-resolution 尺寸与 scale/rotation transform，并在带哈希的全分辨率 parent 坐标空间重新定位和逐边复核，不直接复用预览坐标裁切。
+- [ ] F2 候选区域记录 `region_id`、定位锚点、触发依据、candidate geometry、必须保留/允许排除元素、覆盖对象、置信度和诊断；候选区域不得直接标成最终 crop。
+- [ ] 同一 page-render 包含多个图时，各图具有不同 `figure_id`、`region_id`、`source_occurrence_id`、ordinal 和 crop decision；不得按页码、哈希或视觉相似度合并为一个图。
+- [ ] F3 crop 的 `parent_asset_id`、来源页、candidate/accepted `WxH+X+Y`、来源像素坐标空间、横纵向策略、安全边距、调整历史、尺寸和 SHA-256 可重读；top/right/bottom/left 任一为 clipped/unknown，或前景触边无解释/证据时不得 `available`。
+- [ ] F3 同时保留来源页、crop preview 和 overlay 或等价复核证据；坐标合法、文件存在和图片可打开均不能单独代替区域正确性验收。
+- [ ] F4 enhanced-raster 记录实际工具/版本及 colorspace、auto-level、brightness-contrast、sharpen 参数，并保存 crop/enhanced 比较证据、选择理由和 `structure_preserved=true`；增强变差或结构可能改变时使用 crop fallback，不能标为完整。
 - [ ] 新包使用 `output_layout: flat-assets-v1`，所有资产直接位于 `assets/`；不得创建 `assets/pages/`、`assets/regions/` 或 `assets/embedded/`。
 - [ ] 对复杂结构或明确需要重新生成的视觉资产，存在 `evidence/visual-reconstruction-profile.yaml`，且结构版、提示词版、来源字段和未决项可独立重读；纯装饰或证据不足时明确记录 `not-applicable`/`insufficient-evidence`。
+- [ ] Mermaid 只用于结构清晰且节点、标签、边、方向都有来源证据的流程/推理链/层级/时间线/节点—边关系；影响结构的不确定项存在时状态必须为 `needs-review`，不得回填 Mermaid。
+- [ ] F5 可用 Mermaid 在 profile/Manifest 中记录路径、状态、置信度、source asset IDs、Markdown target 和 PNG `fallback_asset_id`；语法解析、实际渲染、节点/标签/边/方向/层级语义对照和 fallback 链接检查必须全部 passed，Mermaid 不得替代来源页图。
+- [ ] 邻近正文仅以精确 source span 佐证图中可见标签的拼写/消歧，不得新增节点、边、方向、层级或文字；正文、OCR/视觉候选与图片冲突时记录 `text_corroboration.conflicts`，相关关系和 Mermaid 为 `needs-review`。
+- [ ] F5 的放大图、节点子图、OCR probe、overlay 和比较预览记录稳定诊断 ID、父资产、目的、路径、SHA-256、保留状态及 `reader_projection=evidence-only`；OCR/视觉候选不得用来猜测图中事实。
 - [ ] A4 报告记录实际视觉复核范围。mac96 返回明确的未归类组合图、嵌套容器、颜色/线型编码、跨区/跨页关系、图例/注释时，必须登记为 `unknown_forms` 并保持 `needs-review`；模型没有返回可选字段或未执行开放集合扫描，不得单独制造 `needs-review`。
 - [ ] 存在真实失败、冲突或未裁决关系时，页面/资产包最多为 `needs-review`，不能标记 `accepted`。
 - [ ] 路线质量报告至少逐页检查标题层级、正文分段、目录、列表、页眉页脚、标点、跨页连续性和异常内容保留；非空输出、文件存在或 Markdown 可打开都不能单独通过。
@@ -69,13 +95,28 @@
 - [ ] 页面单元具备页面编号、语义标题、正文、列表/图示文字、表格与公式、解读、举例与思考、模型结构、已确认的关系说明和待核对项；原始页面图只在 reader image 处置不为 omit 时出现。
 - [ ] `实用公式` 与公式各自单独成行；举例不与公式或解读粘成同一个列表项；图示标签不伪装成普通正文。
 - [ ] 页面单元按固定页面编号升序合并；reader image 处置与已有原始页面图链接保持不变；合并不得重新推断、摘要、翻译或补写来源不存在的文字。
+- [ ] `document-temp.md` 合并后、`index.md` 落盘前，允许执行一次保守的 Markdown 整理/修复；该步骤必须保留页面标记顺序和全部图片引用路径。
+- [ ] 启用模型整理时，实际 route、transport、model/profile、分块、耗时、失败与回退已写入 `reports/markdown-post-merge-formatting.json`，且报告不含 API key、Authorization、cookie 或其他认证内容。
+- [ ] `MARKDOWN_FORMATTER_ROUTE` 显式指定 route 时没有自动切换 provider；`auto` 才按 TOML 顺序回退。`model-required` 全部失败时没有替换已有目标文件。
+- [ ] `auto` 的模型顺序固定为 LAN 直连 → `ssh mac96` 内部 loopback Ollama → Codex default；直连失败而 SSH 成功时没有继续调用 Codex。
+- [ ] SSH Ollama 请求体通过 stdin 传输，命令参数中没有提示词；远端端点只能是 loopback HTTP `/api/generate`。
+- [ ] Codex provider 通过用户级 profile 和 `codex exec --profile` 选择；不得把不存在的通用 `--provider` 参数或用户认证写入仓库配置。
+- [ ] `codex-default` 只表示新建 Codex CLI 运行并继承机器配置；`current-conversation` 不得被子脚本伪装成可递归调用的成功路线。
+- [ ] F6 在同一 Manifest 中登记所有父子关系并明确 primary-raster、PNG fallback 和 evidence-only 来源页；只把读者实际使用资产投影到现有扁平 `assets/`。
+- [ ] F6 迁移历史逐图 JSON/YAML 时保存源路径和 SHA-256，资产记录合入唯一 `manifest.yaml`；原记录只作 evidence-only。历史 `success` 未通过当前来源、crop、增强/Mermaid、Markdown binding 和 validator 门时归一化为 `needs-review`。
+- [ ] F7 图级回填只修改当前 page-unit/segment/content unit；可靠 Mermaid 固定使用“fenced Mermaid → PNG fallback → 图题”，不可靠时只使用 crop/enhanced PNG。回填证据记录 before/after SHA-256、插入的 asset/representation ID 和逐链接解析结果；合并必须逐字保留 Mermaid、fallback 和图题。
+- [ ] page-unit/segment 的图片链接继续使用可解析的 `../assets/...`，根 `index.md` 使用 `assets/...`；不得复制来源项目的 `pages/crops/enhanced/derived/manifests` 为第二套读者目录。
+- [ ] Markdown 中缺少预期图片引用时，来源 page-render、crop、enhanced-raster、Manifest 记录和哈希仍保留，并产生 `needs-review` 诊断定位投影、写出或合并环节。
 - [ ] `document-temp.md` 只能是页面单元的派生预览，不能替代最终 `index.md` 或成为新的事实来源。
+- [ ] F8 独立 validator 已重读资产类型、父子关系、crop decision、哈希、Markdown binding 和链接；裁切、增强和 Mermaid 的视觉保真仍有单独人工复核证据。任何 procedure-only/not-run/未接线步骤不得被总状态吞掉。
+- [ ] F8 重新计算覆盖计数和 document status：所有 expected figure ID 均已分类、无 missing/reference-missing/needs-review，且每项为 passed 或有证据的 not-applicable 时才允许 document passed；否则即使当前批次 passed 也必须保留文档级未闭合状态。
 - [ ] 未确认图示关系保持 `Unknown`/`needs-review`，不得生成未经视觉确认的箭头、层级、流程、矩阵或颜色关系说明。
 - [ ] 第 1 页页面结构守卫通过后，才允许启用第 2–5 页入口；第 2–5 页结构守卫与人工复核通过后，才允许启用第 6–total_pages 页入口。
 - [ ] `file_name` 为稳定英文 ASCII 名称，`display_name` 保留中文语义；原始文件名只作为 `original_filename` 证据，不参与命名。
 - [ ] 同名资产通过 `source_occurrence_id`、来源指纹和 SHA-256 区分；来源出现记录与文件名解耦。
 - [ ] 冲突、缺失和不可用复核均显式标记为 `Unknown`、`needs-review` 或失败态。
 - [ ] 不调用 GPT-image-2，不生成 PPTX/PDF。
+- [ ] native-first、原生文本优先和显式 `--no-model` 边界不变；Marker、Surya OCR、固定 8/40 页分块和 GPT 清理没有成为新默认路线。
 
 ## 推荐规格夹具（非页面修复步骤）
 

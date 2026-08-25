@@ -68,6 +68,8 @@ skills:
     path: skills/asset-deduplication/SKILL.md
   - id: semantic-visual-asset-pruning
     path: skills/semantic-visual-asset-pruning/SKILL.md
+    modes: [workflow-a, reader-only-markdown-package, standalone-image-corpus]
+    standalone_entrypoint: python3 skills/region-cropping/scripts/audit_text_heavy_reader_assets.py <image-corpus-root> --mode standalone-image-corpus --evidence-dir <evidence-dir>
   - id: asset-package-validation
     path: skills/asset-package-validation/SKILL.md
   - id: native-pdf-to-markdown

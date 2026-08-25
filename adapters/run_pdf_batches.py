@@ -14,10 +14,13 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
 import time
+from urllib.error import URLError
+from urllib.request import urlopen
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,14 +30,25 @@ from typing import Any
 import yaml
 
 try:
-    from output_naming import resolve_package_target, resolve_source_markdown_target
+    from output_naming import (
+        resolve_package_target,
+        source_markdown_filename,
+    )
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
-    from .output_naming import resolve_package_target, resolve_source_markdown_target
+    from .output_naming import (
+        resolve_package_target,
+        source_markdown_filename,
+    )
 
 try:
     import pdf_task_guard as task_guard
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import pdf_task_guard as task_guard
+
+try:
+    import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_resource_slots as resource_slots
 
 try:
     import pdf_route_detection as page_router
@@ -45,6 +59,7 @@ except ImportError:  # pragma: no cover - package-style imports in tests/tools
 ROOT = Path(__file__).resolve().parents[1]
 LAN_ADAPTER = ROOT / "adapters" / "lan_pdf_to_markdown.py"
 VISUAL_ADAPTER = ROOT / "adapters" / "lan_pdf_vision_to_markdown.py"
+APPLE_OCR_ADAPTER = ROOT / "adapters" / "apple_vision_pdf_to_markdown.py"
 NOISE_CLEANUP_ADAPTER = ROOT / "adapters" / "page_markdown_noise_cleanup.py"
 HEADING_REPAIR_ADAPTER = ROOT / "adapters" / "lan_markdown_heading_repair.py"
 DEFAULT_NOISE_PROFILE = ROOT / "references" / "reader-noise-profile.yaml"
@@ -53,6 +68,7 @@ BUNDLED_PDF_PYTHON = Path(
 )
 FORMAT_VERSION = "0.6.0-pure-native-run-root-acceptance"
 HYBRID_FORMAT_VERSION = "0.7.0-page-hybrid-routing"
+OLLAMA_HEALTH_URL = "http://shopme.local:11434/api/ps"
 FORBIDDEN_CONFIG_KEYS = {"api_key", "authorization", "cookie", "secret", "subscription_url", "token"}
 SUPPORTED_SUFFIXES = {".pptx", ".pdf", ".png", ".jpg", ".jpeg"}
 # These validator findings describe an explicit review boundary (usually OCR,
@@ -245,6 +261,210 @@ def _page_package_paths(pages_root: Path, page: int) -> tuple[Path, Path, Path]:
     )
 
 
+def _archive_incomplete_page_package(pages_root: Path, page: int) -> Path | None:
+    """Preserve an invalid page package so the native adapter can retry cleanly."""
+
+    package_root = pages_root / f"page-{page:03d}"
+    if not package_root.exists():
+        return None
+    archive_parent = (
+        pages_root / "_incomplete-page-packages" / f"page-{page:03d}"
+    )
+    ordinal = 1
+    while True:
+        target = archive_parent / f"attempt-{ordinal:03d}"
+        if not target.exists():
+            break
+        ordinal += 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(package_root), str(target))
+    return target
+
+
+def _native_page_command(
+    *, page_python: str, source: Path, pages_root: Path, page: int
+) -> list[str]:
+    """Build one native page command with a flat ``pages/page-NNN`` package."""
+
+    return [
+        page_python,
+        str(LAN_ADAPTER),
+        "--source",
+        str(source),
+        "--output-root",
+        str(pages_root),
+        "--pages",
+        str(page),
+        "--execute",
+        "--no-model",
+        "--engineering-output",
+        "--no-source-markdown-alias",
+    ]
+
+
+def _visual_page_command(
+    *,
+    helper_python: str,
+    source: Path,
+    visual_root: Path,
+    page: int,
+    visual_dpi: int,
+    timeout: int,
+    can_resume: bool,
+    decision: dict[str, Any],
+) -> tuple[list[str], str]:
+    """Select OCR for plain scanned text and a visual model for real structure."""
+
+    text_signals = decision.get("text_signals") or {}
+    table_detection = decision.get("table_detection") or {}
+    rendered = decision.get("rendered_structure") or {}
+    image_stats = decision.get("image_stats") or {}
+    text_layer_background_ocr = bool(
+        decision.get("route") == "native-plus-visual"
+        and decision.get("native_body_sufficient") is True
+        and not text_signals.get("present")
+        and rendered.get("status") == "passed"
+        and not rendered.get("visual_structure_present")
+        and float(image_stats.get("max_area_ratio") or 0.0)
+        >= page_router.FULL_PAGE_BACKGROUND_MIN_AREA_RATIO
+    )
+    local_ocr_only = bool(
+        (
+            decision.get("route") == "visual-only"
+            and not text_signals.get("present")
+            and not table_detection.get("present")
+            and not rendered.get("visual_structure_present")
+        )
+        or text_layer_background_ocr
+    )
+    if local_ocr_only:
+        command = _apple_ocr_page_command(
+            helper_python=helper_python,
+            source=source,
+            visual_root=visual_root,
+            page=page,
+            visual_dpi=visual_dpi,
+            timeout=timeout,
+        )
+        route = "apple-vision-ocr"
+    else:
+        command = [
+            helper_python,
+            str(VISUAL_ADAPTER),
+            "convert",
+            "--source",
+            str(source),
+            "--run-root",
+            str(visual_root),
+            "--pages",
+            str(page),
+            "--evidence-level",
+            "compact",
+            "--dpi",
+            str(visual_dpi),
+            "--timeout-seconds",
+            str(timeout),
+            "--progress-every",
+            "1",
+        ]
+        route = "lan-visual-model"
+    if can_resume:
+        command.append("--resume")
+    return command, route
+
+
+def _apple_ocr_page_command(
+    *,
+    helper_python: str,
+    source: Path,
+    visual_root: Path,
+    page: int,
+    visual_dpi: int,
+    timeout: int,
+) -> list[str]:
+    return [
+        helper_python,
+        str(APPLE_OCR_ADAPTER),
+        "--source",
+        str(source),
+        "--run-root",
+        str(visual_root),
+        "--pages",
+        str(page),
+        "--dpi",
+        str(visual_dpi),
+        "--timeout-seconds",
+        str(timeout),
+        "--progress-every",
+        "1",
+    ]
+
+
+def _remove_redundant_page_aliases(pages_root: Path, source: Path) -> list[str]:
+    """Remove only generated page aliases that are byte-identical to index.md."""
+
+    alias_name = source_markdown_filename(source)
+    removed: list[str] = []
+    for outer in sorted(pages_root.glob("page-[0-9][0-9][0-9]")):
+        roots = [outer]
+        legacy_nested = outer / outer.name
+        if legacy_nested.is_dir():
+            roots.append(legacy_nested)
+        for package in roots:
+            canonical = package / "index.md"
+            alias = package / alias_name
+            if (
+                canonical.is_file()
+                and alias.is_file()
+                and sha256(canonical) == sha256(alias)
+            ):
+                alias.unlink()
+                removed.append(str(alias))
+    return removed
+
+
+def _remove_stale_source_aliases(
+    batch_root: Path,
+    source: Path,
+    *,
+    keep: Path | None = None,
+) -> list[str]:
+    """Remove numbered resume aliases only when they duplicate a known stage."""
+
+    source_stem = Path(source_markdown_filename(source)).stem
+    numbered = re.compile(rf"^{re.escape(source_stem)}-[0-9]{{2}}\.md$")
+    generated = [
+        batch_root / "index.md",
+        batch_root / "document-temp.md",
+        batch_root / "document-temp.raw.md",
+        batch_root / "document-temp.pre-heading.md",
+    ]
+    if keep is not None:
+        generated.append(keep)
+    generated_hashes = {sha256(path) for path in generated if path.is_file()}
+    canonical_pages = (
+        re.findall(r"<!--\s*page:(\d+)\s*-->", (batch_root / "index.md").read_text(encoding="utf-8"))
+        if (batch_root / "index.md").is_file()
+        else []
+    )
+    removed: list[str] = []
+    for candidate in sorted(batch_root.glob("*.md")):
+        if (keep is not None and candidate == keep) or not numbered.fullmatch(candidate.name):
+            continue
+        candidate_pages = (
+            re.findall(r"<!--\s*page:(\d+)\s*-->", candidate.read_text(encoding="utf-8"))
+            if candidate.is_file() and canonical_pages
+            else []
+        )
+        if candidate.is_file() and (
+            sha256(candidate) in generated_hashes
+            or (bool(canonical_pages) and candidate_pages == canonical_pages)
+        ):
+            candidate.unlink()
+            removed.append(str(candidate))
+    return removed
+
+
 def _collect_page_image_stats(
     source: Path,
     selected: list[int],
@@ -313,6 +533,31 @@ def _page_route_decision(
     return decision
 
 
+def _confirmed_table_count(page_route_results: list[dict[str, Any]]) -> int:
+    """Count table signals that survive the independent render probe.
+
+    ``pdfplumber.find_tables`` is deliberately retained as raw evidence, but
+    ebook title bars and printable-area backgrounds can look like tables to
+    its line heuristic. A successful rendered probe that explicitly finds no
+    table-or-matrix structure is stronger negative evidence for final Markdown
+    acceptance. If the probe is unavailable or finds another visual structure,
+    fail closed and retain the raw count.
+    """
+    confirmed = 0
+    for item in page_route_results:
+        detection = item.get("table_detection") or {}
+        count = detection.get("pdfplumber_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            continue
+        rendered = item.get("rendered_structure") or {}
+        structure_types = rendered.get("structure_types") or []
+        if "table-or-matrix" in structure_types:
+            confirmed += count
+        elif rendered.get("status") != "passed" or rendered.get("visual_structure_present"):
+            confirmed += count
+    return confirmed
+
+
 def _visual_page_reusable(
     *, visual_root: Path, source_sha256: str, page: int
 ) -> bool:
@@ -325,8 +570,10 @@ def _visual_page_reusable(
     if not isinstance(completed, list):
         completed = [page] if result.get("status") == "passed" else []
     recorded_markdown_sha = (result.get("markdown") or {}).get("current_sha256")
+    summary_source = summary.get("source") if isinstance(summary.get("source"), dict) else {}
+    summary_source_sha256 = summary.get("source_sha256") or summary_source.get("sha256")
     return bool(
-        summary.get("source_sha256") == source_sha256
+        summary_source_sha256 == source_sha256
         and result.get("source_sha256") == source_sha256
         and result.get("page") == page
         and result.get("status") == "passed"
@@ -339,7 +586,10 @@ def _visual_page_reusable(
 
 def _visual_root_can_resume(visual_root: Path, source_sha256: str) -> bool:
     summary = _read_json(visual_root / "summary.json")
-    return bool(summary and summary.get("source_sha256") == source_sha256)
+    if not summary:
+        return False
+    source = summary.get("source") if isinstance(summary.get("source"), dict) else {}
+    return bool((summary.get("source_sha256") or source.get("sha256")) == source_sha256)
 
 
 def _select_visual_attempt(
@@ -383,10 +633,22 @@ def _copy_visual_asset(visual_root: Path, assets_root: Path, page: int) -> Path 
 
 
 def _merge_page_units(page_units_root: Path, selected: list[int]) -> str:
+    try:
+        import lan_pdf_vision_to_markdown as visual
+    except ImportError:  # pragma: no cover - package-style imports in tests/tools
+        from . import lan_pdf_vision_to_markdown as visual
+
+    run_root = page_units_root.parent
     parts = []
     for page in selected:
         path = page_units_root / f"p{page:03d}.md"
-        parts.append(path.read_text(encoding="utf-8").rstrip())
+        text = path.read_text(encoding="utf-8")
+        policy = visual.page_reader_image_policy(run_root, page)
+        if policy.get("document_reference") is not None:
+            text = visual.project_page_image_reference(
+                text, page, policy["document_reference"]
+            )
+        parts.append(text.rstrip())
     return "\n\n".join(parts).rstrip() + "\n"
 
 
@@ -474,6 +736,31 @@ def _run_page_jobs_continue(
     return results
 
 
+def _ollama_healthcheck(timeout_seconds: int = 5) -> dict[str, Any]:
+    """Bound model availability before a page can block the serial queue."""
+    started = time.monotonic()
+    try:
+        with urlopen(OLLAMA_HEALTH_URL, timeout=timeout_seconds) as response:
+            body = response.read()
+        payload = json.loads(body)
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            raise ValueError("Ollama health response has no models list")
+        return {
+            "status": "passed",
+            "url": OLLAMA_HEALTH_URL,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "models": [str(item.get("name")) for item in models if isinstance(item, dict)],
+        }
+    except (OSError, URLError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "failed",
+            "url": OLLAMA_HEALTH_URL,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _reusable_routed_page(
     *,
     page: int,
@@ -557,10 +844,21 @@ def _merge_page_route_unit(
         return native_unit
     if not visual_markdown or not visual_markdown.strip():
         raise ValueError(f"page {page} route {route} has no visual Markdown")
-    supplement = _visual_supplement_body(page, native_text, visual_markdown)
+    # A visual-only route owns the whole page. Do not subtract a short or
+    # partial native layer from its OCR output, because identical OCR text is
+    # still the authoritative visual transcription for this route.
+    supplement = _visual_supplement_body(
+        page,
+        "" if route == "visual-only" else native_text,
+        visual_markdown,
+    )
     if route == "native-plus-visual":
         if not supplement:
-            raise ValueError(f"page {page} visual supplement is empty")
+            # The visual worker may confirm exactly the same text as the native
+            # layer. Preserve the copied page asset instead of treating "no new
+            # text" as conversion failure.
+            image = f"![第{page}页原始页面图](../assets/page-{page:03d}.png)"
+            return native_unit.rstrip() + "\n\n" + image + "\n"
         return native_unit.rstrip() + "\n\n### 视觉补充\n\n" + supplement + "\n"
 
     # visual-only still owns exactly one page marker.  The visual worker may
@@ -721,6 +1019,7 @@ def validator_gate(validation: dict[str, Any] | None) -> tuple[bool, list[dict[s
     return (not hard), hard
 
 
+@resource_slots.uses_local_pdf_slot("bounded-pdf-page-batches")
 def run_page_batches(
     source: Path,
     output_root: Path,
@@ -817,7 +1116,7 @@ def run_page_batches(
             "raw_document": "document-temp.raw.md",
             "merged_document": "document-temp.md",
             "final_markdown": "index.md",
-            "source_markdown_alias": f"{source.stem}.md",
+            "source_markdown_alias": None,
             "final_summary": "summary.json",
             "final_progress": "progress.json",
             "final_evidence": "evidence.json",
@@ -906,23 +1205,28 @@ def run_page_batches(
                     }
                 )
             else:
-                page_output = pages_root / f"page-{page:03d}"
-                command = [
-                    page_python,
-                    str(LAN_ADAPTER),
-                    "--source",
-                    str(source),
-                    "--output-root",
-                    str(page_output),
-                    "--pages",
-                    str(page),
-                    "--execute",
-                    "--no-model",
-                    "--engineering-output",
-                ]
+                archived_native_package = _archive_incomplete_page_package(
+                    pages_root, page
+                )
+                command = _native_page_command(
+                    page_python=page_python,
+                    source=source,
+                    pages_root=pages_root,
+                    page=page,
+                )
                 native_record = _run_command(command, timeout)
                 native_summary = _summary_from_stdout(native_record.get("stdout", ""))
-                native_record.update({"page": page, "summary": native_summary})
+                native_record.update(
+                    {
+                        "page": page,
+                        "summary": native_summary,
+                        "archived_incomplete_page_package": (
+                            str(archived_native_package)
+                            if archived_native_package
+                            else None
+                        ),
+                    }
+                )
                 records.append(native_record)
                 package, summary_path, evidence_path = _page_package_paths(pages_root, page)
                 native_evidence = _read_json(evidence_path)
@@ -993,29 +1297,43 @@ def run_page_batches(
                 source_sha256=source_hash,
                 page=page,
             )
+            visual_command, recognition_route = _visual_page_command(
+                helper_python=helper_python,
+                source=source,
+                visual_root=visual_root,
+                page=page,
+                visual_dpi=visual_dpi,
+                timeout=timeout,
+                can_resume=visual_can_resume,
+                decision=decision,
+            )
+            if visual_reused:
+                saved_visual = _read_json(
+                    visual_root / "evidence" / f"page-result-p{page:03d}.json"
+                ) or {}
+                recognition_route = (
+                    "apple-vision-ocr"
+                    if saved_visual.get("route") == "apple-vision-ocr"
+                    else "lan-visual-model"
+                )
             if not visual_reused:
-                visual_command = [
-                    helper_python,
-                    str(VISUAL_ADAPTER),
-                    "convert",
-                    "--source",
-                    str(source),
-                    "--run-root",
-                    str(visual_root),
-                    "--pages",
-                    str(page),
-                    "--evidence-level",
-                    "compact",
-                    "--dpi",
-                    str(visual_dpi),
-                    "--timeout-seconds",
-                    str(timeout),
-                    "--progress-every",
-                    "1",
-                ]
-                if visual_can_resume:
-                    visual_command.append("--resume")
+                model_health = (
+                    _ollama_healthcheck()
+                    if recognition_route == "lan-visual-model"
+                    else {"status": "not-required"}
+                )
+                if model_health.get("status") == "failed":
+                    visual_command = _apple_ocr_page_command(
+                        helper_python=helper_python,
+                        source=source,
+                        visual_root=visual_root,
+                        page=page,
+                        visual_dpi=visual_dpi,
+                        timeout=timeout,
+                    )
+                    recognition_route = "apple-vision-ocr-fallback"
                 visual_record = _run_command(visual_command, timeout)
+                visual_record["model_health"] = model_health
                 visual_result = _summary_from_stdout(visual_record.get("stdout", ""))
                 visual_record.update(
                     {"page": page, "route": decision["route"], "summary": visual_result}
@@ -1030,7 +1348,8 @@ def run_page_batches(
                     route_record.update(
                         {
                             "status": "failed",
-                            "model_called": True,
+                            "model_called": recognition_route == "lan-visual-model",
+                            "recognition_route": recognition_route,
                             "reason_codes": [
                                 *decision["reason_codes"],
                                 "visual-page-conversion-failed",
@@ -1057,7 +1376,18 @@ def run_page_batches(
             route_record.update(
                 {
                     "status": "passed",
-                    "model_called": not visual_reused,
+                    "reason_codes": [
+                        *route_record["reason_codes"],
+                        *(
+                            ["lan-visual-model-unavailable-apple-ocr-fallback"]
+                            if recognition_route == "apple-vision-ocr-fallback"
+                            else []
+                        ),
+                    ],
+                    "model_called": (
+                        not visual_reused and recognition_route == "lan-visual-model"
+                    ),
+                    "recognition_route": recognition_route,
                     "visual_resume_reused": visual_reused,
                     "visual_run_root": str(visual_root),
                     "visual_page_unit": str(visual_unit_path),
@@ -1126,24 +1456,22 @@ def run_page_batches(
                     "status": "passed",
                     "resume_reused": True,
                 }
-            page_output = pages_root / f"page-{page:03d}"
-            command = [
-                page_python,
-                str(LAN_ADAPTER),
-                "--source",
-                str(source),
-                "--output-root",
-                str(page_output),
-                "--pages",
-                str(page),
-                "--execute",
-                "--no-model",
-                "--engineering-output",
-            ]
+            archived_native_package = _archive_incomplete_page_package(
+                pages_root, page
+            )
+            command = _native_page_command(
+                page_python=page_python,
+                source=source,
+                pages_root=pages_root,
+                page=page,
+            )
             record = _run_command(command, timeout)
             summary = _summary_from_stdout(record.get("stdout", ""))
             record["page"] = page
             record["summary"] = summary
+            record["archived_incomplete_page_package"] = (
+                str(archived_native_package) if archived_native_package else None
+            )
             records.append(record)
             if (
                 record.get("returncode") != 0
@@ -1334,8 +1662,11 @@ def run_page_batches(
             page_coverage,
         )
 
-    source_named_markdown = resolve_source_markdown_target(batch_root, source)
-    _write_text_atomic(source_named_markdown, final_markdown_text)
+    removed_page_aliases = _remove_redundant_page_aliases(pages_root, source)
+    removed_source_aliases = _remove_stale_source_aliases(
+        batch_root,
+        source,
+    )
 
     expected_pages = list(range(1, pages_total + 1))
     background_processes = _background_process_matches(source, batch_root)
@@ -1345,7 +1676,29 @@ def run_page_batches(
     source_hash_consistent = page_source_hashes == {source_hash}
     coverage_complete = selected == expected_pages
     rendered_table_count = _markdown_table_count(final_markdown_text)
-    table_count_match = rendered_table_count >= table_count
+    confirmed_table_count = (
+        _confirmed_table_count(page_route_results) if hybrid else table_count
+    )
+    table_pages_preserved_as_images = bool(hybrid) and all(
+        not (
+            isinstance((item.get("table_detection") or {}).get("pdfplumber_count"), int)
+            and (item.get("table_detection") or {}).get("pdfplumber_count") > 0
+            and (
+                (item.get("rendered_structure") or {}).get("status") != "passed"
+                or (item.get("rendered_structure") or {}).get("visual_structure_present")
+            )
+        )
+        or (
+            item.get("status") == "passed"
+            and str(item.get("recognition_route") or "").startswith("apple-vision-ocr")
+            and Path(str(item.get("visual_asset") or "")).is_file()
+            and Path(str(item.get("visual_asset"))).stat().st_size > 0
+        )
+        for item in page_route_results
+    )
+    table_count_match = (
+        rendered_table_count >= confirmed_table_count or table_pages_preserved_as_images
+    )
     route_counts = {
         route: sum(1 for item in page_route_results if item.get("route") == route)
         for route in page_router.PAGE_ROUTES
@@ -1411,6 +1764,7 @@ def run_page_batches(
         "missing_line_ids": [],
         "duplicate_line_ids": duplicate_line_ids,
         "table_count_pdfplumber_find_tables": table_count,
+        "confirmed_table_count": confirmed_table_count,
         "rendered_table_count": rendered_table_count,
         "route_policy": "page-hybrid" if hybrid else "native-only",
         "route_counts": route_counts,
@@ -1420,9 +1774,9 @@ def run_page_batches(
         "model_calls": [{"page": page, "purpose": "page-visual-supplement"} for page in model_call_pages],
         "visual_model": "page-routed" if hybrid else "not-run",
         "rendering": "candidate-pages-only" if hybrid else "not-run",
-        "markdown": str(source_named_markdown),
+        "markdown": str(final_index),
         "index_markdown": str(final_index),
-        "source_named_markdown": str(source_named_markdown),
+        "source_named_markdown": None,
         "document_temp": str(merged_document_path),
         "document_temp_raw": str(raw_document_path),
         "page_units": str(page_units_root),
@@ -1447,6 +1801,7 @@ def run_page_batches(
         "missing_line_ids": [],
         "duplicate_line_ids": duplicate_line_ids,
         "table_count_pdfplumber_find_tables": table_count,
+        "confirmed_table_count": confirmed_table_count,
         "rendered_table_count": rendered_table_count,
         "route_policy": summary["route_policy"],
         "route_counts": route_counts,
@@ -1462,6 +1817,8 @@ def run_page_batches(
         "heading_repair_command": heading_record,
         "heading_repair": heading_report,
         "page_sequence_checks": page_sequence_checks,
+        "redundant_page_aliases_removed": removed_page_aliases,
+        "stale_source_aliases_removed": removed_source_aliases,
     }
     progress = {
         "format_version": FORMAT_VERSION,
@@ -1492,9 +1849,9 @@ def run_page_batches(
         "total_pages": pages_total,
         "paths": {
             "run_root": str(batch_root),
-            "markdown": str(source_named_markdown),
+            "markdown": str(final_index),
             "index_markdown": str(final_index),
-            "source_named_markdown": str(source_named_markdown),
+            "source_named_markdown": None,
             "document_temp": str(merged_document_path),
             "document_temp_raw": str(raw_document_path),
             "page_units": str(page_units_root),
@@ -1634,8 +1991,23 @@ def _summary_from_stdout(stdout: str) -> dict[str, Any] | None:
     try:
         value = json.loads(stdout)
     except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) and "status" in value else None
+        value = None
+    if isinstance(value, dict) and "status" in value:
+        return value
+    # Visual conversion may print a short preamble followed by indented JSON.
+    # Recover only a final object that consumes the remainder of stdout.
+    decoder = json.JSONDecoder()
+    for offset, character in enumerate(stdout):
+        if character != "{":
+            continue
+        try:
+            candidate, consumed = decoder.raw_decode(stdout[offset:])
+        except json.JSONDecodeError:
+            continue
+        if stdout[offset + consumed :].strip():
+            continue
+        if isinstance(candidate, dict) and "status" in candidate:
+            return candidate
     return None
 
 

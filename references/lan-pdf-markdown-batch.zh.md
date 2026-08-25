@@ -14,13 +14,12 @@
 适用于以下情况：
 
 - 已经做过 PDF 路线检测，手里有 `report.json`、`PDF转换路线总览.md` 或 `原生文本路线.txt`。
-- 只想批量执行 `native-only` 的 PDF。
+- 想按既有路线报告分别执行 `native-only`、`hybrid` 或 `vision-only` 队列。
 - 想沿用现有单文件入口 `adapters/lan_pdf_markdown_graph.py --no-model`，但不想手工一个个敲命令。
 - 想保留批次台账、逐文件输出映射和续跑能力。
 
 不适用于以下情况：
 
-- `hybrid` 或 `vision-only` 路线。
 - 把多个来源拼成一个伪文档。
 - 把 `adapters/workflow_a_batch.py` 当作当前生产入口。
 
@@ -33,6 +32,37 @@ python3 adapters/lan_pdf_markdown_batch.py --help
 ```
 
 它会逐个调用现有单文件入口，不改写单文件脚本的行为边界。
+
+日常直接转换一个来源目录时，使用：
+
+```bash
+python3 adapters/lan_pdf_markdown_batch.py \
+  --source-dir "/absolute/source-directory" \
+  --batch-root "/absolute/unified-output-directory" \
+  --pages all
+```
+
+`--source-dir` 会递归发现 PDF，默认使用逐页 `hybrid` 路由；这表示每页仍由证据决定
+`native-only`、`native-plus-visual` 或 `visual-only`，并不强制每页调用视觉模型。所有批次台账和
+逐书运行包都保存在同一个 `--batch-root` 下。
+
+批量层固定为一本一本串行执行，`batch_size` 必须为 `1`；这不是书目并发参数。
+同一批次父目录同时只允许一个合集队列持有锁。一本子进程返回后如果仍检测到该书的
+转换 worker，队列会立刻停止，不会启动下一本。子进程 stdout/stderr 直接写入批次的
+`logs/`，内存中只读取末尾 12 KB 用于状态解析。
+
+## 全机器并发边界
+
+批次锁只负责一个合集目录；所有正式 PDF 入口还会共同使用两个互相独立的机器级单槽：
+
+- `local-pdf=1`：全机器同时最多转换一本 PDF。
+- `visual-model=1`：全机器同时最多一个真实视觉模型请求。
+
+两个槽可以同时占用，因此一个本地 PDF 转换与一个独立视觉请求可以重叠；混合路线处理视觉页
+时会同时占用两者。超过容量的任务在锁上等待，不会提前载入另一整本 PDF。路线检测、状态读取
+和后台任务管理器不占重任务槽。每个后台任务的紧凑状态和批次 manifest 都会记录本次
+`machine_resource_policy`。锁文件默认位于 `~/.codex/resource-slots/pdf-markdown/`；进程异常退出
+时由操作系统释放，同一转换的子进程继承父槽，避免内部阶段重复申请而自锁。
 
 ## 最快用法
 
@@ -101,6 +131,30 @@ python3 adapters/lan_pdf_markdown_batch.py \
 并且 `--pages all` 确认覆盖 `1..total_pages` 的项，才会自动标记为
 `skipped-existing`。smoke 目录、半成品目录和只带局部 `passed` 报告的目录都不会跳过。
 
+### 集合续接的固定目录约束
+
+同一批来源集合进入恢复阶段后，不应反复创建新的时间戳批次目录。先收束入口，再续跑：
+
+```text
+<output-root>/conversions/
+├── _current/          # 当前入口：CURRENT_PATHS.md、directory-registry.json/csv
+├── _consolidated/     # 来源级 strict acceptance 总账，不放每本书工程包
+├── native-only/       # 固定路线批次根，含 manifest/results/runs
+├── hybrid/
+└── vision-only/
+```
+
+- `_current/CURRENT_PATHS.md` 是给人和下次会话看的固定入口；后续续接先读它。
+- `_consolidated/source-consolidation.json` 是唯一的来源级完成总账；它从所有历史 run root
+  中选择每个来源最新的 strict accepted 工程包，并列出未完成来源。
+- 路线目录（如 `vision-only/`）才保存真实转换工程包：`manifest.json`、`results.json`、
+  `source-output-map.csv` 和 `runs/<source-relative-dir>/...`。
+- 旧时间戳目录不删除、不覆盖；只登记到 `_current/directory-registry.json/csv`，作为历史证据
+  或被 `_consolidated` 选择的候选 run root。
+- 如果固定路线目录正在运行，只能更新 `_current` 指针或登记表，不移动它的 `runs/`。
+- 只有 `_consolidated` 证明 expected sources 全部 strict accepted 后，才允许创建最终读者层目录
+  并运行集合导出脚本。
+
 如果旧目录只完成 smoke 或 full extraction 中途失败，续跑会保留旧证据，并在同一个
 source run root 下创建新的 full attempt。这里的“续跑”表示从安全阶段重新开始整本 full
 attempt，不承诺从中断页面进行增量续传。
@@ -153,8 +207,11 @@ python3 adapters/lan_pdf_markdown_graph.py \
 
 ## 当前边界
 
-- 目前只支持 `native-only` 的批量队列。
-- `hybrid` 和 `vision-only` 仍然应该走各自单源或专用路线。
+- 文档级 `native-only` 会显式使用无模型路线；文档级 `hybrid` 和 `vision-only` 都进入
+  逐页混合路由，由页面证据决定 `native-only`、`native-plus-visual` 或 `visual-only`，
+  不会把整本书强制一次性送入视觉模型。
+- 同一个 `batch-root` 续跑时只跳过已有独立验收为 `passed` 的书；失败、半成品和
+  `needs-review` 继续使用原 source run root 的恢复证据，不另建替代成品目录。
 - 真实路线清单里如果有某些 PDF 已经不存在，批量入口会跳过这些失效路径，并把它们记录在 `manifest.json -> origin -> missing_sources`，不会因为单个失效条目让整批中断。
 
 ## 什么时候需要 `.prompt/`

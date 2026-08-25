@@ -3,8 +3,32 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PIL import Image, ImageDraw
+
 from adapters import lan_markdown_heading_repair as repair
 from adapters import lan_pdf_vision_to_markdown as vision
+
+
+def test_heading_repair_loader_falls_back_when_script_has_no_adapters_package(
+    monkeypatch,
+):
+    fallback = object()
+    calls = []
+
+    def fake_import_module(name):
+        calls.append(name)
+        if name == "adapters.lan_markdown_heading_repair":
+            raise ModuleNotFoundError("No module named 'adapters'", name="adapters")
+        assert name == "lan_markdown_heading_repair"
+        return fallback
+
+    monkeypatch.setattr(vision.importlib, "import_module", fake_import_module)
+
+    assert vision._load_heading_repair_module() is fallback
+    assert calls == [
+        "adapters.lan_markdown_heading_repair",
+        "lan_markdown_heading_repair",
+    ]
 
 
 def page_text(page: int, title: str, body: str) -> str:
@@ -65,6 +89,24 @@ def test_model_marker_inside_body_fails_closed():
     )
     assert changed is False
     assert text.startswith("# 标题")
+
+
+def test_complete_outer_markdown_fence_is_unwrapped_without_changing_body():
+    text, changed = vision.unwrap_outer_markdown_fence(
+        "```markdown\n# 标题\n\n正文内容\n```\n"
+    )
+
+    assert changed is True
+    assert text == "# 标题\n\n正文内容\n"
+
+
+def test_partial_or_internal_markdown_fence_is_not_unwrapped():
+    text, changed = vision.unwrap_outer_markdown_fence(
+        "前言\n```markdown\n正文\n```\n"
+    )
+
+    assert changed is False
+    assert "```markdown" in text
 
 
 def test_default_page_projection_injects_page_unit_image_reference_for_p024():
@@ -375,6 +417,61 @@ def test_classify_reader_images_marks_text_page_omit_and_complex_page_retain(tmp
     report = json.loads((run_root / "evidence" / "reader-image-policy.json").read_text(encoding="utf-8"))
     actions = {item["page"]: item["action"] for item in report["decisions"]}
     assert actions == {9: "omit", 69: "retain"}
+
+
+def test_classify_reader_images_omits_confirmed_blank_ocr_page(tmp_path: Path):
+    run_root = tmp_path / "run"
+    page = 7
+    write_page(
+        run_root,
+        page,
+        vision.project_page_image_reference(
+            "<!-- page:7 -->\n",
+            page,
+            vision.page_unit_image_reference(page),
+        ),
+    )
+    image = Image.new("L", (1000, 1400), color=255)
+    ImageDraw.Draw(image).rectangle((498, 1360, 502, 1365), fill=0)
+    image.save(run_root / "assets/page-007.png")
+    write_page_result(run_root, page, "retain")
+    result_path = run_root / "evidence/page-result-p007.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result.update(
+        {
+            "route": vision.APPLE_VISION_ROUTE,
+            "structure_evidence_path": "evidence/ocr-markdown-structure-p007.json",
+        }
+    )
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    (run_root / "evidence/ocr-markdown-structure-p007.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "structure_inventory": {
+                    "page_kind": "image-only-no-recognized-text"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = vision.classify_reader_images(run_root=run_root, pages=[page])
+
+    assert report["counts"] == {"omit": 1, "retain": 0, "needs-review": 0}
+    stored = json.loads(
+        (run_root / "evidence/reader-image-policy.json").read_text(encoding="utf-8")
+    )
+    decision = stored["decisions"][0]
+    assert decision["action"] == "omit"
+    assert decision["reason_codes"] == ["confirmed-near-blank-page"]
+
+    repaired = vision.repair_page_image_references(run_root=run_root, pages=[page])
+
+    assert repaired["status"] == "passed"
+    markdown = (run_root / "page-units/p007.md").read_text(encoding="utf-8")
+    assert "page-007.png" not in markdown
+    assert "*（空白页）*" in markdown
 
 
 def test_validate_run_accepts_document_temp_root_image_projection(

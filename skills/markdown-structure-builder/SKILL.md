@@ -23,6 +23,7 @@ order: 10
 ## 标题
 → 可选的 `> 关系：...` 摘要
 → 核心文字、列表、表格或分区
+→ 可选 Mermaid（仅已确认节点—边结构）
 → 必要的原始页面图、复杂区域图或嵌入图片
 ```
 
@@ -33,6 +34,11 @@ order: 10
 标题与来源定位必须分层：标题只保留可确认的语义，排除系列名、页码、幻灯片编号、源文件名、哈希和对象 ID。不得输出“第 x 页”、`来源页`、`A4 状态`、`来源与原图`等工程标签；没有可靠标题时省略标题，或使用由同一来源正文交叉佐证的中性标题，不能回退到页码标题。
 
 `index.md` 禁止出现 OCR 置信度、候选标题、`Unknown`、`needs-review`、`待复核`、`原文疑似`、处理阶段或审核理由。未决信息必须保留，但只能进入工程层：来源位置和资产 ID 在 `manifest.yaml`，提取与冲突证据在 `evidence/`，待人工处理的读者修复项在 `reviews/markdown-content-repair.yaml`。未批准的候选不得被写成确定事实。
+
+图级回填只修改当前 page-unit、segment 或其他 Manifest 登记的最小内容单元。可靠 Mermaid 使用
+fenced `mermaid` block，并紧跟同一来源链的 crop/enhanced PNG fallback 和图题；结构或文字不可靠时
+只写 PNG。page-unit 使用 `../assets/...`，根 `index.md` 使用 `assets/...`；派生合并不得重新生成
+Mermaid、改变边或删除 fallback。
 
 ## 未知形式覆盖
 

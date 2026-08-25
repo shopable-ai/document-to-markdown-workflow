@@ -121,6 +121,31 @@ def test_page_route_uses_visual_supplement_for_figure_reference_plus_image_objec
     } <= decision.keys()
 
 
+def test_visual_text_signals_ignore_account_matrix_term():
+    signals = detector.visual_text_signals(
+        "这个账号被封后，连矩阵小号都被封掉了。"
+    )
+
+    assert signals["present"] is False
+    assert signals["hits"] == []
+
+
+def test_visual_text_signals_ignore_table_reference_inside_dai_biao_phrase():
+    signals = detector.visual_text_signals(
+        "学习成绩只代表一个人的考试天分，请发表一下意见，再发表三个层面。"
+    )
+
+    assert signals["present"] is False
+    assert signals["hits"] == []
+
+
+def test_visual_text_signals_keep_real_table_reference():
+    signals = detector.visual_text_signals("具体数据如表一所示，也可见表 2。")
+
+    assert signals["present"] is True
+    assert [item["text"] for item in signals["hits"]] == ["表一", "表 2"]
+
+
 def test_page_route_supplements_meaningful_image_even_without_text_cue():
     decision = detector.decide_page_route(
         page=58,
@@ -140,6 +165,67 @@ def test_page_route_supplements_meaningful_image_even_without_text_cue():
 
     assert decision["route"] == "native-plus-visual"
     assert "meaningful-page-image-present" in decision["reason_codes"]
+
+
+def test_page_route_treats_full_page_background_as_native_when_text_layer_is_complete():
+    decision = detector.decide_page_route(
+        page=15,
+        native_text=(
+            "今天说点实用的，下面三个生意，只要读懂其中两个，就能理解行业中的真实需求。\n"
+            "第一种场景来自长期住客，第二种场景来自餐饮服务，正文信息已经完整可读。"
+        ),
+        images=detector.PageImageStats(
+            image_count=1,
+            total_area_ratio=1.0024,
+            max_area_ratio=1.0024,
+        ),
+        bbox_metrics={
+            "block_count": 8,
+            "text_bbox_area_ratio": 0.196,
+            "large_blank_region": False,
+        },
+        table_count=0,
+        rendered_structure={
+            "status": "passed",
+            "visual_structure_present": False,
+            "structure_types": [],
+        },
+    )
+
+    assert decision["route"] == "native-only"
+    assert decision["visual_model_required"] is False
+    assert "full-page-background-with-complete-text-layer" in decision["reason_codes"]
+
+
+def test_page_route_treats_print_margin_background_as_native_when_text_is_complete():
+    decision = detector.decide_page_route(
+        page=38,
+        native_text=(
+            "看透人性心理的九个绝招。常年不联系的人忽然询问近况，需要谨慎判断。\n"
+            "这一页包含五条完整列表正文，原生文字层覆盖标题和全部段落内容。"
+        ),
+        images=detector.PageImageStats(
+            image_count=1,
+            total_area_ratio=0.9355,
+            max_area_ratio=0.9355,
+        ),
+        bbox_metrics={
+            "block_count": 24,
+            "text_bbox_area_ratio": 0.3847,
+            "large_blank_region": False,
+        },
+        table_count=1,
+        rendered_structure={
+            "status": "passed",
+            "visual_structure_present": False,
+            "structure_types": [],
+        },
+    )
+
+    assert decision["route"] == "native-only"
+    assert decision["visual_model_required"] is False
+    assert "full-page-background-with-complete-text-layer" in decision["reason_codes"]
+    assert "single-table-signal-unconfirmed-by-render" in decision["reason_codes"]
 
 
 def test_page_route_treats_short_image_labels_as_visual_only_not_complete_body():
@@ -214,13 +300,59 @@ def test_page_route_marks_uncorroborated_figure_reference_needs_review_without_v
         rendered_structure={"visual_structure_present": False, "status": "passed"},
     )
 
-    assert decision["route"] == "native-only"
-    assert decision["needs_review"] is True
-    assert decision["visual_model_required"] is False
+    assert decision["route"] == "native-plus-visual"
+    assert decision["needs_review"] is False
+    assert decision["visual_model_required"] is True
     assert "uncorroborated-visual-text-cue" in decision["reason_codes"]
+    assert "visual-cue-requires-page-corroboration" in decision["reason_codes"]
 
 
-def test_decide_route_prefers_native_when_dense_text_dominates():
+def test_page_route_does_not_hide_detected_table_behind_uncorroborated_figure_cue():
+    decision = detector.decide_page_route(
+        page=89,
+        native_text=("正文内容完整，包含具体运营步骤、时间安排和执行说明。" * 12)
+        + "具体关系如下图所示。",
+        images=detector.PageImageStats(),
+        bbox_metrics={"large_blank_region": False},
+        table_count=3,
+        rendered_structure={
+            "status": "passed",
+            "visual_structure_present": True,
+            "structure_types": ["table-or-matrix"],
+        },
+    )
+
+    assert decision["route"] == "native-plus-visual"
+    assert decision["status"] == "passed"
+    assert decision["needs_review"] is False
+    assert "table-or-matrix-structure-present" in decision["reason_codes"]
+
+
+def test_page_route_accepts_sparse_title_page_when_visual_probe_is_clean():
+    decision = detector.decide_page_route(
+        page=2,
+        native_text="开窍开悟开智2.0\n\n2\n\f",
+        images=detector.PageImageStats(),
+        bbox_metrics={
+            "block_count": 2,
+            "text_bbox_area_ratio": 0.0149,
+            "large_blank_region": True,
+        },
+        table_count=0,
+        rendered_structure={
+            "status": "passed",
+            "visual_structure_present": False,
+            "structure_types": [],
+        },
+    )
+
+    assert decision["route"] == "native-only"
+    assert decision["status"] == "passed"
+    assert decision["needs_review"] is False
+    assert "sparse-native-page-no-visual-content" in decision["reason_codes"]
+
+
+def test_decide_route_uses_hybrid_when_dense_text_has_an_incomplete_outlier():
     sample_records = [
         _sample_record(page, text_profile="dense", layout_profile="narrative")
         for page in range(1, 9)
@@ -235,12 +367,33 @@ def test_decide_route_prefers_native_when_dense_text_dominates():
     )
     decision = detector.decide_route(summary)
 
-    assert decision["route"] == "native-only"
-    assert "dense-native-text-dominates" in decision["reason_codes"]
-    assert "isolated-cover-or-insert-pages-detected" in decision["reason_codes"]
+    assert decision["route"] == "hybrid"
+    assert "sampled-native-page-incomplete" in decision["reason_codes"]
 
 
-def test_decide_route_allows_cover_only_outliers_to_stay_native():
+def test_decide_route_uses_hybrid_when_dense_document_has_an_empty_sampled_page():
+    sample_records = [
+        _sample_record(page, text_profile="dense", layout_profile="narrative")
+        for page in (1, 2, 4, 5, 78, 156, 234, 311, 312)
+    ]
+    sample_records.insert(
+        2,
+        _sample_record(3, text_profile="none", layout_profile="diagram-like"),
+    )
+
+    summary = detector.summarise_document(
+        total_pages=312,
+        sample_records=sample_records,
+        image_stats={},
+    )
+    decision = detector.decide_route(summary)
+
+    assert summary["zero_text_ratio"] > 0
+    assert decision["route"] == "hybrid"
+    assert "sampled-native-page-incomplete" in decision["reason_codes"]
+
+
+def test_decide_route_uses_hybrid_for_multiple_incomplete_outliers():
     sample_records = [
         _sample_record(page, text_profile="dense", layout_profile="narrative")
         for page in range(1, 6)
@@ -262,8 +415,8 @@ def test_decide_route_allows_cover_only_outliers_to_stay_native():
     )
     decision = detector.decide_route(summary)
 
-    assert decision["route"] == "native-only"
-    assert "isolated-cover-or-insert-pages-detected" in decision["reason_codes"]
+    assert decision["route"] == "hybrid"
+    assert "sampled-native-page-incomplete" in decision["reason_codes"]
 
 
 def test_decide_route_prefers_hybrid_when_text_exists_but_layout_is_sparse():
@@ -382,6 +535,69 @@ def test_run_reuses_latest_record_by_path_without_rehashing(tmp_path, monkeypatc
     assert (report_path.parent / detector.ROUTE_LISTS_DIRNAME / "native-only.txt").read_text(
         encoding="utf-8"
     ) == f"{source}\n"
+
+
+def test_run_reanalyses_record_from_older_route_policy_version(tmp_path, monkeypatch):
+    output_root = tmp_path / "runs"
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"same-source-new-route-policy")
+    snapshot = detector.snapshot_source(source, None)
+    _write_current_report(
+        output_root,
+        {
+            "contract": detector.CONTRACT,
+            "version": "0.3.0",
+            "run_id": "old-policy-run",
+            "records": [
+                {
+                    "status": "complete",
+                    "source_path": str(source),
+                    "relative_path": source.name,
+                    "source_sha256": detector.sha256(source),
+                    "file_size": snapshot.file_size,
+                    "modified_at": snapshot.modified_at,
+                    "decision": {"route": "native-only"},
+                }
+            ],
+        },
+    )
+    calls = []
+
+    monkeypatch.setattr(detector, "require_tool", lambda name: name)
+
+    def fake_analyse_source(**kwargs):
+        calls.append(kwargs["source_snapshot"].source_path)
+        return {
+            "status": "complete",
+            "source_path": str(source),
+            "relative_path": source.name,
+            "source_sha256": kwargs["source_sha256"],
+            "file_size": snapshot.file_size,
+            "modified_at": snapshot.modified_at,
+            "total_pages": 312,
+            "decision": {
+                "route": "hybrid",
+                "confidence": "high",
+                "reason_codes": ["sampled-native-page-incomplete"],
+            },
+        }
+
+    monkeypatch.setattr(detector, "analyse_source", fake_analyse_source)
+
+    report_path = detector.run(
+        argparse.Namespace(
+            source=[source],
+            source_dir=[],
+            source_list=None,
+            output_root=output_root,
+            backfill_report=None,
+        )
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert calls == [source.resolve()]
+    assert report["summary"]["reused_count"] == 0
+    assert report["summary"]["routes"]["hybrid"] == 1
 
 
 def test_run_reuses_latest_record_by_sha256_after_move(tmp_path, monkeypatch):

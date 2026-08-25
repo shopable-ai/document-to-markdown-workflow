@@ -1,6 +1,6 @@
 contract: visual-asset-pruning
-version: 0.1.0
-description: 读者层视觉资产语义筛选的页级报告，区分保留来源证据与不再提供增量信息的页面图。
+version: 0.4.0
+description: 读者层视觉资产语义筛选的页级报告，区分删除候选、最小充分裁图、整页保留和待复核。
 required: [schema, version, status, mode, source_fingerprint, selected_pages, excluded_pages, kept_pages, rule, assets, synchronization, diagnostics]
 status: enum[complete, needs-review, failed]
 mode: enum[preview, apply]
@@ -8,13 +8,55 @@ asset:
   required: [asset_id, page, file_path, sha256, reason_code, confidence, evidence_paths]
   confidence: enum[high, medium, low, unknown]
   reason_code: enum[cover, table-of-contents, text-covered, user-approved-page-selection, needs-review]
+text_heavy_reader_asset_audit:
+  schema: text-heavy-reader-asset-audit
+  version: 0.2.0
+  status: enum[complete, needs-review, failed]
+  decisions: enum[candidate-remove, crop-required, retain, needs-review]
+  ocr_route: enum[auto, apple-vision, tesseract]
+  minimum_deletion_score: 95
+  required_per_asset: [image_path, sha256, decision, decision_confidence_score, deletion_gates, deletion_eligible, ocr_summary, markdown_overlap, non_text_summary, suggested_crop, audit_evidence_quality, markdown_reference]
+  required_deletion_gates: [ocr_text_present, ocr_confidence_sufficient, markdown_multiset_coverage, markdown_ordered_coverage, visual_increment_covered]
+  removal_plan: evidence/text-heavy-reader-asset-removal-plan.json
+  removal_result: evidence/text-heavy-reader-asset-removal-result.json
+standalone_image_corpus:
+  aliases: [standalone-image-corpus, image-only]
+  markdown_access: forbidden
+  default_concurrency: 1
+  maximum_concurrency: 2
+  required_files: [input-manifest.jsonl, input-manifest.lock.json, runtime-index.sqlite3, classification.jsonl, deletion-ledger.jsonl, retained-paths.txt, needs-review-paths.txt, crop-required-paths.txt, deleted-paths.txt, skipped-paths.txt, progress.json, execution.log, summary.json, 最终验收报告.md]
+  required_input_fields: [sequence, path, relative_path, sha256, bytes, width, height]
+  optional_input_fields: [prior_decision, prior_reason_codes, prior_source]
+  required_classification_fields: [sequence, attempt, path, relative_path, input_sha256, decision, reason_codes, decision_confidence_score, ocr_summary, visual_structure_metrics, semantic_text_coverage, visual_increment, deterministic_deletion_gates, skill_deletion_gates, deletion_eligible, error, completed_at]
+  required_progress_fields: [input_total, classified_count, deleted_count, retained_count, needs_review_count, crop_required_count, skipped_count, error_count, current_input_sequence, last_successful_commit_path, updated_at, process_pid, resumed]
+  decisions: enum[candidate-remove, crop-required, retain, needs-review]
+  deletion_ledger_events: enum[delete-intent, deleted, deleted-recovered, skipped-changed, missing, delete-failed]
+  transaction_order: [read-one-manifest-entry, verify-input-sha256, ocr-and-layout-analysis, append-classification-fsync, append-delete-intent-fsync, rehash-before-delete, unlink, append-delete-result-fsync, atomic-progress-checkpoint, release-image-and-ocr-objects]
+  resume_key: [input_sequence, absolute_path, input_sha256]
+  state_index: on-disk-not-in-memory-batch
+  new_after_snapshot: record-only-not-current-input
+  completion_requires: [one-final-status-per-input, count-conservation, complete-delete-hash-chain, retained-hashes-unchanged, no-markdown-read-or-write, no-errors, no-residual-ocr-process, tests-passed]
 invariants:
   - source_fingerprint 必须与 manifest.yaml.source.source_fingerprint 相等
   - excluded_pages 与 assets[].page 一一对应，不得静默丢失候选
   - sha256 必须是应用前实际文件哈希；应用后文件不存在时仍保留该证据
   - apply 只有在所有 assets 文件可读且没有 diagnostics 时才允许更新读者层
-  - apply 不得删除或移出 assets/ 中的来源资产、manifest.assets、media.sha256 或 source_occurrences
-  - apply 后每个被筛 asset 的来源文件仍必须存在，且其 manifest 登记与哈希必须保持不变
+  - Workflow A manifest 包的 apply 不得删除或移出来源资产、manifest.assets、media.sha256 或 source_occurrences；精确登记的 divider 例外除外
+  - reader-only 简化包中 source_kind=regenerable-engineering-page-render 的页图可在 hash 锁定、至少 95 分裁图、Markdown 换链和新资产引用检查全部通过后删除
+  - 原始 PDF/PPTX/独立图片不得被声明为 regenerable-engineering-page-render，也不得由 pruning/cropping 删除
+  - 混合正文与局部复杂视觉的整页图必须进入 crop-required；不得以复杂图为由把整页工程图当成最终 reader asset
+  - reader crop 在进入删除计划前必须通过 text-heavy-reader-asset-audit；只有 decision=candidate-remove、decision_confidence_score>=95、deletion_eligible=true 且全部 deletion_gates=true 才具备删除资格
+  - 稀疏箭头、坐标轴和分隔线不得仅因 dark_ratio 低而忽略；必须结合 non_text bounds area 判断。只有简单线性顺序已在 Markdown 中用明确顺序标记完整表达时，才可记为 visual_increment_covered
+  - 纯文字图审计默认 auto 路线优先 Apple Vision 坐标 OCR、不可用或低置信时回退 Tesseract；局域网视觉模型只能补充 needs-review 的单图候选，不能设置 deletion_eligible=true
+  - Markdown 覆盖必须同时通过字符覆盖和顺序覆盖；相同字符乱序不得作为 text-covered 删除证据
+  - audit_evidence_quality 的 95 分只证明审计证据完整，不替代 reader crop 的 95 分视觉质量；任一硬门失败不得由总分抵消
+  - 物理删除必须通过独立 --apply-plan 调用重读 Markdown SHA-256、图片 SHA-256、原引用行、删除分和全部硬门；先移除引用、后删除文件，任一步失败恢复 Markdown 和图片
+  - standalone-image-corpus 是上述 Markdown 换链规则的独立例外；它禁止读取或修改 Markdown，并只允许删除显式锁定输入清单内、SHA 未漂移且同时通过确定性门和技能删除门的图片
+  - standalone-image-corpus 分类与删除必须逐图 append、flush、fsync；不得等待全批分类结束后统一写盘或删除
+  - standalone-image-corpus 默认并发为 1、最大为 2，不得在内存中保存整批分类对象、OCR 响应或 Future
+  - OCR 文字组数量少、大字号、居中、普通章节标题、页脚线、装订线、裁切线或扫描边缘不得单独导致 retain 或 needs-review
+  - 表格或关系结构必须由正文内部交叉线、网格、节点连接、方向结构、容器或明确对应关系证明；简单顺序排版不是流程图
+  - 视觉模型只能补充低置信候选，不能单独设置 standalone-image-corpus 的 deletion_eligible=true
   - 未确认复杂关系、布局编码或重建价值时不得设置为 excluded
   - evidence_paths 至少包含 index.md、manifest.yaml 和一个内容/视觉复核证据
   - 报告只描述读者层资产裁剪，不替代 A3 来源渲染证据或 A7 独立验收

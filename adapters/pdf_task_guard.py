@@ -200,6 +200,11 @@ def acquire_task_lock(
         yield lock_path
     finally:
         lock_path.unlink(missing_ok=True)
+        try:
+            lock_path.parent.rmdir()
+        except OSError:
+            # Another active task may still own a lock in the shared folder.
+            pass
 
 
 def write_cancelled_run_state(

@@ -13,7 +13,17 @@ order: 10
 
 ## 输入与输出
 
-输入：页面图与原生结构。输出：候选区域坐标和开放集合覆盖记录。规则：宁可标记候选和 needs-review，不静默丢弃结构；除了流程图、矩阵、组合图和图文混排，还要登记无法归入预设类型的嵌套容器、颜色/线型编码、图例、跨区连线、符号和跨页关系。
+输入：页面图、原生结构、当前最小内容单元中的图号/图注/邻近正文和现有 Manifest。输出：候选区域与开放集合覆盖记录。规则：宁可标记候选和 needs-review，不静默丢弃结构；除了流程图、矩阵、组合图和图文混排，还要登记无法归入预设类型的嵌套容器、颜色/线型编码、图例、跨区连线、符号和跨页关系。
+
+## 候选区域产生顺序
+
+1. 用当前内容单元中的图号、图注、正文引用、原生对象/bbox 和可见图形结构建立定位锚点。
+2. 明确列出必须保留的节点、文字、箭头、括号、边注、图例、结构空白和必要上下文。
+3. 明确列出允许排除的页眉、页码、无关正文；只有图注已由 Markdown 独立保存时才允许排除图注。
+4. 生成保守候选 geometry；候选只供 `region-cropping` 消费，不直接等于已接受 crop。
+5. 同一 page-render 含多个图时复用 page parent，但为每图分配不同 `figure_id`、`region_id`、
+   `source_occurrence_id`、ordinal 和 candidate geometry；不得按页码或图像哈希合并。
+6. 候选依据冲突、来源锚点不足或无法判断边界时，保留整页图并返回 `needs-review`。
 
 ## 边界
 
@@ -27,4 +37,7 @@ order: 10
 
 ## 最小字段契约
 
-候选区域必须带 `region_id`、父页面资产 ID、坐标、触发依据、覆盖对象 ID、`confidence`、`status` 和诊断。没有检测到候选也要记录 `coverage.status=checked`，不得把未执行写成空数组成功。
+候选区域必须带 `figure_id`、`region_id`、`source_occurrence_id`、ordinal、父页面资产 ID、candidate
+geometry、定位锚点、触发依据、必须保留元素、允许排除元素、覆盖对象 ID、`confidence`、`status`
+和诊断。没有检测到候选也要记录 `coverage.status=checked`，不得把未执行写成空数组成功。该 Skill
+不得把候选区域标成最终 crop；最终接受状态由 `region-cropping` 的四边复核产生。

@@ -34,8 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = Path("/Users/a0000/.cache/codex-runtimes/codex-primary-runtime/dependencies")
 DEFAULT_OUTPUT_ROOT = ROOT / "runs" / "pdf-route-detection"
 CONTRACT = "pdf-route-detection"
-VERSION = "0.4.0"
-READABLE_REPORT_VERSIONS = {"0.1.0", "0.2.0", "0.3.0", VERSION}
+VERSION = "0.5.0"
+READABLE_REPORT_VERSIONS = {"0.1.0", "0.2.0", "0.3.0", "0.4.0", VERSION}
 REPORT_NAME = "report.json"
 RECORDS_NAME = "records.ndjson"
 RECORDS_DIRNAME = "records"
@@ -69,8 +69,11 @@ REASON_LABELS = {
     "native-text-lacks-document-structure": "原生文字缺少可用文档结构",
     "native-text-not-trusted-primary": "原生文字不宜作为主要来源",
     "native-text-signal-is-weak": "原生文字信号较弱",
+    "sampled-native-page-incomplete": "抽样页存在原生文字不完整页面",
     "sampled-pages-have-no-usable-native-text": "抽样页没有可用原生文字",
     "sampled-pages-look-layout-sparse": "抽样页版面较稀疏",
+    "sparse-native-page-no-visual-content": "稀疏原生页面未发现额外视觉内容",
+    "full-page-background-with-complete-text-layer": "完整文字层覆盖了无额外结构的整页背景图",
     "visual-overhead-is-low": "视觉处理收益较低",
     "visual-structure-needs-staged-review": "视觉结构需要分阶段处理",
 }
@@ -100,13 +103,28 @@ VISUAL_CUE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:如图|见图|如下图|见下图|图\s*[0-9一二三四五六七八九十]+(?:\s*所示)?)"
         ),
     ),
-    ("table-reference", re.compile(r"表\s*[0-9一二三四五六七八九十]+")),
-    ("matrix-reference", re.compile(r"(?:矩阵|矩阵图|四象限)")),
+    # Do not start a table reference inside ordinary words such as "代表一个"
+    # or "发表一下".
+    # Real references like "如表一所示" and "见表 2" remain matched.
+    (
+        "table-reference",
+        re.compile(r"(?<![代发])表\s*[0-9一二三四五六七八九十]+"),
+    ),
+    (
+        "matrix-reference",
+        re.compile(
+            r"(?:矩阵图|四象限|(?:如图|见图|如下图|见下图).{0,12}矩阵|矩阵.{0,6}(?:如下图|见下图|所示))"
+        ),
+    ),
     ("flow-reference", re.compile(r"(?:流程图|模型图|关系图|结构图|坐标轴)")),
 )
 MIN_NATIVE_TEXT_CHARS = 16
 MIN_NATIVE_BODY_CHARS = 80
 MEANINGFUL_IMAGE_AREA_RATIO = 0.08
+# Exported ebook backgrounds commonly stop at the printable page margin.  A
+# 95% cutoff misclassifies those 93-94% watermark/background objects as
+# semantic figures even when the searchable text layer is complete.
+FULL_PAGE_BACKGROUND_MIN_AREA_RATIO = 0.93
 
 
 @dataclass
@@ -450,6 +468,11 @@ def decide_page_route(
     table_present = isinstance(table_count, int) and not isinstance(table_count, bool) and table_count > 0
     raster_structure = bool(rendered.get("visual_structure_present"))
     large_blank = bool(bbox.get("large_blank_region"))
+    unconfirmed_single_table = bool(
+        table_count == 1
+        and rendered.get("status") == "passed"
+        and not raster_structure
+    )
     reason_codes: list[str] = []
 
     corroborated_visual = image_object_present or table_present or raster_structure
@@ -464,18 +487,55 @@ def decide_page_route(
                 reason_codes.append("table-or-matrix-structure-present")
             if raster_structure:
                 reason_codes.append("rendered-visual-structure-present")
+        elif rendered.get("status") == "passed" and not cue["present"]:
+            route = "native-only"
+            needs_review = False
+            reason_codes.append("sparse-native-page-no-visual-content")
         else:
             route = "native-only"
             needs_review = True
             reason_codes.extend(
                 ["native-text-insufficient", "visual-evidence-not-corroborated"]
             )
-    elif cue["present"] and not image_object_present:
-        # A textual reference is not proof that the referenced figure survived
-        # in the PDF.  Do not spend a model call or invent its content.
+    elif (
+        native_body_sufficient
+        and image_object_present
+        and images.max_area_ratio >= FULL_PAGE_BACKGROUND_MIN_AREA_RATIO
+        and not cue["present"]
+        and (not table_present or unconfirmed_single_table)
+        and not raster_structure
+        and rendered.get("status") == "passed"
+    ):
+        # Many exported ebooks carry a page-sized background raster underneath
+        # a complete searchable text layer.  Area alone is not semantic visual
+        # evidence: when both structure probes are clean, a model call merely
+        # transcribes the same page again and can multiply runtime by hours.
         route = "native-only"
-        needs_review = True
-        reason_codes.append("uncorroborated-visual-text-cue")
+        needs_review = False
+        reason_codes.extend(
+            ["native-text-usable", "full-page-background-with-complete-text-layer"]
+        )
+        if unconfirmed_single_table:
+            reason_codes.append("single-table-signal-unconfirmed-by-render")
+    elif (
+        cue["present"]
+        and not image_object_present
+        and not table_present
+        and not raster_structure
+    ):
+        # A textual reference is not proof that the referenced figure survived
+        # as an embedded PDF image.  The rendered page is still authoritative,
+        # so route it through the local visual/OCR path instead of leaving a
+        # permanently incomplete native-only page.
+        route = "native-plus-visual"
+        needs_review = False
+        reason_codes.extend(
+            [
+                "native-text-usable",
+                "uncorroborated-visual-text-cue",
+                "visual-cue-requires-page-corroboration",
+            ]
+        )
     elif cue["present"] and image_object_present:
         route = "native-plus-visual"
         needs_review = False
@@ -1140,10 +1200,16 @@ def decide_route(summary: dict[str, Any]) -> dict[str, Any]:
     reason_codes: list[str] = []
 
     if usable_native_ratio >= 0.6 and recoverable_structure_ratio >= 0.5:
-        if complex_layout_ratio >= 0.25 or image_heavy_ratio >= 0.25:
+        if (
+            failed_native_ratio > 0
+            or complex_layout_ratio >= 0.25
+            or image_heavy_ratio >= 0.25
+        ):
             decision = "hybrid"
             confidence = "high" if usable_native_ratio >= 0.75 else "medium"
             reason_codes.extend(["native-text-exists", "visual-structure-needs-staged-review"])
+            if failed_native_ratio > 0:
+                reason_codes.append("sampled-native-page-incomplete")
             if complex_layout_ratio >= 0.25:
                 reason_codes.append("sampled-pages-look-layout-sparse")
             if image_heavy_ratio >= 0.25:
@@ -1152,8 +1218,6 @@ def decide_route(summary: dict[str, Any]) -> dict[str, Any]:
             decision = "native-only"
             confidence = "high" if dense_text_ratio >= 0.7 else "medium"
             reason_codes.extend(["dense-native-text-dominates", "visual-overhead-is-low"])
-            if zero_text_ratio > 0:
-                reason_codes.append("isolated-cover-or-insert-pages-detected")
     elif usable_native_ratio >= 0.3 or text_present_ratio >= 0.5:
         decision = "hybrid"
         confidence = "medium"
@@ -1307,7 +1371,9 @@ def read_json_object(path: Path) -> dict[str, Any] | None:
 
 
 def build_latest_record_maps(report: dict[str, Any] | None) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    if not report:
+    # Reports from older policy versions remain readable for backfill and audit,
+    # but their route decisions must not be reused after routing rules change.
+    if not report or report.get("version") != VERSION:
         return {}, {}
     by_path: dict[str, dict[str, Any]] = {}
     by_sha: dict[str, dict[str, Any]] = {}

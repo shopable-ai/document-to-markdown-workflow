@@ -55,3 +55,34 @@ def test_no_model_execute_writes_source_named_markdown_alias(tmp_path: Path):
     )
     assert page_evidence["bbox_metrics"]["status"] == "complete"
     assert "max_vertical_gap_ratio" in page_evidence["bbox_metrics"]
+
+
+def test_no_model_execute_can_suppress_internal_source_named_alias(tmp_path: Path):
+    source = tmp_path / "醒与悟2.0.pdf"
+    shutil.copy2(FIXTURE, source)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--source",
+            str(source),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--pages",
+            "1",
+            "--execute",
+            "--no-model",
+            "--no-source-markdown-alias",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    payload = _payload(result)
+
+    assert result.returncode == 0, result.stderr
+    package = Path(payload["markdown"]).parent
+    assert payload["source_named_markdown"] is None
+    assert not (package / "醒与悟2.0.md").exists()
+    assert (package / "index.md").is_file()

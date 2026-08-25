@@ -105,6 +105,16 @@ Requirement → Chain → Spec → Task
          │  ├─ PDF：嵌入图片、原始 PDF 页面渲染、矢量/扫描/表格区域
          │  └─ 独立图片：保留原图，必要时生成带父图和坐标的裁剪图
          ├─ 为每个资产建立稳定 `asset_id`、文件名、显示名、来源 occurrence 和 SHA-256
+         ├─ 整页图需要升级时执行图级闭环
+         │  ├─ F0 对账来源/raw、当前最小单元、派生 Markdown、资产和 Manifest，更新全书覆盖台账并锁定 1–2 张图
+         │  ├─ F1 解析并保留来源页、页码、source occurrence、哈希、legacy 等价和定点探查证据
+         │  ├─ F2 用图注/正文/对象/可见结构产生候选区域；同页多图保持不同 ID，不把裸坐标当定位完成
+         │  ├─ F3 生成候选 crop，逐边复核并保存 crop decision 后才接受
+         │  ├─ F4 可选增强，并排比较后选择 enhanced 或 crop fallback
+         │  ├─ F5 可选 evidence-only 放大/节点探查和 Mermaid，依次通过语法、渲染、语义和 PNG fallback 门
+         │  ├─ F6 把历史逐图记录作为证据迁入同一 Manifest，归一化状态并选择读者资产
+         │  ├─ F7 回填最小内容单元、诊断引用丢失、重读链接并确定性再生成
+         │  └─ F8 分别计算批次/全书状态；关闭当前批次不等于全书完成
          ├─ 把“提取图片”和“理解图片内容”分开；确定性提取先完成，视觉模型只做结构化理解候选
          ├─ 对复杂结构或有复用价值的图片保存“视觉重建信息包”
          │  ├─ 结构版：画布、分区、节点/元素、层级、方向、连线/分组、文字保真和视觉样式
@@ -154,6 +164,13 @@ Requirement → Chain → Spec → Task
 |---|---|---|
 | 保存原始页面图 | ET1.4、ET2.2 | `assets/`、`asset_kind=page-render`、渲染记录、来源页码 |
 | 图片资产提取与回溯（可选） | ET1.4（启用时） | 按 PPT/PPTX、PDF、图片选择资产方案；稳定 `asset_id`、短英文 `file_name`、中文 `display_name`、manifest、哈希 |
+| F0 图片需求盘点 | ET1.4/F0 | source/raw + current unit + derived Markdown + assets + Manifest 的 expected IDs、逐图分类、batch/document 状态、1–2 图批次锁；当前为 procedure-only |
+| F1 来源页解析 | ET1.4/F1、A3/A6 | page-render、source occurrence、来源/页码/哈希、legacy 复制等价；未知页的候选页/contact sheet 探查证据；基础路径由 `workflow_a_source_runner.py` 支持 |
+| F2 候选区域定位 | ET1.4/F2、A3 | `complex-region-detection` 的 figure/region/occurrence ID、ordinal、candidate geometry、定位依据、必须保留/允许排除元素；同页多图不合并；无专用 adapter |
+| F3 crop 决策与接受 | ET1.4/F3、A3 | crop decision、四边状态、overlay/对照证据、accepted geometry；现有相邻脚本仅做 reader-only crop/relink/delete，未兼容工程生命周期，仍需人工门 |
+| F4/F5 可选增强与 Mermaid | ET1.4/F4–F5、A3/A4 | 参数/前后比较、结构保真、evidence-only 放大/节点/OCR probe、语法/渲染/来源语义验证、PNG fallback；当前未由 runner 自动编排 |
+| F6/F7 Manifest/读者投影与回填 | ET1.4/F6–F7、A5/A6 | 历史逐图记录的哈希迁移/状态归一化、同一 Manifest、reader asset selection、before/after SHA-256、需求差异、link checks、确定性 merge/projection |
+| F8 批次与文档验收 | ET1.4/F8、A7 | 完整链重读、stage/progress evidence、独立 batch/document status、未闭合图号、validator 与人工视觉 Verdict |
 | Markdown 图片复制与读者层整理 | ET1.4 / 独立 `markdown-asset-copy` | 只复制实际引用图片；统一落到 `assets/`；重写链接；禁止 `pages/` 和随机/技术文件名 |
 | 复杂图片的重建信息保存（可选，启用复杂资产时） | ET1.4（启用时） | `visual-reconstruction-profile`：结构版、提示词版、来源证据、版本和 Unknown/needs-review |
 | 多方式提取内容 | ET1.1 | 原生内容、视觉复核、Apple OCR、可选开源 OCR 候选 |
@@ -292,6 +309,15 @@ Markdown 组装、命名与来源登记属于单页核心闭环；图片资产�
 - PPT/PPTX：无损提取嵌入媒体；保存 PPT/PPTX 自身的整页渲染；对图表、组合形状、矢量图和关系密集区按需生成区域资产。
 - PDF：无损提取嵌入图片；保存原始 PDF 页面渲染；对矢量、扫描、表格和图文混排区域按需裁剪。
 - 独立图片：直接保留原图；只有需要局部核对时才生成带父资产、坐标和裁剪参数的 `crop`。
+- 图级升级以同一个 page-unit、segment 或其他 manifest 登记的 `content_unit_id` 为边界，每批只处理
+  1–2 张图。生命周期固定为 `需求盘点 → 来源页解析 → 区域定位 → crop 决策/接受 → 可选增强 →
+  可选 Mermaid → 同一 Manifest/读者投影 → 最小内容单元回填/再生成 → 批次验收`；该闭环未完成前不扩大批次。
+- 先判断现有图片是否仍是整页导出：与同批页图尺寸一致，或仍含页眉、页码、章节标题、正文段落时，
+  保守按整页图处理。裁切先锁横向、后调纵向；两侧可能存在箭头、标签、括号或流程线时宁可留白，
+  geometry 必须以 `WxH+X+Y` 记录并回指父页面资产。
+- 黑白扫描图可按实际工具能力使用 Gray、auto-level、`brightness-contrast 5x18/5x20`、
+  `sharpen 0x1.2–0x1.4` 的可配置组合。增强只改善可读性，必须记录参数和
+  `structure_preserved=true`；效果变差时回退原 crop，不把参数写成所有来源的默认依赖。
 - 每个资产先登记 `asset_id`、`source_occurrence_id`、短英文语义文件名、中文显示名和 SHA-256；原图/嵌入图不能被模型输出覆盖。
 - 文件名使用最短可辨识的 `<short-semantic-slug>.<ext>`；页码只进入 manifest/evidence，只有真实同名冲突时才追加 `-02`、`-03`。来源哈希、`page-render`、`original-page`、`o01` 等工程字段只进入 manifest。
 - 正式 Workflow 包统一使用扁平 `assets/`；`page-render`、`embedded-media`、`complex-region` 等类型写入 manifest，不创建空的分类子目录。`markdown-asset-copy` 继续将实际引用图片导出到读者层 `assets/` 并重写 Markdown 链接。
@@ -299,9 +325,64 @@ Markdown 组装、命名与来源登记属于单页核心闭环；图片资产�
 - 本地模型差异先通过提示词/schema/裁剪/解析器校准解决，再重复同一输入；本地路线只有在质量、重复性、成本和追溯门都通过后才能默认使用。不可用或未达门时才进入明确授权的便宜在线 fallback。
 - 对流程图、矩阵、关系图、复杂图文混排或明确需要再次生成的资产，额外输出 `evidence/visual-reconstruction-profile.yaml`：结构版保存画布、区域、元素、层级、关系、文字和样式；提示词版保存可复用的中文 prompt、负向约束、版本和来源回指。它是重建输入，不是生成正确性的证明。
 - profile 的每个关键字段必须能回指原图/页面图/区域裁剪或文字 span；关系、文字或样式无法确认时保留 `Unknown`/`needs-review`，不得用泛化摘要补齐。
+- Mermaid 只用于结构清晰的流程、推理链、层级、时间线或明确节点—边关系。每个节点、文字和边都必须
+  回指已确认结构证据；关系或 OCR 文字不稳定时只保留 crop/enhanced PNG。可用 Mermaid 也必须登记
+  PNG `fallback_asset_id`，并按“Mermaid → PNG fallback → 图题”回填当前最小内容单元。
 - 启用图片资产提取时，输出 `evidence/asset-extraction-strategy.yaml`、`evidence/asset-quality-comparison.json` 和 `evidence/asset-quality-audit.json`；没有比较或独立审计证据时，该可选工作包只能 `needs-review`，不阻塞 ET2。
 
-先分配稳定的 `asset_id` 和 `source_occurrence_id`，再从当前页面标题或已核对别名生成短英文 ASCII `file_name` 与中文 `display_name`，最后写入 Markdown 链接和 manifest。Markdown 按“语义内容 → 已裁决关系 → 必要视觉资产 → Unknown/待核对”输出；来源文件名、页码、bbox、模型诊断进入工程层，不污染读者层标题和文件名。页面图、区域图和嵌入媒体必须可打开、可追溯；语义无法确认时返回 `needs-review`，不得回退到哈希或技术占位名。
+##### ET1.4-F 图级升级任务与执行绑定
+
+```text
+F0 图片需求盘点
+├─ 输入：来源/raw 单元、当前 cleaned/page unit、派生 Markdown、现有资产、Manifest
+├─ 执行：procedure-only；当前没有专用 figure inventory adapter
+├─ 输出：expected figure IDs、逐图 coverage、batch/document status 和批次锁
+└─ 门：cleaned/final 丢失的引用仍保留在 expected 集合，不能据此删图
+F1 来源页解析
+├─ 执行：page-rendering + source-occurrence-registration
+├─ 代码：adapters/workflow_a_source_runner.py（page-render/基础 Manifest）
+├─ 未知页：只做候选页探查，记录 page hashes、contact sheet 页序/哈希和选择结论
+└─ 边界：历史 legacy 页图复制仍需人工确认 byte/hash 等价
+F2 图区域定位
+├─ 执行：complex-region-detection Skill
+├─ 输出：figure/region/occurrence ID、ordinal、候选 geometry、定位依据、必须保留/允许排除元素
+├─ 同页多图：复用 page parent，但每图独立 candidate 和 crop decision
+└─ 边界：当前没有专用仓库 adapter
+F3 crop 决策与接受
+├─ 执行：region-cropping + image-region-cropper
+├─ 相邻代码：skills/region-cropping/scripts/apply_reader_asset_crops.py
+├─ 输出：crop_decision、四边检查、review evidence、accepted geometry
+└─ 边界：该代码仅做 reader-only crop/relink/delete，未生成区域定位、crop decision 或 Manifest 更新；不能作为工程生命周期完成证据，人工视觉批准仍必需
+F4 可选增强
+├─ 执行：确定性参数 + crop/enhanced 比较
+└─ 边界：当前没有专用 enhancement entrypoint
+F5 可选 Mermaid
+├─ 执行：visual-reconstruction-profile + 人工证据对照
+├─ 诊断：可生成 evidence-only 放大图、节点子图和 OCR probe；候选不是真值
+├─ 门：syntax → render → semantic comparison → fallback link
+└─ 边界：当前没有 Workflow A Mermaid generator/render validator
+F6 同一 Manifest 与读者资产投影
+├─ 执行：Manifest writer、source-asset-linker、markdown-asset-copy
+├─ 代码：workflow_a_source_runner.py、markdown_collection_merge.py
+├─ 迁移：历史逐图 Manifest 保存路径/哈希后合入唯一 manifest；legacy success 先归一化 needs-review
+└─ 边界：基础登记/投影有代码，图级派生更新和历史迁移未自动编排
+F7 最小内容单元回填与派生再生成
+├─ 执行：page-markdown-unit、markdown-structure-builder、source-asset-linker
+├─ 代码：page_markdown_units.py、markdown_collection_merge.py
+├─ 门：对比来源需求与当前 Markdown，引用丢失必须定位清理/投影/写出/合并阶段且不得删来源
+└─ 边界：合并/投影有代码，图块插入和引用差异诊断仍依具体 producer 或人工步骤
+F8 批次验收与闭合
+├─ 代码：workflow_a_output_validator.py、tests/validate_real_output_root.py
+├─ 输出：完整链重读、progress/stage evidence、batch status、document status 和未闭合图号
+├─ 门：expected figure IDs 未全部分类或仍有 missing/reference-missing/needs-review 时文档不得 passed
+└─ 边界：coverage 结构/链接验证有代码，需求提取及裁切/增强/Mermaid 视觉保真仍需人工
+```
+
+机器可读的同一树位于 `workflow.yaml` 的
+`execution_policy.asset_extraction.figure_asset_lifecycle.task_tree`。文档中的“有 Skill/Tool”不自动等于
+“已被生产 runner 编排”；只有列出可调用代码路径并有当前运行证据的步骤才能称为 code-backed。
+
+先分配稳定的 `asset_id` 和 `source_occurrence_id`，再从当前页面标题或已核对别名生成短英文 ASCII `file_name` 与中文 `display_name`，最后写入 Markdown 链接和同一个 manifest。Manifest 复用现有 source/media/status 字段，并补齐 content unit、可选印刷页码、crop geometry、增强 derivation、Mermaid status/confidence/fallback 和 Markdown binding。Markdown 按“语义内容 → 已裁决关系 → 可选 Mermaid → 必要 PNG fallback/视觉资产 → Unknown/待核对”输出；来源文件名、页码、bbox、模型诊断进入工程层，不污染读者层标题和文件名。页面图、区域图、增强图和嵌入媒体必须可打开、可追溯；语义无法确认时返回 `needs-review`，不得回退到哈希或技术占位名。`document-temp.md`、`index.md` 和整书 final 都是从最小内容单元确定性生成的派生产物，不作为图片升级的长期手工编辑面。
 
 门禁：不能只有占位标题、relation-only 或图片；命名不可追溯、重复覆盖、哈希不匹配或链接断裂时不得 `passed`。
 

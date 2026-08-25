@@ -26,14 +26,17 @@ from typing import Any, Iterator
 
 try:
     from output_naming import resolve_package_target
+    import pdf_resource_slots as resource_slots
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from .output_naming import resolve_package_target
+    from . import pdf_resource_slots as resource_slots
 
 
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_ADAPTER = ROOT / "adapters" / "lan_pdf_markdown_graph.py"
 BATCH_ADAPTER = ROOT / "adapters" / "run_pdf_batches.py"
 WORKFLOW_A_ADAPTER = ROOT / "adapters" / "workflow_a_source_runner.py"
+LOCAL_OCR_ADAPTER = ROOT / "adapters" / "apple_vision_pdf_to_markdown.py"
 DEFAULT_STATE_ROOT = Path.home() / ".codex" / "background-tasks"
 ALLOWED_STATUSES = {
     "queued",
@@ -293,6 +296,7 @@ def _public_snapshot(
         "updated_at": state["updated_at"],
         "completed_pages": state.get("completed_pages", 0),
         "failed_pages": state.get("failed_pages", 0),
+        "machine_resource_policy": state.get("machine_resource_policy"),
     }
     for key in ("completed_at", "cancelled_at", "returncode", "error", "next_action"):
         if state.get(key) is not None:
@@ -408,6 +412,7 @@ def start_task(
         "resume_command": resume_command,
         "work_progress_path": str(work_progress_path) if work_progress_path else None,
         "resume_count": 0,
+        "machine_resource_policy": resource_slots.resource_policy_summary(),
     }
     with _task_lock(task_root):
         _write_json_atomic(task_root / "progress-current.json", state)
@@ -423,6 +428,7 @@ def start_task(
         "task_root": str(task_root),
         "log_path": str(task_root / "run.log"),
         "task_type": task_type,
+        "machine_resource_policy": state["machine_resource_policy"],
         "status_command": shlex.join(
             [sys.executable, str(cli), "status", run_id, *state_args]
         ),
@@ -603,7 +609,12 @@ def cancel_task(
     return snapshot
 
 
-def resume_task(state_root: Path, run_id: str) -> dict[str, Any]:
+def resume_task(
+    state_root: Path,
+    run_id: str,
+    *,
+    no_visual_asset_pruning: bool = False,
+) -> dict[str, Any]:
     task_root, state = _load_state(state_root, run_id)
     with _task_lock(task_root):
         _, state = _load_state(state_root, run_id)
@@ -612,12 +623,20 @@ def resume_task(state_root: Path, run_id: str) -> dict[str, Any]:
         resume_command = state.get("resume_command")
         if not isinstance(resume_command, list) or not resume_command:
             raise ValueError(f"run {run_id} does not support resume")
+        active_command = list(resume_command)
+        if no_visual_asset_pruning:
+            if state.get("task_type") != "visual-pdf":
+                raise ValueError(
+                    "--no-visual-asset-pruning is only valid for visual-pdf tasks"
+                )
+            if "--no-visual-asset-pruning" not in active_command:
+                active_command.append("--no-visual-asset-pruning")
         state = _transition(
             task_root,
             state,
             "queued",
             event="resume-queued",
-            active_command=resume_command,
+            active_command=active_command,
             resume_count=int(state.get("resume_count") or 0) + 1,
             resumed_at=now_iso(),
             completed_at=None,
@@ -637,7 +656,7 @@ def resume_task(state_root: Path, run_id: str) -> dict[str, Any]:
 
 
 def _default_run_root(output_root: Path, source: Path) -> Path:
-    return resolve_package_target(output_root, source)[1]
+    return resolve_package_target(output_root, source, include_timestamp=True)[1]
 
 
 def _build_pdf_commands(args: argparse.Namespace, run_id: str) -> tuple[Path, list[str], list[str] | None, Path | None]:
@@ -677,6 +696,35 @@ def _build_pdf_commands(args: argparse.Namespace, run_id: str) -> tuple[Path, li
             str(run_root),
         ]
         return run_root, command, command, run_root / "progress.json"
+
+    if args.task_type == "local-ocr-pdf":
+        run_root = (
+            args.run_root.expanduser().resolve()
+            if args.run_root
+            else _default_run_root(output_root, source)
+        )
+        command = [
+            sys.executable,
+            str(LOCAL_OCR_ADAPTER),
+            "--source",
+            str(source),
+            "--run-root",
+            str(run_root),
+            "--pages",
+            args.pages,
+            "--dpi",
+            "220",
+            "--timeout-seconds",
+            str(args.timeout_seconds),
+            "--jobs",
+            str(args.jobs),
+        ]
+        return (
+            run_root,
+            command,
+            [*command, "--resume"],
+            run_root / "evidence" / "progress-current.json",
+        )
 
     run_root = (args.run_root.expanduser().resolve() if args.run_root else _default_run_root(output_root, source))
     command = [
@@ -730,11 +778,19 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--pages", default="all")
     start.add_argument(
         "--task-type",
-        choices=("native-pdf", "native-pdf-batch", "hybrid-pdf", "visual-pdf", "workflow-a"),
+        choices=(
+            "native-pdf",
+            "native-pdf-batch",
+            "local-ocr-pdf",
+            "hybrid-pdf",
+            "visual-pdf",
+            "workflow-a",
+        ),
         required=True,
     )
     start.add_argument("--evidence-level", default="compact")
     start.add_argument("--batch-size", type=int, default=1)
+    start.add_argument("--jobs", type=int, default=2)
     start.add_argument("--timeout-seconds", type=int, default=7200)
     start.add_argument("--state-root", type=Path, default=DEFAULT_STATE_ROOT)
     start.add_argument("--run-id")
@@ -750,6 +806,8 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument("--state-root", type=Path, default=DEFAULT_STATE_ROOT)
     cancel = subparsers.choices["cancel"]
     cancel.add_argument("--timeout-seconds", type=float, default=5.0)
+    resume = subparsers.choices["resume"]
+    resume.add_argument("--no-visual-asset-pruning", action="store_true")
 
     worker = subparsers.add_parser("_worker", help=argparse.SUPPRESS)
     worker.add_argument("run_id")
@@ -792,7 +850,11 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout_seconds,
             )
         else:
-            payload = resume_task(args.state_root, args.run_id)
+            payload = resume_task(
+                args.state_root,
+                args.run_id,
+                no_visual_asset_pruning=args.no_visual_asset_pruning,
+            )
     except (
         KeyError,
         OSError,

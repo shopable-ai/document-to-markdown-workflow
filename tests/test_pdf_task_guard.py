@@ -40,6 +40,8 @@ def test_task_lock_blocks_the_same_source_output_and_pages(tmp_path: Path):
     ):
         pass
 
+    assert not (output_root / ".pdf-task-locks").exists()
+
 
 def test_write_cancelled_run_state_marks_resume_required(tmp_path: Path):
     summary_path = tmp_path / "summary.json"

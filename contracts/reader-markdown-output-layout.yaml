@@ -16,6 +16,7 @@ forbidden_files:
   - workflow-a-source-plan.json
 invariants:
   - index.md 是关键点 Markdown 主文档；来源文件名、页码、哈希和内部诊断不得写入读者层
+  - 根目录默认只允许一个正式 Markdown 交付文件 index.md；不得再写同内容的 source-named alias、副本或“最终版/修正版”变体
   - assets/ 只包含图片文件
   - index.md 没有图片链接时允许不创建 assets/；不得为了满足目录形状保留空目录或整页纯文字截图
   - assets/ 中每个文件都必须被 index.md 的 Markdown 图片链接引用

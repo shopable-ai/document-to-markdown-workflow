@@ -32,9 +32,11 @@ def test_registry_exposes_the_production_runtime_context():
     assert entry["background_task_contract"] == str(
         LONG_TASK_CONTRACT_PATH.relative_to(ROOT)
     )
-    assert "--task-type <workflow-a|native-pdf|native-pdf-batch|hybrid-pdf|visual-pdf>" in entry[
-        "background_task_entrypoint"
-    ]
+    assert (
+        "--task-type "
+        "<workflow-a|native-pdf|native-pdf-batch|local-ocr-pdf|hybrid-pdf|visual-pdf>"
+        in entry["background_task_entrypoint"]
+    )
     assert CONTRACT_PATH.is_file()
     assert LONG_TASK_CONTRACT_PATH.is_file()
 
@@ -104,6 +106,7 @@ def test_long_task_status_is_latest_only_and_agent_polling_is_forbidden():
     assert contract["commands"]["resume_support"] == {
         "native-pdf": "supported-reuse-existing-run-root",
         "native-pdf-batch": "supported-reuse-existing-run-root",
+        "local-ocr-pdf": "supported-reuse-existing-run-root",
         "hybrid-pdf": "supported-reuse-existing-run-root-with-page-route-validation",
         "visual-pdf": "supported-reuse-existing-run-root",
         "workflow-a": "unsupported-until-source-runner-has-a-verified-in-place-resume-contract",

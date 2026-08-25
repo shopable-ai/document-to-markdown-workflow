@@ -90,13 +90,22 @@ def resolve_source_markdown_target(
     *,
     fallback: str = "document",
     max_chars: int = 120,
+    reuse_existing: bool = False,
 ) -> Path:
-    """Return a non-conflicting reader Markdown path derived from the source title."""
+    """Return a reader Markdown path derived from the source title.
+
+    Fresh packages keep the collision-avoiding behavior.  A caller resuming a
+    controlled package may opt into reusing the first existing source alias so
+    repeated finalization is idempotent instead of creating ``-02``/``-03``
+    copies.  The canonical ``index.md`` is always reserved.
+    """
 
     stem = readable_markdown_stem(source.stem, fallback=fallback, max_chars=max_chars)
     candidate = package_root / f"{stem}.md"
     ordinal = 1
     while candidate.exists():
+        if reuse_existing and candidate.name != "index.md":
+            return candidate
         ordinal += 1
         candidate = package_root / f"{stem}-{ordinal:02d}.md"
     return candidate

@@ -19,6 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_resource_slots as resource_slots
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROMPT = ROOT / "references/prompts/vision-page-analysis-mac96.zh.txt"
@@ -93,6 +98,7 @@ def _base_evidence(
     }
 
 
+@resource_slots.uses_visual_model_slot("mac96-page-vision-request")
 def _request(
     image: Path,
     *,

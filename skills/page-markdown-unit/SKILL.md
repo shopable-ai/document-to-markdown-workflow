@@ -35,8 +35,9 @@ order: 11
 7. 举例与思考
 8. 模型结构
 9. 已确认的关系说明
-10. 原始页面图（仅需要保留时）
-11. 待核对项
+10. 结构化图示（Mermaid，仅关系已确认且 profile 可用时）
+11. 原始页面图或 PNG fallback（仅需要保留时）
+12. 待核对项
 
 `实用公式` 和公式本身各自单独成行。举例不能与公式或解读粘成同一个列表项。图示标签应留在列表/图示文字或模型结构中，不能伪装成普通正文。
 
@@ -49,6 +50,10 @@ order: 11
 - 只允许连接同一页面、同一阅读流中由现有文字直接证明的断句或断词。
 - 未经视觉确认的箭头、层级、流程、矩阵、颜色或列关系不写入已确认关系说明。
 - 无法确认的片段进入紧凑的待核对项，保留 `Unknown`/`needs-review`；已有原始页面图链接和 `reader_image_action` 不得更改。
+- Mermaid 只消费已确认节点、文字和边；可用时必须紧跟 crop/enhanced PNG fallback 和图题。
+  不可靠时不写 Mermaid，只保留 PNG，并把不确定项留在工程层。
+- 图级回填必须生成 `visual-asset-backfill` 证据，记录当前 content unit 的前后 SHA-256、插入的
+  asset/representation ID、逐链接解析结果和合并复核状态；缺少该证据时不能把图级闭环标为 passed。
 - `unit_status: passed` 只表示页面结构和文字边界通过；`relation_status: needs-review` 可以同时存在，不能被解释为视觉关系已通过。
 
 ## 阶段门
@@ -65,6 +70,7 @@ Workflow A 的 A7 负责，不属于单页 Markdown 修复步骤。
 
 - 拆分使用显式页码，输出只包含选定页的页面单元。
 - 合并按页面编号升序，不重新推断、摘要、翻译或补写来源文字；`reader_image_action` 与已有原始页面图链接逐字保留。
+- fenced Mermaid、PNG fallback 和图题逐字保留；合并器不得改变节点/边或删除 fallback。
 - `document-temp.md` 是当前页面单元的可审阅派生文件，不得覆盖或替代最终 `index.md`，也不得成为事实来源。
 - 合并失败时不得输出成功预览。
 

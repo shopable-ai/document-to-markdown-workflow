@@ -2,7 +2,12 @@ import Foundation
 import Vision
 import AppKit
 
-let path = CommandLine.arguments[1]
+let arguments = Array(CommandLine.arguments.dropFirst())
+let useLanguageCorrection = !arguments.contains("--no-language-correction")
+guard let path = arguments.last, !path.hasPrefix("--") else {
+    print("{\"status\":\"unavailable\",\"error\":\"missing-image-path\"}")
+    exit(2)
+}
 let url = URL(fileURLWithPath: path)
 guard let image = NSImage(contentsOf: url) else {
     print("{\"status\":\"unavailable\",\"error\":\"image-open-failed\"}")
@@ -16,7 +21,7 @@ guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff
 let request = VNRecognizeTextRequest()
 request.recognitionLanguages = ["zh-Hans", "en-US"]
 request.recognitionLevel = .accurate
-request.usesLanguageCorrection = true
+request.usesLanguageCorrection = useLanguageCorrection
 let handler = VNImageRequestHandler(cgImage: cg, options: [:])
 do {
     try handler.perform([request])
@@ -25,7 +30,7 @@ do {
         guard let top = obs.topCandidates(1).first else { return nil }
         return ["text": top.string, "confidence": top.confidence, "bbox": ["x": obs.boundingBox.origin.x, "y": obs.boundingBox.origin.y, "width": obs.boundingBox.size.width, "height": obs.boundingBox.size.height]]
     }
-    let payload: [String: Any] = ["status": "complete", "engine": "Apple Vision VNRecognizeTextRequest", "os": ProcessInfo.processInfo.operatingSystemVersionString, "languages": ["zh-Hans", "en-US"], "candidate_count": candidates.count, "candidates": candidates]
+    let payload: [String: Any] = ["status": "complete", "engine": "Apple Vision VNRecognizeTextRequest", "os": ProcessInfo.processInfo.operatingSystemVersionString, "languages": ["zh-Hans", "en-US"], "uses_language_correction": useLanguageCorrection, "candidate_count": candidates.count, "candidates": candidates]
     let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
     print(String(data: data, encoding: .utf8)!)
 } catch {

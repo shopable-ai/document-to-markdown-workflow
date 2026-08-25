@@ -56,6 +56,38 @@ tools:
     kind: local-deterministic
     used_by: [region-cropping]
     implementation: available
+    execution_binding: adjacent-reader-package-crop-and-relink-script
+    repository_entrypoint: skills/region-cropping/scripts/apply_reader_asset_crops.py
+    orchestration_status: reader-only-adjacent-code-not-wired-to-figure-lifecycle
+    lifecycle_compatibility: needs-review
+    lifecycle_gaps: [no-region-localization-record, no-crop-decision-schema, no-single-manifest-update, deletes-regenerable-reader-page-image-after-relink]
+    candidate_region_source: complex-region-detection-or-equivalent-human-approved-decision
+    human_visual_approval: required
+    reader_only_quality_gate: minimum-95-with-all-hard-checks-passed
+    reader_only_source_deletion: regenerable-engineering-page-render-only-after-crop-relink-verification
+    original_source_deletion: forbidden
+  - id: reader-asset-text-auditor
+    kind: local-deterministic
+    used_by: [region-cropping, semantic-visual-asset-pruning, asset-package-validation]
+    implementation: available
+    repository_entrypoint: skills/region-cropping/scripts/audit_text_heavy_reader_assets.py
+    default_ocr_route: apple-vision-then-tesseract
+    model_tokens_default: 0
+    output: evidence/text-heavy-reader-asset-audit.json
+    plan_output: evidence/text-heavy-reader-asset-removal-plan.json
+    apply_result: evidence/text-heavy-reader-asset-removal-result.json
+    apply_mode: explicit-hash-locked-plan-only
+    contract: contracts/visual-asset-pruning.yaml
+    deletion_gate: candidate-remove-and-score-at-least-95-and-all-hard-gates
+    lan_vision_role: needs-review-candidate-only-never-deletion-authority
+    modes: [markdown-reader-assets, standalone-image-corpus]
+    standalone_entrypoint: skills/region-cropping/scripts/audit_text_heavy_reader_assets.py --mode standalone-image-corpus
+    standalone_implementation: skills/semantic-visual-asset-pruning/scripts/standalone_image_corpus.py
+    standalone_evidence: [input-manifest.jsonl, classification.jsonl, deletion-ledger.jsonl, progress.json, summary.json, 最终验收报告.md]
+    standalone_streaming: single-image-fsync-checkpoint-and-immediate-sha-locked-delete
+    standalone_resume: on-disk-state-index-and-deleted-recovered
+    standalone_concurrency: default-1-max-2
+    automatic_restart: forbidden
   - id: system-ocr
     kind: local-system
     used_by: [local-ocr]

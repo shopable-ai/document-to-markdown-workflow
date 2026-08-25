@@ -50,6 +50,7 @@ from mac96_pdf_vision_runner import (  # noqa: E402
     write_json,
     write_yaml,
 )
+import pdf_resource_slots as resource_slots  # noqa: E402
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -425,6 +426,7 @@ def page_reader_record(target: Path, page: int, package_id: str) -> tuple[dict[s
     return section, trace, status, reader_markdown
 
 
+@resource_slots.uses_local_pdf_slot("mac96-vision-pdf-resume")
 def run(args: argparse.Namespace) -> Path:
     run_started_at = now()
     run_started_monotonic = time.monotonic()

@@ -10,6 +10,12 @@
 - 视觉层：原始页面、嵌入媒体、复杂区域和局部裁剪图；
 - 追溯层：来源页码、对象坐标、出现记录、哈希、状态和不确定性。
 
+当前默认终稿链路还有一个固定收口：`page-units -> document-temp.md -> heading repair -> 合并后保守格式化 -> index.md`。
+这一步的正式提示词引用位于 `references/prompts/markdown-post-merge-formatting.zh.txt`；它只约束终态整理边界，不允许改图片路径、页序或再额外生成同内容 Markdown 别名。
+格式化器支持确定性、模型可选和模型必需三种模式。局域网 HTTP、Codex CLI profile/default、环境变量和失败回退的正式说明见
+[`../../references/model-provider-configuration.zh.md`](../../references/model-provider-configuration.zh.md)，机器契约见
+[`../../contracts/markdown-post-merge-model-routing.yaml`](../../contracts/markdown-post-merge-model-routing.yaml)。未配置 `.env` 时保持确定性模式，不隐式产生在线调用。
+
 ## 什么时候使用
 
 适合：
@@ -163,6 +169,49 @@ checkpoint 位于 `page-batch-*/checkpoint.json`。恢复时使用
 `document-temp.md` 是当前已通过页面单元的可审阅派生预览，不能覆盖或替代最终
 `index.md`，也不能成为新的事实来源。未确认的箭头、层级、流程、矩阵或颜色关系只能保留在
 `Unknown`/`needs-review` 待核对项中。
+
+### 图级视觉资产升级（可选）
+
+扫描图或复杂视觉资产需要从整页图升级为可读图区域时，复用 A3–A6，不建立新 Workflow：
+
+```text
+需求盘点 → 来源页解析 → 区域定位 → crop 决策/接受
+        → enhanced-raster（可选）→ Mermaid（可选）
+        → 同一 manifest.yaml 与读者资产选择
+        → 当前 page-unit/segment 回填 → 确定性再生成 → 批次验收
+```
+
+- 每批只处理同一个 page-unit、segment 或其他已登记最小来源单元中的 1–2 张图，完整闭环后再扩大。
+- F0 从原始/来源最小单元、cleaned/page-unit、派生 Markdown、现有资产和同一 Manifest 提取需求并
+  维护文档级 `figure_coverage`；cleaned/final 丢失引用仍记录为 `reference-missing`，不能据此删图。
+- F1 页码不确定时只探查候选页并保存页面哈希、contact sheet 页序/哈希和选择结论；复用 legacy
+  副本要保存 `source_equivalence`。contact sheet 只作 evidence，不进入读者包。
+- contact sheet/thumbnail 只用于找页；预览图上的候选框必须保存尺度/旋转变换，并回到带哈希的
+  全分辨率 parent 重新定位和复核四边，不能把缩略图坐标直接当正式 crop geometry。
+- 与同批页面图尺寸一致，或仍含页眉、页码、章节标题、正文段落的图片，优先视为整页导出候选。
+- 裁切先锁横向、后调纵向；两侧可能有箭头、标签、括号或流程线时宁可留白，geometry 记录为
+  `WxH+X+Y`。裸 geometry 不是区域定位证据：必须先由 `complex-region-detection` 或等价人工过程
+  生成候选区域，再保存 candidate/accepted geometry、坐标空间、四边检查和复核证据。
+- 黑白图增强可以使用 Gray、auto-level、`brightness-contrast 5x18/5x20`、
+  `sharpen 0x1.2–0x1.4` 的可配置组合，但只允许改善可读性；效果变差时使用原 crop。
+- Mermaid 只用于已确认的流程、推理链、层级、时间线或明确节点—边关系；任何文字或关系不可靠时
+  只回填 crop/enhanced PNG。可靠 Mermaid 也必须通过语法、渲染、来源语义和 fallback 链接检查，
+  并保留 PNG fallback。
+- 同页多图复用 page-render parent，但每图保留独立 figure/region/occurrence ID、ordinal 和 crop
+  decision。放大图、节点子图、OCR probe、overlay 和比较图只作工程诊断，不能成为读者资产或真值。
+- 来源 page-render、crop、enhanced-raster、派生 profile 和 Markdown binding 全部复用同一个
+  `manifest.yaml`。来源引用缺失时先调查投影/写出/合并环节，不删除来源资产。
+- 历史逐图 Manifest 保留路径/哈希后只作迁移证据，资产记录合入唯一 `manifest.yaml`；历史
+  `success` 未通过当前门禁前归一化为 `needs-review`。
+- 来源案例的 `pages/crops/enhanced/derived/manifests` 只说明生命周期；正式工程包和读者包仍使用
+  扁平 `assets/`，page-unit 使用 `../assets/...`，根 `index.md` 使用 `assets/...`。
+- F8 分别计算 `batch_status` 和 `document_status`；全书 expected figure IDs 未全部闭合或仍有
+  missing/reference-missing/needs-review 时，即使当前 1–2 张图 passed，也不得声明文档图片线完成。
+
+完整的 F0–F8 缩进任务树、代码/人工执行绑定和实现真实性边界见
+[图级视觉资产升级生命周期](../../references/figure-asset-lifecycle.zh.md)。该可选工作包
+不改变 native-first PDF 路由，不触发整书 OCR，也不把 Marker、Surya OCR、固定分块或 GPT 清理
+升级为默认路线。
 
 ### 页面视觉理解
 
@@ -333,13 +382,14 @@ A1–A7 是当前 Workflow 的运行阶段，不是完整的工程任务树。�
 
 1. **A1 来源预检**：识别文件类型、页数、文字层和可解析性。
 2. **A2 原生内容提取**：当前 active runner 优先解析 PPTX XML 或 PDF 布局；DOCX OOXML 仍是未接入生产入口的扩展路线。
-3. **A3 视觉来源资产保留**：保留整页图和嵌入媒体；只有整页图无法支撑复杂关系复核时才生成区域图，不能为了满足目录而重复截图。
+3. **A3 视觉来源资产保留**：保留整页图和嵌入媒体；只有整页图无法支撑复杂关系复核时才生成区域图，不能为了满足目录而重复截图；按需图级升级时在同一 manifest 中登记 crop、可选 enhanced-raster 及其父子派生和 fallback。
 4. **A4 文字识别、Markdown 结构重建与广告策略**：原生结构提取后，将 Apple Vision OCR 加
    确定性结构重建、mac96 小视觉模型和 mac96 30B 作为候选路线，用同一真实页面集比较后选择。
    每页依次保留不可变的原始文字证据、重建标题/自然段/目录/列表的 Markdown 候选，以及独立广告
    策略结果；提取和结构重建不得删除微信号、推广语或二维码附近说明。复杂结构或明确重建意图的
-   资产，额外保存 visual reconstruction profile。
-5. **A5 Markdown 组装与视觉资产语义筛选**：建立页面/章节结构、关系说明和视觉链接；只从读者层移除已被可靠文字覆盖且没有视觉增量的封面、目录或纯文字页面图，保留复杂图示和关系布局及其来源资产登记。
+   资产，额外保存 visual reconstruction profile；只有节点、文字和边全部有证据时才附可选 Mermaid，
+   并始终保留 PNG fallback。
+5. **A5 Markdown 组装与视觉资产语义筛选**：建立页面/章节结构、关系说明和视觉链接；图级升级只回填当前最小内容单元，可靠 Mermaid 后紧跟 PNG fallback，不可靠时只写 crop/enhanced PNG；只从读者层移除已被可靠文字覆盖且没有视觉增量的封面、目录或纯文字页面图，保留复杂图示和关系布局及其来源资产登记。
 6. **A6 命名与来源登记**：处理语义命名、来源出现记录、内容去重和筛选后的资产登记。
 7. **A7 资产包验收**：执行链接、完整性、追溯性和不确定性检查。
 

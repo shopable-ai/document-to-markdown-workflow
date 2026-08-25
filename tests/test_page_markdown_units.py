@@ -115,6 +115,33 @@ def test_merge_sorts_units_without_rewriting_text(tmp_path: Path):
     assert "assets/pages/p002.png" in merged
 
 
+def test_merge_preserves_confirmed_mermaid_and_png_fallback_verbatim(tmp_path: Path):
+    unit = page_unit(1, "机会成本模型", "../assets/opportunity-cost-enhanced.png")
+    unit = unit.replace("<!-- relation-status: needs-review -->", "<!-- relation-status: confirmed -->")
+    mermaid = """## 结构化图示（Mermaid）
+
+```mermaid
+flowchart TD
+    A[选择] --> B[机会成本]
+```
+
+![机会成本模型（PNG fallback）](../assets/opportunity-cost-enhanced.png)
+
+机会成本模型
+
+"""
+    unit = unit.replace("## 原始页面图\n", mermaid + "## 原始页面图\n")
+    source = tmp_path / "p001.md"
+    output = tmp_path / "document-temp.md"
+    source.write_text(unit, encoding="utf-8")
+
+    merge_units([source], output)
+
+    merged = output.read_text(encoding="utf-8")
+    assert mermaid in merged
+    assert "../assets/opportunity-cost-enhanced.png" in merged
+
+
 def test_later_pages_require_a_passed_prior_gate(tmp_path: Path):
     source = tmp_path / "index.md"
     source.write_text("## 一\n\n正文\n\n![图](assets/pages/p001.png)\n\n## 二\n\n正文\n\n![图](assets/pages/p002.png)\n", encoding="utf-8")

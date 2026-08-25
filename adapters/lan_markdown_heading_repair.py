@@ -17,11 +17,13 @@ try:
         page_reader_image_policy,
         project_page_image_reference,
     )
+    from adapters.markdown_post_merge_formatter import format_run_root
 except ModuleNotFoundError:  # Direct script execution from adapters/.
     from lan_pdf_vision_to_markdown import (
         page_reader_image_policy,
         project_page_image_reference,
     )
+    from markdown_post_merge_formatter import format_run_root
 
 
 EXPECTED_MODEL = "qwen3-vl:30b-a3b-instruct"
@@ -38,6 +40,7 @@ SHORT_HEADING_RE = re.compile(r"^\s*(摘要|目录|前言|序言|引言|结语|�
 PROTECTED_RE = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)、]\s+|>\s*|\||!\[|\[.+\]\(|<!--|```|---\s*$)"
 )
+IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 DECISION_RE = re.compile(
     r"^LINE\s+(\d+)\tLEVEL\s+([0-6])\tCONFIDENCE\s+"
     r"(high|medium|low)\tREASON\s+(.+)$",
@@ -391,6 +394,28 @@ def _validate_heading_only(
     }
 
 
+def _image_reference_sequence(markdown: str) -> list[str]:
+    return [match.group(1).strip() for match in IMAGE_RE.finditer(markdown)]
+
+
+def _validate_post_merge_formatting(before: str, after: str) -> dict[str, Any]:
+    before_markers = [int(value) for value in PAGE_MARKER_RE.findall(before)]
+    after_markers = [int(value) for value in PAGE_MARKER_RE.findall(after)]
+    before_images = _image_reference_sequence(before)
+    after_images = _image_reference_sequence(after)
+    errors: list[str] = []
+    if before_markers != after_markers:
+        errors.append("页面标记顺序改变")
+    if before_images != after_images:
+        errors.append("图片引用顺序或路径改变")
+    return {
+        "passed": not errors,
+        "page_markers_preserved": before_markers == after_markers,
+        "image_references_preserved": before_images == after_images,
+        "errors": errors,
+    }
+
+
 def run_heading_repair(
     *, run_root: Path, timeout_seconds: int = 900, use_model: bool = True
 ) -> dict[str, Any]:
@@ -412,6 +437,8 @@ def run_heading_repair(
             and existing.get("index_sha256") == sha256_file(existing_index_path)
             and (existing.get("validation") or {}).get("heading_prefix_only") is True
             and (existing.get("validation") or {}).get("page_markers_preserved") is True
+            and ((existing.get("post_merge_formatting") or {}).get("status") == "passed")
+            and ((existing.get("formatting_validation") or {}).get("passed") is True)
         ):
             return existing
     original_pages = {
@@ -480,8 +507,21 @@ def run_heading_repair(
     )
     index_path = run_root / "index.md"
     status = "needs-review" if unresolved or model_errors else "passed"
+    formatting_report: dict[str, Any] | None = None
+    formatting_validation: dict[str, Any] | None = None
     if status == "passed":
         atomic_write_text(index_path, final_text)
+        formatting_report = format_run_root(
+            run_root=run_root,
+            source=index_path,
+            destination=index_path,
+        )
+        formatted_text = index_path.read_text(encoding="utf-8")
+        formatting_validation = _validate_post_merge_formatting(final_text, formatted_text)
+        if not formatting_validation["passed"]:
+            raise HeadingRepairError(
+                f"合并后格式化破坏结构约束：{formatting_validation['errors']}"
+            )
     report = {
         "status": status,
         "source_path": str(document_temp),
@@ -496,6 +536,8 @@ def run_heading_repair(
         "unresolved": unresolved,
         "model_errors": model_errors,
         "validation": validation,
+        "post_merge_formatting": formatting_report,
+        "formatting_validation": formatting_validation,
     }
     reports = run_root / "reports"
     write_json(reports / "heading-repair.json", report)

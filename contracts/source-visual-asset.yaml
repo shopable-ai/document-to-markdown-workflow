@@ -1,14 +1,14 @@
 contract: source-visual-asset
-version: 0.2.0
-description: 来源页面、嵌入媒体或复杂区域视觉资产的登记契约。
+version: 0.5.0
+description: 来源页面、嵌入媒体、裁切图、可读性增强图或复杂区域视觉资产的单一 manifest 登记契约。
 required:
   asset_id: string
   file_name: string
   file_path: string
   display_name: string
-  asset_kind: enum[page-render, embedded-media, complex-region, crop, input-image]
+  asset_kind: enum[page-render, embedded-media, complex-region, crop, enhanced-raster, input-image]
   source_location: object
-  extraction_method: enum[embedded-lossless, office-render, pdf-render, original-preserved, region-crop, model-understanding]
+  extraction_method: enum[embedded-lossless, office-render, pdf-render, original-preserved, region-crop, deterministic-enhancement, model-understanding]
   source:
     package_id: string
     source_fingerprint: string
@@ -36,6 +36,13 @@ optional:
   - parent_asset_id
   - extraction_notes
   - reconstruction_profile
+  - derivation
+  - crop_decision
+  - markdown_bindings
+  - figure_id
+  - review_notes
+  - source_equivalence
+  - historical_import
 reconstruction_profile:
   required: [profile_id, path, mode, status]
   profile_id: string
@@ -43,6 +50,77 @@ reconstruction_profile:
   mode: enum[structure-and-prompt, structure-only, prompt-only, insufficient-evidence]
   status: enum[available, needs-review, not-applicable, unavailable]
   contract: contracts/visual-reconstruction-profile.yaml
+derivation:
+  required: [parent_asset_ids, operation, parameters, structure_preserved, fallback_asset_id, status]
+  parent_asset_ids: array
+  operation: enum[region-crop, raster-readability-enhancement]
+  parameters: object
+  structure_preserved: boolean
+  fallback_asset_id: string|null
+  status: enum[complete, needs-review, failed]
+  crop_parameters:
+    required: [geometry, horizontal_policy, vertical_policy]
+    geometry: string
+    horizontal_policy: enum[conservative-locked, manually-confirmed-narrowing]
+    vertical_policy: enum[trim-first, manually-confirmed]
+  enhancement_parameters:
+    required: [colorspace, auto_level, brightness_contrast, sharpen, tool, tool_version]
+    colorspace: string
+    auto_level: boolean
+    brightness_contrast: string|null
+    sharpen: string|null
+    tool: string
+    tool_version: string|null
+crop_decision:
+  required: [region_id, localization_basis, required_elements, excludable_elements, candidate_geometry, accepted_geometry, coordinate_space, safety_margins, edge_checks, review_evidence, adjustment_history, status]
+  region_id: string
+  localization_basis: array
+  required_elements: array
+  excludable_elements: array
+  candidate_geometry: string
+  accepted_geometry: string|null
+  coordinate_space:
+    required: [origin, source_width, source_height, rotation_degrees]
+    origin: enum[top-left]
+    source_width: integer
+    source_height: integer
+    rotation_degrees: integer
+  safety_margins:
+    required: [top, right, bottom, left]
+    top: integer
+    right: integer
+    bottom: integer
+    left: integer
+  edge_checks:
+    required: [top, right, bottom, left, foreground_touching_edges]
+    side_status: enum[clear, intentional-contact, clipped, unknown]
+    foreground_touching_edges: array
+  review_evidence:
+    required: [source_preview, crop_preview, overlay_or_equivalent, reviewer, reviewed_at]
+    source_preview: string
+    crop_preview: string
+    overlay_or_equivalent: string
+    reviewer: string
+    reviewed_at: string
+  adjustment_history: array
+  status: enum[accepted, needs-review, rejected]
+markdown_binding:
+  required: [content_unit_id, markdown_path, role, relative_path, link_check, status]
+  content_unit_id: string
+  markdown_path: string
+  role: enum[primary-raster, png-fallback, evidence-only]
+  relative_path: string
+  link_check: enum[resolved, needs-review, missing]
+  status: enum[linked, needs-review, missing]
+source_equivalence:
+  required: [source_path, source_sha256, materialized_path, materialized_sha256, method, status, notes]
+  method: enum[byte-copy, deterministic-render, deterministic-transform, unknown]
+  status: enum[byte-identical, rendered-equivalent, transformed-with-provenance, needs-review]
+historical_import:
+  required: [source_record_path, source_record_sha256, legacy_status, normalized_status, normalization_reason, evidence_only]
+  legacy_status: string|null
+  normalized_status: enum[available, needs-review, unavailable]
+  evidence_only: boolean
 invariants:
   - file_name 必须符合 references/naming-policy.zh.md 的 ASCII 英文稳定格式
   - display_name 必须具有人类可读语义，且不能代替 file_name
@@ -53,6 +131,17 @@ invariants:
   - status=available 时 media.sha256 必须与 file_path 的实际 SHA-256 相等
   - status=available 时 source.source_occurrences 中不得存在 status=unknown；无法定位必须将资产标记为 needs-review 或 unavailable
   - reconstruction_profile.path 存在时必须指向同一输出包内的 profile，并且 profile.source.asset_id 必须等于该资产的 asset_id
+  - crop/complex-region 必须通过 derivation.parent_asset_ids 回指可用的 page-render、embedded-media 或 input-image；parameters.geometry 使用 WxH+X+Y，坐标越界或父资产缺失时不得 available
+  - crop/complex-region 不能只接收裸 geometry；必须消费 complex-region-detection 或等价人工定位产生的 region_id、触发依据、必须保留元素和候选 geometry
+  - crop/complex-region status=available 时 crop_decision.status 必须为 accepted，accepted_geometry 必须等于 derivation.parameters.geometry，坐标空间必须以来源像素左上角为原点并记录来源尺寸与旋转
+  - crop_decision 的 top/right/bottom/left 不能为 clipped 或 unknown；检测到前景触边时必须有 intentional-contact 说明和 review evidence，否则资产状态最多为 needs-review
+  - enhanced-raster 必须以可用 crop/complex-region 为父资产，operation=raster-readability-enhancement 且 structure_preserved=true；增强变差或结构可能变化时状态最多为 needs-review，并以原 crop 作为 fallback_asset_id
+  - page-render、crop 与 enhanced-raster 都登记在同一个 manifest.yaml 的 assets 列表，不为图片升级创建第二套 manifest
+  - markdown_bindings 只有 link_check=resolved 且目标相对路径存在时才能 status=linked；Markdown 引用丢失不得触发来源 page-render、crop、enhanced-raster 或其哈希记录删除，必须先标记 needs-review 并调查投影、写出或合并环节
+  - 读者层只绑定实际使用的 primary-raster/png-fallback；工程来源 page-render 可以是 evidence-only，但仍必须保留来源文件、哈希和 occurrence
+  - legacy 页图复制或重物化为 page-render 时必须记录 source_equivalence；byte-identical 要求双方 SHA-256 完全相同，发生转换时必须记录工具、参数和来源链，未知时最多为 needs-review
+  - 同一个 page-render 可以作为多个 figure/region 的共同父资产；不同图不得因 source page、文件哈希或可见相似而共用 figure_id、region_id、source_occurrence_id 或 crop_decision
+  - historical_import.evidence_only 必须为 true；历史逐图记录不得成为第二个活跃 Manifest，legacy success 未经当前门禁重验时 normalized_status 必须为 needs-review
 
 source_occurrence:
   required: [source_occurrence_id, source_file, page, region, object_ids, parent_asset_id, ordinal, status]
@@ -65,3 +154,6 @@ source_occurrence:
     parent_asset_id: string|null
     ordinal: integer
     status: enum[located, needs-review, unknown]
+    printed_page: integer|string|null
+    content_unit_id: string|null
+    figure_id: string|null

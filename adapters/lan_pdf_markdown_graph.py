@@ -42,6 +42,11 @@ except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import pdf_task_guard as task_guard
 
 try:
+    import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_resource_slots as resource_slots
+
+try:
     import pdf_route_detection as page_router
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import pdf_route_detection as page_router
@@ -70,6 +75,8 @@ DEFAULT_SMOKE_LABEL = "100-thinking-tools-langgraph-smoke"
 NATIVE_FORMAT_VERSION = "0.6.0-pure-native-langgraph"
 NATIVE_EVIDENCE_LEVELS = ("compact", "diagnostic", "full")
 DEFAULT_DPI = 220
+VISUAL_ASSET_CLASSIFIER_PAGE_TIMEOUT_SECONDS = 300
+VISUAL_ASSET_CLASSIFIER_STAGE_OVERHEAD_SECONDS = 60
 INTERNAL_STAGE_ROOT = ".stages"
 NATIVE_SMOKE_STAGE = "native-smoke"
 NATIVE_BATCH_STAGE = "native-pages"
@@ -136,6 +143,22 @@ class NativeGraphSettings:
     batch_size: int
     timeout_seconds: int
     resume: bool = False
+
+
+def _visual_asset_classification_stage_timeout(
+    *, base_timeout_seconds: int, remaining_page_count: int
+) -> int:
+    """Allow the sequential classifier its per-page timeout plus stage overhead."""
+
+    if remaining_page_count <= 0:
+        return base_timeout_seconds
+    return max(
+        base_timeout_seconds,
+        (
+            remaining_page_count * VISUAL_ASSET_CLASSIFIER_PAGE_TIMEOUT_SECONDS
+            + VISUAL_ASSET_CLASSIFIER_STAGE_OVERHEAD_SECONDS
+        ),
+    )
 
 
 def _failure_state(
@@ -300,11 +323,10 @@ def build_graph(settings: GraphSettings):
 
     def verify_merge_coverage(state: GraphState) -> dict[str, Any]:
         try:
-            report = _native_check_merge_coverage(
+            report = _visual_check_merge_coverage(
                 run_root=settings.run_root,
                 selected_pages=state["completed_pages"],
                 markdown_path=settings.run_root / "document-temp.md",
-                require_exact_content=True,
             )
             report_path = settings.run_root / "reports" / "merge-coverage.json"
             _native_write_json(report_path, report)
@@ -466,6 +488,21 @@ def build_graph(settings: GraphSettings):
                 == (report.get("counts") or {}).get("images_after")
             )
             if not reusable:
+                classified_pages: set[int] = set()
+                if classification_path.is_file():
+                    try:
+                        classification = json.loads(
+                            classification_path.read_text(encoding="utf-8")
+                        )
+                        classified_pages = {
+                            int(page)
+                            for page in classification.get("completed_pages", [])
+                        }
+                    except (OSError, ValueError, TypeError):
+                        classified_pages = set()
+                remaining_page_count = sum(
+                    page not in classified_pages for page in state["completed_pages"]
+                )
                 classify = subprocess.run(
                     [
                         sys.executable,
@@ -479,7 +516,10 @@ def build_graph(settings: GraphSettings):
                     stderr=subprocess.PIPE,
                     text=True,
                     check=False,
-                    timeout=settings.timeout_seconds,
+                    timeout=_visual_asset_classification_stage_timeout(
+                        base_timeout_seconds=settings.timeout_seconds,
+                        remaining_page_count=remaining_page_count,
+                    ),
                 )
                 if classify.returncode not in {0, 1} or not classification_path.is_file():
                     raise ValueError(
@@ -613,6 +653,7 @@ def build_graph(settings: GraphSettings):
     return builder.compile()
 
 
+@resource_slots.uses_local_pdf_slot("lan-pdf-markdown-graph-visual")
 def run_graph(settings: GraphSettings) -> GraphState:
     source = settings.source.expanduser().resolve()
     run_root = settings.run_root.expanduser().resolve()
@@ -815,6 +856,7 @@ def _default_native_smoke_pages(selected_pages: list[int]) -> list[int]:
     return result
 
 
+@resource_slots.uses_local_pdf_slot("lan-pdf-markdown-smoke")
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     source = (
         THINKING_TOOLS_SOURCE
@@ -1209,13 +1251,17 @@ def _native_needs_review(
 
 
 def _native_batch_root(result: dict[str, Any]) -> Path:
-    run_root = result.get("output") or result.get("run_root")
-    if run_root:
-        return Path(str(run_root)).expanduser().resolve()
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     summary_root = summary.get("run_root")
     if summary_root:
         return Path(str(summary_root)).expanduser().resolve()
+    run_root = result.get("run_root")
+    if run_root:
+        return Path(str(run_root)).expanduser().resolve()
+    output = result.get("output")
+    if output:
+        output_path = Path(str(output)).expanduser().resolve()
+        return output_path.parent if output_path.suffix else output_path
     markdown = summary.get("markdown")
     if markdown:
         return Path(str(markdown)).expanduser().resolve().parent
@@ -1289,6 +1335,7 @@ def _native_resume_decision(
         run_root / "smoke-run",
     ]
     batch_roots = [
+        run_root,
         _internal_stage_root(run_root, NATIVE_BATCH_STAGE),
         run_root / "batch-run",
     ]
@@ -1576,6 +1623,18 @@ def _native_check_merge_coverage(
     }
 
 
+def _visual_check_merge_coverage(
+    *, run_root: Path, selected_pages: list[int], markdown_path: Path
+) -> dict[str, Any]:
+    """Verify visual merge coverage without rejecting deterministic reconciliation."""
+    return _native_check_merge_coverage(
+        run_root=run_root,
+        selected_pages=selected_pages,
+        markdown_path=markdown_path,
+        require_exact_content=False,
+    )
+
+
 def _native_visible_body(line: str) -> str:
     return re.sub(r"^\s{0,3}#{1,6}[ \t]+", "", line, count=1)
 
@@ -1739,7 +1798,9 @@ detected=0; preserved=0; failures=[]; fonts=Counter(); sizes=Counter()
 with pdfplumber.open(source) as pdf:
     for page_number in pages:
         page=pdf.pages[page_number-1]
-        evidence_path=batch_root/'pages'/f'page-{page_number:03d}'/'evidence'/f'page-{page_number:03d}.json'
+        legacy_path=batch_root/'pages'/f'page-{page_number:03d}'/'evidence'/f'page-{page_number:03d}.json'
+        nested_path=batch_root/'pages'/f'page-{page_number:03d}'/f'page-{page_number:03d}'/'evidence'/f'page-{page_number:03d}.json'
+        evidence_path=legacy_path if legacy_path.is_file() else nested_path
         evidence=json.loads(evidence_path.read_text(encoding='utf-8'))
         rendered_text=(units/f'p{page_number:03d}.md').read_text(encoding='utf-8')
         raw=''.join(rendered_text.split())
@@ -1973,7 +2034,7 @@ def build_native_graph(settings: NativeGraphSettings):
                 "--source",
                 str(settings.source),
                 "--output-root",
-                str(settings.run_root),
+                str(smoke_root),
                 "--resume-package",
                 str(smoke_root),
                 "--pages",
@@ -2048,7 +2109,10 @@ def build_native_graph(settings: NativeGraphSettings):
         try:
             facts = _native_pdf_facts(settings.source)
             selected = _native_parse_pages(settings.pages, facts["total_pages"])
-            batch_root = _internal_stage_root(settings.run_root, NATIVE_BATCH_STAGE)
+            # The full native page packages are part of the user-facing result,
+            # so write them directly to ``run_root/pages/page-NNN``.  Hidden
+            # stage roots remain supported above only for resuming older runs.
+            batch_root = settings.run_root
             if settings.batch_size != 1:
                 raise ValueError("native LangGraph requires batch_size=1")
             settings.run_root.mkdir(parents=True, exist_ok=True)
@@ -2137,7 +2201,7 @@ def build_native_graph(settings: NativeGraphSettings):
                 "--source",
                 str(settings.source),
                 "--output-root",
-                str(settings.run_root),
+                str(batch_root),
                 "--resume-package",
                 str(batch_root),
                 "--pages",
@@ -2403,6 +2467,7 @@ def build_native_graph(settings: NativeGraphSettings):
     return builder.compile()
 
 
+@resource_slots.uses_local_pdf_slot("lan-pdf-markdown-graph-native")
 def run_native_graph(settings: NativeGraphSettings) -> GraphState:
     source = settings.source.expanduser().resolve()
     run_root = settings.run_root.expanduser().resolve()
@@ -2440,7 +2505,9 @@ def run_native_graph(settings: NativeGraphSettings) -> GraphState:
         with task_guard.acquire_task_lock(
             source=source,
             source_sha256=facts["sha256"],
-            output_root=run_root,
+            # Lock at the package parent so the graph-level lock does not
+            # collide with its own page-batch child lock inside ``run_root``.
+            output_root=run_root.parent,
             pages=settings.pages,
             entrypoint="lan_pdf_markdown_graph.py",
         ):
@@ -2457,6 +2524,7 @@ def run_native_graph(settings: NativeGraphSettings) -> GraphState:
         raise
 
 
+@resource_slots.uses_local_pdf_slot("lan-pdf-markdown-graph-hybrid")
 def run_page_hybrid_graph(
     *,
     source: Path,

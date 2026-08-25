@@ -17,6 +17,11 @@ order: 10
 
 参考实现：`tests/validate_real_output_root.py`。对真实包必须单独运行该 validator；`tests/validate_workflow_package.py` 只验证规格注册表，不能替代 output-root 验收。validator 会重新读取文件并校验目录、Markdown 链接、manifest asset ID、来源 occurrence、媒体 MIME/尺寸/SHA-256、A1–A7 stage evidence、报告状态一致性和禁止秘密字段。
 
+Manifest 含 `figure_coverage` 时，validator 还会检查 expected figure IDs 与逐图记录一一对应、分类
+计数、引用资产 ID、batch/document 状态边界。存在 missing、reference-missing、needs-review 或未记录
+图号时，即使当前 batch passed，document status 也不得 passed。需求抽取本身仍由 F0 producer/
+procedure 完成，validator 只重读声明，不伪造覆盖结果。
+
 验收还必须检查每个 section 的阅读顺序：标题、文字和关系说明在视觉资产之前；检查 A4 是否存在开放集合未知形式扫描，且所有未知候选都有来源位置、资产链接、风险和 `Unknown`/`needs-review` 状态。没有未知形式扫描证据时，最多为 `needs-review`，不得 `accepted`。
 
 ## 边界

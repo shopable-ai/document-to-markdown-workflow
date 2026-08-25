@@ -290,6 +290,28 @@ def test_mac96_classifier_accepts_structured_candidate_only():
     assert result["reason_codes"] == ["table-of-contents"]
 
 
+def test_mac96_classifier_accepts_crop_required_for_mixed_text_visual_page():
+    module = load_module(CLASSIFY, "semantic_visual_asset_classifier_crop_required")
+    result = module.parse_model_payload(
+        {
+            "response": json.dumps(
+                {
+                    "decision": "crop-required",
+                    "reason_codes": ["mixed-text-visual", "diagram"],
+                    "confidence": "high",
+                    "semantic_text_coverage": "complete",
+                    "visual_increment": "present",
+                    "rationale": "正文已进入 Markdown，但页面中部关系图需要最小充分区域裁图。",
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    assert result["decision"] == "crop-required"
+    assert result["reason_codes"] == ["mixed-text-visual", "diagram"]
+
+
 def test_mac96_classifier_accepts_legacy_text_covered_decision_alias():
     module = load_module(CLASSIFY, "semantic_visual_asset_classifier_legacy_alias")
     result = module.parse_model_payload(
@@ -521,5 +543,51 @@ def test_langgraph_apply_projects_page9_delete_and_keeps_page24_retain(tmp_path)
     assert "page-024.png" in index_text
     assert "page-024.png" in document_temp
     assert "page-024.png" in page24_unit
+    assert not (package / "assets/page-009.png").exists()
+    assert (package / "assets/page-024.png").is_file()
+
+
+def test_langgraph_preview_routes_mixed_visual_page_to_crop_before_delete(tmp_path):
+    package = make_custom_langgraph_package(
+        tmp_path,
+        page_decisions={
+            9: {
+                "decision": "candidate-remove",
+                "reason_codes": ["text-covered"],
+                "confidence": "high",
+                "semantic_text_coverage": "complete",
+                "visual_increment": "none",
+            },
+            24: {
+                "decision": "crop-required",
+                "reason_codes": ["mixed-text-visual", "diagram"],
+                "confidence": "high",
+                "semantic_text_coverage": "complete",
+                "visual_increment": "present",
+            },
+        },
+        root_linked_pages={9, 24},
+    )
+
+    preview = run_prune(
+        package,
+        "--classification-report",
+        "evidence/visual-asset-classification-mac96.json",
+        "--delete-source-files",
+    )
+
+    assert preview.returncode == 0, preview.stderr
+    plan = json.loads((package / "evidence/visual-asset-pruning-plan.json").read_text(encoding="utf-8"))
+    page24 = next(item for item in plan["decisions"] if item["page"] == 24)
+    assert page24["planned_action"] == "crop-before-delete"
+    assert plan["counts"]["crop_required"] == 1
+
+    applied = run_prune(
+        package,
+        "--apply-plan",
+        "evidence/visual-asset-pruning-plan.json",
+        "--delete-source-files",
+    )
+    assert applied.returncode == 0, applied.stderr
     assert not (package / "assets/page-009.png").exists()
     assert (package / "assets/page-024.png").is_file()

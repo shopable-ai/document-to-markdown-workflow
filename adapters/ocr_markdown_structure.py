@@ -20,8 +20,8 @@ from typing import Any
 
 
 CONTRACT = "ocr-markdown-structure"
-VERSION = "0.2.0"
-PROMPT_VERSION = "deterministic-bbox-structure-v2"
+VERSION = "0.3.0"
+PROMPT_VERSION = "deterministic-bbox-structure-v3"
 CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百零〇0-9]+[章节篇部卷]\s*[：:]?")
 EXPLICIT_LIST_RE = re.compile(
     r"^(?:\d{1,4}[.、]|[（(]?[一二三四五六七八九十百零〇]+[）)、.]|[-*•·])\s*"
@@ -32,6 +32,7 @@ TRAILING_PAGE_RE = re.compile(
     r"(?:[/／]|[.．…·⋯,:：，]+|[?？])\s*\d{1,4}\s*$"
 )
 STRONG_TERMINAL_RE = re.compile(r"[。！？!?；;]$|[”’」』）)]$")
+PARAGRAPH_GAP_FACTOR = 3.5
 
 
 class StructureError(RuntimeError):
@@ -318,7 +319,7 @@ def reconstruct(payload: dict[str, Any], *, page: int) -> dict[str, Any]:
         if pending_paragraph:
             previous_text = _row_text(pending_paragraph[-1])
             gap = abs((previous_plain_center or center) - center)
-            if STRONG_TERMINAL_RE.search(previous_text) or gap > median_height * 1.75:
+            if STRONG_TERMINAL_RE.search(previous_text) or gap > median_height * PARAGRAPH_GAP_FACTOR:
                 flush_paragraph()
         pending_paragraph.append(row)
         previous_plain_center = center

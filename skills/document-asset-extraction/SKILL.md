@@ -31,9 +31,15 @@ order: 10
    - DOCX 使用 OOXML 段落、表格、图片和关系。
 4. `embedded-media-extraction`：按 PPT/PPTX、PDF、独立图片分别复制嵌入/原图并建立来源关系。
 5. `page-rendering` 与 `complex-region-detection`：保留整页图；对流程图、矩阵、组合图、图文混排区域按需生成局部图。
+   对需要图级升级的页面，继续复用 `region-cropping`，按每个最小内容单元 1–2 张图执行
+   `需求盘点 → 来源页 → 候选区域 → crop 决策/接受 → optional enhanced-raster → optional Mermaid →
+   同一 Manifest/读者投影 → 回填/再生成 → 验收`；不复制来源案例目录结构。候选区域必须先由
+   `complex-region-detection` 或等价人工定位产生，不能把裸 geometry 当作完成的裁切决策。
 6. `local-ocr`：仅对无文字层或原生提取冲突的区域做 OCR；记录引擎、语言和置信度。
 7. `text-source-reconciliation`：以原生文本为主，OCR/视觉结果仅为候选；冲突不得静默覆盖。
 8. 独立 Markdown 内容修复：以当前 Markdown 和显式提供的提取文字候选生成 raw/draft/diff；只能做来源支持的局部结构修复，不能把 OCR 或视觉候选直接当成优化完成。
+   结构清晰的流程/推理链/节点—边图可以由 `visual-reconstruction-profile` 记录可选 Mermaid，
+   但所有节点、文字和边都必须有来源证据，并始终保留 crop/enhanced PNG fallback。
 9. `markdown-structure-builder`：按当前 source 动态结构构造读者 Markdown，不使用固定标题或旧术语模板；OCR 候选和工程状态不得进入正文。
 10. `semantic-asset-naming` 与 `source-occurrence-registration`：生成可读文件名，并用 manifest 中的稳定 ID、哈希和来源位置处理跨文件重名。
 11. 验收：Markdown 组装后才运行独立 validator 和质量审计。
@@ -80,6 +86,8 @@ Markdown 文件合并成一篇新文档。
 - 视觉模型、mac96/SSH 和 OCR 都只能由当前 profile 的已验证能力显式启用；本轮不调用任何视觉模型或 OCR。
 - 在线视觉逐字转写仅在用户显式授权时，对当前一张页面图或区域图生成候选；不读取其他文件或相邻页，不能覆盖原生层或直接写入 `index.md`。
 - 高质量在线基准 → 本地视觉模型复现 → 质量比较 → 达标后降本是后期 calibration 路线，默认关闭且不属于本轮验收。
+- 图级升级不改变 native-first 或 `--no-model` 路由，不触发整书 OCR；Marker、Surya OCR、固定分块和 GPT 清理只能作为历史案例或显式配置。
+- Markdown 主编辑面是当前 page-unit、segment 或其他已登记最小内容单元；`document-temp.md`、`index.md` 和整书 final 从最小单元确定性生成。
 - 不确定内容使用工程层 `Unknown` 或 `needs-review`，不能伪装成确定事实，也不能泄漏为读者正文旁注。
 
 ## 最小验收

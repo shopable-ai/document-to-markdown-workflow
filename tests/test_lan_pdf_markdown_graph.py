@@ -98,6 +98,47 @@ def test_native_merge_coverage_rejects_a_truncated_final_markdown(tmp_path: Path
     assert report["checks"]["merged_page_sequence_matches"] is False
 
 
+def test_visual_merge_coverage_allows_deterministic_cross_page_reconciliation(
+    tmp_path: Path,
+):
+    units = tmp_path / "page-units"
+    units.mkdir()
+    (units / "p001.md").write_text(
+        "<!-- page:1 -->\n\n上一页断句\n",
+        encoding="utf-8",
+    )
+    (units / "p002.md").write_text(
+        "<!-- page:2 -->\n\n下一页续句\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "document-temp.md"
+    merged.write_text(
+        "<!-- page:1 -->\n\n上一页断句下一页续句\n\n<!-- page:2 -->\n",
+        encoding="utf-8",
+    )
+
+    report = graph._visual_check_merge_coverage(
+        run_root=tmp_path,
+        selected_pages=[1, 2],
+        markdown_path=merged,
+    )
+
+    assert report["status"] == "passed"
+    assert report["checks"]["merged_page_sequence_matches"] is True
+    assert report["checks"]["merged_content_matches_page_units"] is True
+
+
+def test_visual_asset_classification_timeout_scales_for_sequential_pages():
+    assert graph._visual_asset_classification_stage_timeout(
+        base_timeout_seconds=1800,
+        remaining_page_count=1,
+    ) == 1800
+    assert graph._visual_asset_classification_stage_timeout(
+        base_timeout_seconds=1800,
+        remaining_page_count=15,
+    ) == 4560
+
+
 def test_main_allows_no_model_with_auto_run_root(tmp_path: Path, monkeypatch, capsys):
     source = tmp_path / "book.pdf"
     source.write_bytes(b"%PDF-1.7\n")
@@ -336,6 +377,54 @@ def test_native_page_evidence_resolves_existing_nested_page_package(tmp_path: Pa
     nested.write_text("{}", encoding="utf-8")
 
     assert graph._native_page_evidence(batch_root, 1) == nested
+
+
+def test_native_resume_accepts_completed_top_level_page_packages(tmp_path: Path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"%PDF-1.7\n")
+    facts = {
+        "path": str(source.resolve()),
+        "sha256": graph._native_sha256(source),
+        "total_pages": 1,
+    }
+    (tmp_path / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "source_sha256": facts["sha256"],
+                "selected_pages": [1],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "pages" / "page-001").mkdir(parents=True)
+    (tmp_path / "page-units").mkdir()
+    (tmp_path / "backups" / "page-units-pre-cleanup").mkdir(parents=True)
+    for root in (
+        tmp_path / "page-units",
+        tmp_path / "backups" / "page-units-pre-cleanup",
+    ):
+        (root / "p001.md").write_text("<!-- page: 1 -->\n", encoding="utf-8")
+
+    decision = graph._native_resume_decision(
+        run_root=tmp_path,
+        source_facts=facts,
+        selected_pages=[1],
+    )
+
+    assert decision["conversion"] == "reuse-full"
+    assert decision["batch_root"] == tmp_path
+
+
+def test_native_batch_root_prefers_summary_run_root_over_progress_output(tmp_path: Path):
+    batch_root = tmp_path / "native-smoke"
+
+    assert graph._native_batch_root(
+        {
+            "output": str(batch_root / "progress.json"),
+            "summary": {"run_root": str(batch_root)},
+        }
+    ) == batch_root.resolve()
 
 
 def test_smoke_only_resume_restarts_full_conversion_instead_of_stalling(tmp_path: Path):

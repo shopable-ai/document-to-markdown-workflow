@@ -13,8 +13,17 @@ from typing import Any
 
 import yaml
 
+try:
+    from adapters import pdf_resource_slots as resource_slots
+except ImportError:  # pragma: no cover - direct script execution from repository root
+    import sys
 
-DECISIONS = {"retain", "candidate-remove", "needs-review"}
+    ROOT_FOR_IMPORT = Path(__file__).resolve().parents[3]
+    sys.path.insert(0, str(ROOT_FOR_IMPORT / "adapters"))
+    import pdf_resource_slots as resource_slots
+
+
+DECISIONS = {"retain", "crop-required", "candidate-remove", "needs-review"}
 REASONS = {
     "cover",
     "table-of-contents",
@@ -24,6 +33,7 @@ REASONS = {
     "flow",
     "color-coded-structure",
     "relation-dense-layout",
+    "mixed-text-visual",
     "needs-review",
 }
 CONFIDENCE = {"high", "medium", "low", "unknown"}
@@ -271,8 +281,8 @@ def classify_existing_visual_analysis(analysis: dict[str, Any]) -> dict[str, Any
     page_type = analysis.get("page_content_type")
     layout = analysis.get("layout_dependency")
 
-    if action in {"retain", "needs-review"}:
-        decision = "retain" if action == "retain" else "needs-review"
+    if action in {"retain", "crop-required", "needs-review"}:
+        decision = action
         fallback_reason = "diagram" if has_complex else "needs-review"
         return {
             "decision": decision,
@@ -385,6 +395,14 @@ def parse_model_payload(payload: Any) -> dict:
     ):
         decision = "needs-review"
         reasons = ["needs-review", *[item for item in reasons if item in REASONS and item != "needs-review"]]
+    if decision == "crop-required" and (
+        increment != "present"
+        or not set(reasons).intersection(
+            {"mixed-text-visual", "diagram", "table", "flow", "color-coded-structure", "relation-dense-layout"}
+        )
+    ):
+        decision = "needs-review"
+        reasons = ["needs-review", *[item for item in reasons if item in REASONS and item != "needs-review"]]
     return {
         "decision": decision,
         "reason_codes": reasons,
@@ -395,6 +413,7 @@ def parse_model_payload(payload: Any) -> dict:
     }
 
 
+@resource_slots.uses_visual_model_slot("mac96-visual-asset-classification")
 def classify_remote(
     image: Path,
     system_prompt: str,
@@ -452,6 +471,7 @@ def classify_remote(
 def _counts(records: list[dict]) -> dict[str, int]:
     return {
         "candidate_remove": sum(item.get("decision") == "candidate-remove" for item in records),
+        "crop_required": sum(item.get("decision") == "crop-required" for item in records),
         "retained": sum(item.get("decision") == "retain" for item in records),
         "needs_review": sum(item.get("decision") == "needs-review" for item in records),
         "existing_visual_analysis": sum(item.get("classification_source") == "existing-visual-analysis" for item in records),
@@ -591,7 +611,7 @@ def main() -> int:
                     base["visual_evidence_path"] = evidence_path
         records.append(base)
         _write_report(output, report_for("running"))
-    status = "complete" if not diagnostics and all(item.get("decision") in {"retain", "candidate-remove"} for item in records) else "needs-review"
+    status = "complete" if not diagnostics and all(item.get("decision") in {"retain", "crop-required", "candidate-remove"} for item in records) else "needs-review"
     report = report_for(status)
     _write_report(output, report)
     print(json.dumps(report, ensure_ascii=False, indent=2))

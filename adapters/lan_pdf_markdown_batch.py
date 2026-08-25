@@ -3,22 +3,28 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import csv
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Iterator
+from urllib.parse import unquote, urlparse
 
 try:
     from output_naming import package_timestamp, readable_package_stem
+    import pdf_resource_slots as resource_slots
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from .output_naming import package_timestamp, readable_package_stem
+    from . import pdf_resource_slots as resource_slots
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +34,18 @@ FORMAT_VERSION = "0.1.0"
 STATUS_VALUES = {"passed", "failed", "needs-review"}
 ROUTE_VALUES = {"native-only", "hybrid", "vision-only"}
 FINAL_STAGE = "heading-audit-repair-validation"
+CONVERSION_PROCESS_NAMES = (
+    "lan_pdf_markdown_batch.py",
+    "lan_pdf_markdown_graph.py",
+    "run_pdf_batches.py",
+    "lan_pdf_vision_to_markdown.py",
+    "apple_vision_pdf_to_markdown.py",
+    "mac96_pdf_vision_runner.py",
+)
+
+
+class BatchLockError(RuntimeError):
+    """Raised when another queue already owns one PDF collection."""
 
 
 def _graph_route_arguments(route: str | None) -> list[str]:
@@ -37,7 +55,12 @@ def _graph_route_arguments(route: str | None) -> list[str]:
     if selected == "hybrid":
         return []
     if selected == "vision-only":
-        return ["--visual-only"]
+        # Document-level detection says native text is insufficient, but the
+        # production contract still requires page-hybrid routing.  That router
+        # uses Apple Vision OCR for plain scanned text and reserves the LAN
+        # visual model for pages with corroborated visual structure.  The
+        # explicit full-document --visual-only mode is not implied here.
+        return []
     raise ValueError(f"unsupported document route: {selected}")
 
 
@@ -55,6 +78,53 @@ class SourceEntry:
     @property
     def source(self) -> Path:
         return Path(self.source_path).expanduser().resolve()
+
+
+@contextmanager
+def acquire_collection_lock(
+    *,
+    lock_root: Path,
+    batch_root: Path,
+    entries: list[SourceEntry],
+) -> Iterator[Path]:
+    """Allow only one top-level queue beneath the same collection root."""
+
+    lock_root = lock_root.expanduser().resolve()
+    lock_root.mkdir(parents=True, exist_ok=True)
+    pause_path = lock_root / ".pdf-collection-paused.json"
+    if pause_path.is_file():
+        pause = _read_json(pause_path) or {}
+        reason = str(pause.get("reason") or "manual-safety-pause")
+        raise BatchLockError(
+            f"PDF collection is paused at {lock_root}: {reason}; "
+            f"resume only after clearing the recorded safety condition"
+        )
+    lock_path = lock_root / ".pdf-collection-queue.lock"
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.seek(0)
+            owner = handle.read().strip()
+            detail = f" owner={owner}" if owner else ""
+            raise BatchLockError(
+                f"active PDF collection queue already owns {lock_root};{detail}"
+            ) from exc
+        owner = {
+            "pid": os.getpid(),
+            "batch_root": str(batch_root.expanduser().resolve()),
+            "source_count": len(entries),
+            "started_at": now_iso(),
+        }
+        handle.seek(0)
+        handle.truncate()
+        json.dump(owner, handle, ensure_ascii=False)
+        handle.write("\n")
+        handle.flush()
+        try:
+            yield lock_path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _source_preflight_error(entry: SourceEntry) -> str | None:
@@ -88,6 +158,30 @@ def _preflight_entries(entries: list[SourceEntry]) -> None:
     raise ValueError(
         f"PDF readability preflight failed for {len(failures)}/{len(entries)} sources; "
         f"no conversions started:\n{details}{suffix}"
+    )
+
+
+def _pdf_page_count(source: Path) -> int:
+    completed = subprocess.run(
+        ["pdfinfo", str(source)], capture_output=True, text=True, check=False, timeout=60
+    )
+    if completed.returncode != 0:
+        raise ValueError(f"pdfinfo failed while ordering source: {source}")
+    match = re.search(r"^Pages:\s+(\d+)\s*$", completed.stdout, re.MULTILINE)
+    if not match:
+        raise ValueError(f"pdfinfo returned no page count: {source}")
+    return int(match.group(1))
+
+
+def order_entries(entries: list[SourceEntry], order: str) -> list[SourceEntry]:
+    if order == "input":
+        return entries
+    if order != "shortest-first":
+        raise ValueError(f"unsupported source order: {order}")
+    page_counts = {str(entry.source): _pdf_page_count(entry.source) for entry in entries}
+    return sorted(
+        entries,
+        key=lambda entry: (page_counts[str(entry.source)], entry.relative_path.casefold()),
     )
 
 
@@ -234,6 +328,55 @@ def entries_from_paths(
     return unique
 
 
+def entries_from_nonpassed_results(
+    result_paths: list[Path], *, source_root: Path | None, route: str
+) -> list[SourceEntry]:
+    """Promote failed/needs-review sources into a stronger route queue."""
+    entries: list[SourceEntry] = []
+    seen: set[str] = set()
+    for result_path in result_paths:
+        payload = _read_json(result_path.expanduser().resolve())
+        if not payload or not isinstance(payload.get("items"), list):
+            raise ValueError(f"reroute results is missing an items list: {result_path}")
+        for item in payload["items"]:
+            if not isinstance(item, dict) or item.get("status") not in {"failed", "needs-review"}:
+                continue
+            if not item.get("source_path"):
+                raise ValueError(f"non-passed reroute item has no source_path: {result_path}")
+            source = Path(str(item["source_path"])).expanduser().resolve()
+            key = str(source)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append(
+                _entry_from_path(
+                    source,
+                    source_root=source_root,
+                    route=route,
+                    source_sha256=str(item.get("source_sha256")) if item.get("source_sha256") else None,
+                    file_size=int(item["file_size"]) if isinstance(item.get("file_size"), int) else None,
+                    modified_at=str(item.get("modified_at")) if item.get("modified_at") else None,
+                )
+            )
+    return entries
+
+
+def _rebase_entries(entries: list[SourceEntry], source_root: Path) -> list[SourceEntry]:
+    return [
+        _entry_from_path(
+            entry.source,
+            source_root=source_root,
+            route=entry.route,
+            route_confidence=entry.route_confidence,
+            source_sha256=entry.source_sha256,
+            file_size=entry.file_size,
+            modified_at=entry.modified_at,
+            reason_codes=entry.reason_codes,
+        )
+        for entry in entries
+    ]
+
+
 def entries_from_route_report(report_path: Path, route: str) -> tuple[list[SourceEntry], dict[str, Any]]:
     report_path = report_path.expanduser().resolve()
     report = _read_json(report_path)
@@ -360,6 +503,7 @@ def _serialise_entry(entry: SourceEntry) -> dict[str, Any]:
 def discover_source_entries(
     *,
     sources: list[Path],
+    source_directory: Path | None,
     source_list: Path | None,
     route_list: Path | None,
     route_report: Path | None,
@@ -367,6 +511,38 @@ def discover_source_entries(
     source_root: Path | None,
     existing_manifest: dict[str, Any] | None = None,
 ) -> tuple[list[SourceEntry], dict[str, Any]]:
+    if source_directory is not None:
+        if sources or source_list is not None or route_list is not None or route_report is not None:
+            raise ValueError(
+                "--source-dir cannot be combined with --source, --source-list, "
+                "--route-list, or --route-report"
+            )
+        directory = source_directory.expanduser().resolve()
+        if not directory.is_dir():
+            raise ValueError(f"source directory does not exist: {directory}")
+        direct_paths = sorted(
+            (
+                path.resolve()
+                for path in directory.rglob("*")
+                if path.is_file() and path.suffix.lower() == ".pdf"
+            ),
+            key=lambda path: str(path).casefold(),
+        )
+        if not direct_paths:
+            raise ValueError(f"source directory contains no PDF files: {directory}")
+        selected_route = route or "hybrid"
+        entries = entries_from_paths(
+            direct_paths,
+            source_root=directory,
+            route=selected_route,
+        )
+        return entries, {
+            "kind": "source-directory",
+            "route": selected_route,
+            "source_directory": str(directory),
+            "source_root": str(directory),
+            "pdf_count": len(entries),
+        }
     if route_report is not None:
         return entries_from_route_report(route_report, route or "native-only")
     direct_paths = [path.expanduser().resolve() for path in sources]
@@ -407,7 +583,9 @@ def discover_source_entries(
     if existing_manifest and existing_manifest.get("inputs"):
         entries = [_entry_from_manifest(item) for item in existing_manifest["inputs"] if isinstance(item, dict)]
         return entries, existing_manifest.get("origin", {"kind": "resume-only"})
-    raise ValueError("provide --source, --source-list, --route-list, or --route-report")
+    raise ValueError(
+        "provide --source-dir, --source, --source-list, --route-list, or --route-report"
+    )
 
 
 def _timestamp_batch_root(parent: Path, label: str) -> Path:
@@ -468,11 +646,59 @@ def _inspect_final_completion(
     run_root = run_root.expanduser().resolve()
     index_path = run_root / "index.md"
     summary_path = run_root / "summary.json"
-    validation_path = run_root / "reports" / "validation-result.json"
-    progress_path = run_root / "evidence" / "progress-current.json"
+    hybrid_acceptance_path = run_root / "acceptance.json"
+    hybrid_progress_path = run_root / "progress.json"
+    hybrid_contract = hybrid_acceptance_path.is_file() and hybrid_progress_path.is_file()
+    validation_path = hybrid_acceptance_path if hybrid_contract else run_root / "reports" / "validation-result.json"
+    progress_path = hybrid_progress_path if hybrid_contract else run_root / "evidence" / "progress-current.json"
     summary = _read_json(summary_path)
     validation = _read_json(validation_path)
     progress = _read_json(progress_path)
+    index_text = ""
+    if index_path.is_file():
+        try:
+            index_text = index_path.read_text(encoding="utf-8")
+        except OSError:
+            index_text = ""
+    page_marker_sequence = [
+        int(value)
+        for value in re.findall(r"<!--\s*page:\s*(\d+)\s*-->", index_text)
+    ]
+    page_marker_count = len(page_marker_sequence)
+    image_references = re.findall(
+        r"!\[[^\]]*\]\(\s*<?([^\s)>]+)>?(?:\s+[^)]*)?\)", index_text
+    )
+    missing_image_references: list[str] = []
+    valid_image_reference_count = 0
+    for raw_reference in image_references:
+        parsed = urlparse(raw_reference)
+        if parsed.scheme or raw_reference.startswith(("#", "data:")):
+            valid_image_reference_count += 1
+            continue
+        target = (run_root / unquote(parsed.path)).resolve()
+        try:
+            target.relative_to(run_root)
+        except ValueError:
+            missing_image_references.append(raw_reference)
+            continue
+        if target.is_file() and target.stat().st_size > 0:
+            valid_image_reference_count += 1
+        else:
+            missing_image_references.append(raw_reference)
+    meaningful_lines = [
+        line
+        for line in index_text.splitlines()
+        if line.strip()
+        and not re.match(r"^\s*<!--.*-->\s*$", line)
+        and not re.match(r"^\s*#{1,6}\s+", line)
+        and not re.match(r"^\s*!\[[^\]]*\]\(", line)
+    ]
+    meaningful_text_chars = len(re.sub(r"\s+", "", "\n".join(meaningful_lines)))
+    incomplete_placeholder_present = "本页转换尚未完成" in index_text
+    package_files = [path for path in run_root.rglob("*") if path.is_file()]
+    markdown_files = [path for path in package_files if path.suffix.lower() == ".md"]
+    package_total_bytes = sum(path.stat().st_size for path in package_files)
+    markdown_total_bytes = sum(path.stat().st_size for path in markdown_files)
     has_smoke = any(
         candidate.is_dir()
         for candidate in (
@@ -492,6 +718,9 @@ def _inspect_final_completion(
     for payload in (progress, validation):
         if payload:
             current_stage = payload.get("current_stage") or payload.get("stage") or current_stage
+    progress_stages = progress.get("stages") if progress else None
+    if hybrid_contract and isinstance(progress_stages, list) and progress_stages:
+        current_stage = str(progress_stages[-1].get("stage") or current_stage)
     selected_values = [
         payload.get("selected_pages")
         for payload in (summary, validation, progress)
@@ -510,11 +739,22 @@ def _inspect_final_completion(
         and len(total_values) == 3
         and all(value == total_pages for value in total_values)
     )
+    full_page_sequence = bool(
+        total_pages and selected == list(range(1, total_pages + 1))
+    )
+    validation_checks = validation.get("checks") if validation else None
     full_coverage = bool(
-        total_pages
-        and selected == list(range(1, total_pages + 1))
+        full_page_sequence
         and validation
-        and validation.get("actual_full_pdf_coverage") is True
+        and (
+            validation.get("actual_full_pdf_coverage") is True
+            or (
+                hybrid_contract
+                and isinstance(validation_checks, dict)
+                and validation_checks.get("selected_pages_cover_full_pdf") is True
+                and validation_checks.get("page_completion_passed") is True
+            )
+        )
     )
     hashes_match = bool(source_sha256) and all(
         payload and payload.get("source_sha256") == source_sha256
@@ -525,27 +765,45 @@ def _inspect_final_completion(
         for payload in (summary, validation, progress)
         if payload
     ) if source_path else True
-    checks = validation.get("checks") if validation else None
+    checks = validation_checks
+    ignored_policy_checks = {"no_model_calls_required"} if hybrid_contract else set()
     validation_checks_pass = isinstance(checks, dict) and bool(checks) and all(
-        value is True for value in checks.values()
+        value is True
+        for name, value in checks.items()
+        if name not in ignored_policy_checks
     )
     completed_stages = progress.get("completed_stages") if progress else None
-    final_stage_recorded = bool(
-        isinstance(completed_stages, list)
-        and any(
-            isinstance(item, dict)
-            and item.get("stage") == FINAL_STAGE
-            and item.get("status") == "passed"
-            for item in completed_stages
+    if hybrid_contract:
+        final_stage_recorded = bool(
+            isinstance(progress_stages, list)
+            and any(
+                isinstance(item, dict)
+                and item.get("stage") == "independent_acceptance"
+                and item.get("status") == "passed"
+                for item in progress_stages
+            )
         )
-    )
+    else:
+        final_stage_recorded = bool(
+            isinstance(completed_stages, list)
+            and any(
+                isinstance(item, dict)
+                and item.get("stage") == FINAL_STAGE
+                and item.get("status") == "passed"
+                for item in completed_stages
+            )
+        )
     accepted = all(
         [
             index_path.is_file() and index_path.stat().st_size > 0,
+            meaningful_text_chars > 0 or valid_image_reference_count > 0,
+            not incomplete_placeholder_present,
+            bool(selected) and page_marker_sequence == selected,
+            not missing_image_references,
             summary is not None and summary.get("status") == "passed",
             validation is not None and validation.get("status") == "passed",
             progress is not None and progress.get("status") == "passed",
-            current_stage == FINAL_STAGE,
+            current_stage == ("independent_acceptance" if hybrid_contract else FINAL_STAGE),
             final_stage_recorded,
             page_facts_agree,
             hashes_match,
@@ -565,6 +823,19 @@ def _inspect_final_completion(
         "total_pages": total_pages,
         "full_pdf_coverage": full_coverage,
         "index_markdown": str(index_path) if index_path.is_file() else None,
+        "index_bytes": index_path.stat().st_size if index_path.is_file() else 0,
+        "index_characters": len(index_text),
+        "meaningful_text_characters": meaningful_text_chars,
+        "page_marker_count": page_marker_count,
+        "page_marker_sequence": page_marker_sequence,
+        "image_reference_count": len(image_references),
+        "valid_image_reference_count": valid_image_reference_count,
+        "missing_image_references": missing_image_references,
+        "incomplete_placeholder_present": incomplete_placeholder_present,
+        "package_file_count": len(package_files),
+        "package_total_bytes": package_total_bytes,
+        "markdown_file_count": len(markdown_files),
+        "markdown_total_bytes": markdown_total_bytes,
         "summary_path": str(summary_path) if summary_path.is_file() else None,
         "validation_report": str(validation_path) if validation_path.is_file() else None,
         "progress_path": str(progress_path) if progress_path.is_file() else None,
@@ -620,8 +891,11 @@ def _summarise_results(items: list[dict[str, Any]], *, planned_total: int | None
     planned = len(items) if planned_total is None else planned_total
     terminal = passed + failed + needs_review
     pending = max(0, planned - terminal)
+    halted_items = [item for item in items if item.get("queue_halted") is True]
     status = "passed"
-    if running or pending:
+    if halted_items:
+        status = "failed"
+    elif running or pending:
         status = "running"
     elif failed:
         status = "partial" if passed or needs_review else "failed"
@@ -638,6 +912,8 @@ def _summarise_results(items: list[dict[str, Any]], *, planned_total: int | None
         "planned_total": planned,
         "completed_total": terminal,
         "pending_total": pending,
+        "halted": bool(halted_items),
+        "halt_reason": halted_items[-1].get("halt_reason") if halted_items else None,
     }
 
 
@@ -656,6 +932,19 @@ def _map_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source_sha256": item.get("source_sha256"),
                 "run_root": item.get("run_root"),
                 "index_markdown": item.get("index_markdown"),
+                "index_bytes": item.get("index_bytes"),
+                "index_characters": item.get("index_characters"),
+                "meaningful_text_characters": item.get("meaningful_text_characters"),
+                "page_marker_count": item.get("page_marker_count"),
+                "page_marker_sequence": item.get("page_marker_sequence"),
+                "image_reference_count": item.get("image_reference_count"),
+                "valid_image_reference_count": item.get("valid_image_reference_count"),
+                "missing_image_references": item.get("missing_image_references"),
+                "incomplete_placeholder_present": item.get("incomplete_placeholder_present"),
+                "package_file_count": item.get("package_file_count"),
+                "package_total_bytes": item.get("package_total_bytes"),
+                "markdown_file_count": item.get("markdown_file_count"),
+                "markdown_total_bytes": item.get("markdown_total_bytes"),
                 "summary_json": item.get("summary_path"),
                 "validation_report": item.get("validation_report"),
                 "progress_json": item.get("progress_path"),
@@ -721,6 +1010,19 @@ def persist_batch_state(
             "source_sha256",
             "run_root",
             "index_markdown",
+            "index_bytes",
+            "index_characters",
+            "meaningful_text_characters",
+            "page_marker_count",
+            "page_marker_sequence",
+            "image_reference_count",
+            "valid_image_reference_count",
+            "missing_image_references",
+            "incomplete_placeholder_present",
+            "package_file_count",
+            "package_total_bytes",
+            "markdown_file_count",
+            "markdown_total_bytes",
             "summary_json",
             "validation_report",
             "progress_json",
@@ -737,6 +1039,60 @@ def persist_batch_state(
         _map_rows(results),
     )
     return manifest_path, results_path, mapping_path
+
+
+def _read_log_tail(path: Path, *, max_bytes: int = 12000) -> str:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - max_bytes))
+            payload = handle.read(max_bytes)
+    except OSError:
+        return ""
+    return payload.decode("utf-8", errors="replace").strip()
+
+
+def _child_log_root(run_root: Path) -> Path:
+    resolved = run_root.expanduser().resolve()
+    for ancestor in resolved.parents:
+        if ancestor.name == "runs":
+            key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+            return ancestor.parent / "logs" / f"{resolved.name}-{key}"
+    key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    return resolved.parent / ".batch-child-logs" / f"{resolved.name}-{key}"
+
+
+def _active_conversion_processes(entry: SourceEntry, run_root: Path) -> list[str]:
+    """Return live conversion workers still anchored to the completed book."""
+
+    try:
+        completed = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    anchors = (str(entry.source), str(run_root.expanduser().resolve()))
+    matches: list[str] = []
+    for raw in completed.stdout.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        pid_text, _, command = line.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        if not any(name in command for name in CONVERSION_PROCESS_NAMES):
+            continue
+        if any(anchor in command for anchor in anchors):
+            matches.append(line)
+    return matches
 
 
 def invoke_single_conversion(
@@ -769,19 +1125,31 @@ def invoke_single_conversion(
     if resume:
         command.append("--resume")
     started_at = now_iso()
+    # Keep supervisor logs outside the package.  A new graph run must see an
+    # empty/nonexistent run_root, and accepted package contents remain owned by
+    # the conversion workflow rather than its batch supervisor.
+    log_root = _child_log_root(run_root)
+    log_root.mkdir(parents=True, exist_ok=True)
+    invocation_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-{os.getpid()}"
+    stdout_log = log_root / f"{invocation_id}.stdout.log"
+    stderr_log = log_root / f"{invocation_id}.stderr.log"
     try:
-        proc = subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-        )
-        stdout = proc.stdout[-12000:]
-        stderr = proc.stderr[-12000:]
+        with stdout_log.open("w", encoding="utf-8") as stdout_handle, stderr_log.open(
+            "w", encoding="utf-8"
+        ) as stderr_handle:
+            proc = subprocess.run(
+                command,
+                cwd=ROOT,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+            )
+        stdout = _read_log_tail(stdout_log)
+        stderr = _read_log_tail(stderr_log)
         returncode = proc.returncode
         error = None
     except OSError as exc:
-        stdout = ""
+        stdout = _read_log_tail(stdout_log)
         stderr = str(exc)[-12000:]
         returncode = None
         error = f"subprocess-error: {type(exc).__name__}: {exc}"
@@ -822,11 +1190,30 @@ def invoke_single_conversion(
         "validation_status": validation_status,
         "command": shlex.join(command),
         "returncode": returncode,
+        "stdout_log": str(stdout_log),
+        "stderr_log": str(stderr_log),
         "stdout_tail": stdout,
         "stderr_tail": stderr,
         "started_at": started_at,
         "finished_at": finished_at,
         "error": error,
+    }
+
+
+def _validate_batch_config(config: dict[str, Any]) -> dict[str, Any]:
+    batch_size = int(config.get("batch_size", 1))
+    if batch_size != 1:
+        raise ValueError(
+            "route-aware PDF batch_size must be 1; no books started"
+        )
+    timeout_seconds = int(config.get("timeout_seconds", 0))
+    if timeout_seconds < 1:
+        raise ValueError("timeout_seconds must be a positive integer")
+    return {
+        **config,
+        "batch_size": 1,
+        "book_concurrency": 1,
+        "machine_resource_policy": resource_slots.resource_policy_summary(),
     }
 
 
@@ -840,6 +1227,30 @@ def run_batch(
 ) -> tuple[int, dict[str, Any]]:
     batch_root = batch_root.expanduser().resolve()
     _preflight_entries(entries)
+    effective_config = _validate_batch_config(config)
+    with acquire_collection_lock(
+        lock_root=batch_root.parent,
+        batch_root=batch_root,
+        entries=entries,
+    ):
+        return _run_batch_unlocked(
+            entries,
+            batch_root=batch_root,
+            origin=origin,
+            config=effective_config,
+            executor=executor,
+        )
+
+
+def _run_batch_unlocked(
+    entries: list[SourceEntry],
+    *,
+    batch_root: Path,
+    origin: dict[str, Any],
+    config: dict[str, Any],
+    executor: Any,
+) -> tuple[int, dict[str, Any]]:
+    batch_root = batch_root.expanduser().resolve()
     batch_root.mkdir(parents=True, exist_ok=True)
     manifest = _load_manifest(batch_root)
     if manifest:
@@ -937,6 +1348,21 @@ def run_batch(
                 "started_at": running_item["started_at"],
                 "finished_at": now_iso(),
             }
+        residual_processes = _active_conversion_processes(entry, run_root)
+        if residual_processes:
+            previous_error = str(item.get("error") or "").strip()
+            residual_error = (
+                "book process exited while conversion workers were still active; "
+                "queue stopped before starting the next book"
+            )
+            item = {
+                **item,
+                "status": "failed",
+                "queue_halted": True,
+                "halt_reason": "residual-conversion-processes",
+                "residual_processes": residual_processes,
+                "error": f"{previous_error}; {residual_error}" if previous_error else residual_error,
+            }
         results[-1] = {**base, **item}
         persist_batch_state(
             batch_root=batch_root,
@@ -947,6 +1373,8 @@ def run_batch(
             config=config,
             results=results,
         )
+        if residual_processes:
+            break
     summary = _summarise_results(results, planned_total=len(entries))
     manifest_path, results_path, mapping_path = persist_batch_state(
         batch_root=batch_root,
@@ -971,15 +1399,26 @@ def run_batch(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        help="recursively convert every PDF under this directory; defaults to hybrid page routing",
+    )
     parser.add_argument("--source", type=Path, action="append", default=[], help="repeatable literal PDF path")
     parser.add_argument("--source-list", type=Path, help="UTF-8 text file, one PDF path per line")
     parser.add_argument("--route-list", type=Path, help="route-detection TXT list such as 原生文本路线.txt")
     parser.add_argument("--route-report", type=Path, help="route-detection report.json to select a route from")
     parser.add_argument(
+        "--reroute-results",
+        type=Path,
+        action="append",
+        default=[],
+        help="repeatable prior results.json; append only failed/needs-review sources using --route",
+    )
+    parser.add_argument(
         "--route",
         choices=sorted(ROUTE_VALUES),
-        default="native-only",
-        help="route to load from --route-report or to annotate literal sources",
+        help="route to load from --route-report or annotate sources; source directories default to hybrid",
     )
     parser.add_argument("--source-root", type=Path, help="preserve source-relative paths under this root")
     parser.add_argument("--pages", default="all")
@@ -987,6 +1426,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--max-files", type=int, help="cap how many selected sources to process")
+    parser.add_argument(
+        "--order",
+        choices=("input", "shortest-first"),
+        default="input",
+        help="source execution order; shortest-first prevents one large book blocking the queue",
+    )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_BATCHES_PARENT)
     parser.add_argument("--batch-root", type=Path, help="exact batch root to create or resume")
     return parser
@@ -999,6 +1444,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = _load_manifest(args.batch_root.expanduser().resolve()) if args.batch_root else None
         entries, origin = discover_source_entries(
             sources=args.source,
+            source_directory=args.source_dir,
             source_list=args.source_list,
             route_list=args.route_list,
             route_report=args.route_report,
@@ -1006,6 +1452,23 @@ def main(argv: list[str] | None = None) -> int:
             source_root=args.source_root,
             existing_manifest=manifest,
         )
+        explicit_source_root = args.source_root.expanduser().resolve() if args.source_root else None
+        if explicit_source_root is not None:
+            entries = _rebase_entries(entries, explicit_source_root)
+        if args.reroute_results:
+            rerouted = entries_from_nonpassed_results(
+                args.reroute_results,
+                source_root=explicit_source_root,
+                route=args.route,
+            )
+            known = {str(entry.source) for entry in entries}
+            entries.extend(entry for entry in rerouted if str(entry.source) not in known)
+            origin = {
+                **origin,
+                "reroute_results": [str(path.expanduser().resolve()) for path in args.reroute_results],
+                "rerouted_count": len([entry for entry in rerouted if str(entry.source) not in known]),
+            }
+        entries = order_entries(entries, args.order)
         if args.max_files is not None:
             if args.max_files < 1:
                 parser.error("--max-files must be a positive integer")
@@ -1015,7 +1478,10 @@ def main(argv: list[str] | None = None) -> int:
         batch_root = (
             args.batch_root.expanduser().resolve()
             if args.batch_root
-            else _timestamp_batch_root(args.output_root, f"lan-pdf-route-batch-{args.route}")
+            else _timestamp_batch_root(
+                args.output_root,
+                f"lan-pdf-route-batch-{origin.get('route') or 'native-only'}",
+            )
         )
         code, payload = run_batch(
             entries,
@@ -1026,6 +1492,7 @@ def main(argv: list[str] | None = None) -> int:
                 "evidence_level": args.evidence_level,
                 "batch_size": args.batch_size,
                 "timeout_seconds": args.timeout_seconds,
+                "order": args.order,
             },
         )
     except Exception as exc:

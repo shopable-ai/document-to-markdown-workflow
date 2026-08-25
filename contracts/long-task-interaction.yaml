@@ -57,6 +57,7 @@ dialogue_policy:
     route_capabilities:
       native-pdf: outer lifecycle plus the runner current page snapshot
       native-pdf-batch: outer lifecycle plus native batch checkpoint snapshot
+      local-ocr-pdf: outer lifecycle plus local OCR page snapshot
       hybrid-pdf: outer lifecycle plus page route and completion snapshots
       visual-pdf: outer lifecycle plus the runner current page snapshot
       workflow-a: outer lifecycle while running; terminal page count comes from the runner final JSON already stored in run.log
@@ -88,10 +89,11 @@ commands:
   resume_support:
     native-pdf: supported-reuse-existing-run-root
     native-pdf-batch: supported-reuse-existing-run-root
+    local-ocr-pdf: supported-reuse-existing-run-root
     hybrid-pdf: supported-reuse-existing-run-root-with-page-route-validation
     visual-pdf: supported-reuse-existing-run-root
     workflow-a: unsupported-until-source-runner-has-a-verified-in-place-resume-contract
-  task_type_rule: start 必须显式传入 native-pdf、native-pdf-batch、hybrid-pdf、visual-pdf 或 workflow-a；后台管理层不得替调用方静默改变已选执行路线。
+  task_type_rule: start 必须显式传入 native-pdf、native-pdf-batch、local-ocr-pdf、hybrid-pdf、visual-pdf 或 workflow-a；后台管理层不得替调用方静默改变已选执行路线。
   stdout_rule: 每次显式命令只输出一个紧凑 JSON；后台 worker 的 stdout 和 stderr 只写 run.log。
   cancel_rule: 只在 PID identity 匹配时终止整个进程组，确认无残留后写 cancelled。
 

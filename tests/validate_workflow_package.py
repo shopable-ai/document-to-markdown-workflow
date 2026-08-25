@@ -72,8 +72,13 @@ def main() -> int:
         "workflow-b-output-layout.yaml",
         "knowledge-map-profile.yaml",
         "visual-reconstruction-profile.yaml",
+        "source-visual-asset.yaml",
+        "asset-extraction-strategy.yaml",
+        "markdown-asset-package.yaml",
+        "page-markdown-unit.yaml",
         "visual-asset-classification.yaml",
         "markdown-content-repair.yaml",
+        "markdown-post-merge-model-routing.yaml",
         "vision-page-analysis.yaml",
         "vision-text-transcription.yaml",
         "workflow-a-preflight.yaml",
@@ -83,6 +88,21 @@ def main() -> int:
         assert (ROOT / "contracts" / contract_name).is_file(), contract_name
     assert (ROOT / "references/audit-rubric.zh.md").is_file()
     assert (ROOT / "references/quality-targets.zh.md").is_file()
+    model_routing_contract = load(
+        ROOT / "contracts/markdown-post-merge-model-routing.yaml"
+    )
+    model_quality = model_routing_contract["quality_gate"]
+    assert model_quality["minimum_total"] == 95
+    assert sum(model_quality["dimensions"].values()) == 100
+    assert {
+        "no-secret-in-repository-or-report",
+        "explicit-route-fails-closed",
+        "image-and-page-order-guards-pass",
+        "model-required-does-not-replace-on-failure",
+        "real-codex-default-generation-verified",
+        "real-lan-generation-verified",
+        "real-ssh-mac96-fallback-verified",
+    } == set(model_quality["hard_requirements"])
     assert workflow_registry["schema"]["path_must_exist"] is True
     workflow_entries = {entry["id"]: entry for entry in workflow_registry["workflows"]}
     assert len(workflow_entries) == len(workflow_registry["workflows"]), "duplicate Workflow IDs"
@@ -158,6 +178,26 @@ def main() -> int:
                 "full-batch-6-total_pages",
             ]
             assert page_unit_execution["gates"]["full_batch"]["pages"] == "6-total_pages"
+            lifecycle_reference = (workflow_path.parent / workflow["figure_asset_lifecycle_reference"]).resolve()
+            assert lifecycle_reference == ROOT / "references/figure-asset-lifecycle.zh.md"
+            assert lifecycle_reference.is_file()
+            post_merge = workflow["page_unit_execution"]["post_merge_formatting"]
+            for field in (
+                "adapter",
+                "prompt",
+                "runtime_prompt",
+                "model_routing_contract",
+                "model_route_config",
+                "environment_example",
+                "provider_guide",
+            ):
+                assert (workflow_path.parent / post_merge[field]).resolve().is_file(), field
+            assert post_merge["default_mode"] == "deterministic"
+            assert post_merge["auto_route_order"] == [
+                "lan-ollama",
+                "lan-ollama-ssh",
+                "codex-default",
+            ]
         for handoff in workflow.get("handoff_exports", []) + workflow.get("handoff_inputs", []):
             assert (workflow_path.parent / handoff["contract"]).resolve().is_file()
         assert len(workflow["stages"]) == 7
@@ -285,6 +325,44 @@ def main() -> int:
             assert stages["A7"]["skills"] == ["asset-package-validation"]
             assert stages["A7"]["output"] == "reader-package structural guard (runner stdout only)"
             assert stages["A7"]["evidence"] == ["index.md"]
+            lifecycle = workflow["execution_policy"]["asset_extraction"]["figure_asset_lifecycle"]
+            assert lifecycle["creates_new_workflow"] is False
+            assert lifecycle["creates_second_manifest"] is False
+            assert lifecycle["batch_scope"] == "one-content-unit-and-1-to-2-figures"
+            assert lifecycle["batch_completion_does_not_imply_document_completion"] is True
+            assert "raw-or-source-content-units" in lifecycle["coverage_scope"]
+            assert lifecycle["reader_asset_layout"] == "flat-assets-v1"
+            assert lifecycle["mermaid_policy"] == (
+                "confirmed-node-edge-structures-only;"
+                "syntax-render-semantic-and-png-fallback-validation-required"
+            )
+            assert lifecycle["implementation_claim_policy"] == "code-backed-only-when-entrypoint-and-current-evidence-exist"
+            assert "contact-sheet-evidence-only-and-page-selection-only" in lifecycle["probe_policy"]
+            assert "full-resolution-parent" in lifecycle["probe_policy"]
+            assert "distinct-figure-region-occurrence" in lifecycle["same_page_multi_figure_policy"]
+            assert "merge-into-single-manifest" in lifecycle["historical_manifest_policy"]
+            assert "no-missing-reference-missing-or-needs-review" in lifecycle["document_completion_gate"]
+            assert lifecycle["order"] == [
+                "figure-demand-inventory",
+                "source-page-resolution",
+                "figure-region-localization",
+                "crop-decision-and-acceptance",
+                "enhancement-optional",
+                "mermaid-optional",
+                "manifest-and-reader-projection",
+                "markdown-backfill-and-regeneration",
+                "batch-validation-and-close",
+            ]
+            task_tree = lifecycle["task_tree"]
+            assert [task["id"] for task in task_tree] == [f"F{index}" for index in range(9)]
+            assert [task["task"] for task in task_tree] == lifecycle["order"]
+            for task in task_tree:
+                assert task["children"] and task["evidence"] and task["gate"]
+                binding = task["binding"]
+                assert set(binding) == {"skills", "tools", "code", "status"}
+                assert all(skill_id in skills for skill_id in binding["skills"]), task["id"]
+                assert all(tool_id in tools for tool_id in binding["tools"]), task["id"]
+                assert all((ROOT / code_path).is_file() for code_path in binding["code"]), task["id"]
             image_output = next(item for item in workflow["outputs"]["secondary"] if item["type"] == "reader-images-referenced-by-markdown")
             assert image_output["status"] == "optional-absent-for-text-only-output"
             assert image_output["contract"] == "../../contracts/reader-markdown-output-layout.yaml"

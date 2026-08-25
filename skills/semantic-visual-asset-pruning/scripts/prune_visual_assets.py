@@ -29,6 +29,7 @@ COMPLEX_REASONS = {
     "flow",
     "color-coded-structure",
     "relation-dense-layout",
+    "mixed-text-visual",
 }
 
 
@@ -429,7 +430,7 @@ def build_langgraph_plan(
     missing_required_refs = sorted(
         page
         for page in selection & set(assets) & set(decision_map)
-        if decision_map[page].get("decision") in {"retain", "needs-review"}
+        if decision_map[page].get("decision") in {"retain", "crop-required", "needs-review"}
         and overall_reference_counts.get(page, 0) == 0
     )
     if missing_required_refs:
@@ -476,7 +477,13 @@ def build_langgraph_plan(
                 "visual_increment": decision.get("visual_increment", "unknown"),
                 "classification_source": decision.get("classification_source", "unknown"),
                 "eligible_for_delete": eligible,
-                "planned_action": "delete" if eligible else "retain",
+                "planned_action": (
+                    "delete"
+                    if eligible
+                    else "crop-before-delete"
+                    if decision.get("decision") == "crop-required"
+                    else "retain"
+                ),
                 "markdown_reference_paths": references.get(page, []),
             }
         )
@@ -500,6 +507,7 @@ def build_langgraph_plan(
             "assets_before": len(assets),
             "delete": len(removable_pages),
             "retain": sum(record["decision"] == "retain" for record in decision_records),
+            "crop_required": sum(record["decision"] == "crop-required" for record in decision_records),
             "needs_review": sum(record["decision"] == "needs-review" for record in decision_records),
         },
         "decisions": decision_records,
@@ -612,7 +620,7 @@ def apply_langgraph_plan(
         complex_retained_missing = [
             str(decision.get("image_path"))
             for decision in plan.get("decisions") or []
-            if decision.get("planned_action") == "retain"
+            if decision.get("planned_action") in {"retain", "crop-before-delete"}
             and set(decision.get("reason_codes") or []).intersection(COMPLEX_REASONS)
             and not (root / str(decision.get("image_path"))).is_file()
         ]
@@ -642,11 +650,15 @@ def apply_langgraph_plan(
                 "images_after": after_count,
                 "deleted": len(deleted_records) if delete_source_files else 0,
                 "retained": sum(item.get("decision") == "retain" for item in plan.get("decisions") or []),
+                "crop_required": sum(item.get("decision") == "crop-required" for item in plan.get("decisions") or []),
                 "needs_review": sum(item.get("decision") == "needs-review" for item in plan.get("decisions") or []),
             },
             "deleted_assets": deleted_records,
             "retained_pages": [
                 item["page"] for item in plan.get("decisions") or [] if item.get("decision") == "retain"
+            ],
+            "crop_required_pages": [
+                item["page"] for item in plan.get("decisions") or [] if item.get("decision") == "crop-required"
             ],
             "needs_review_pages": [
                 item["page"] for item in plan.get("decisions") or [] if item.get("decision") == "needs-review"

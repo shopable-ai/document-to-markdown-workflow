@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -40,6 +41,7 @@ def _start_test_task(
     resume_command: list[str] | None = None,
     run_id: str,
     work_progress_path: Path | None = None,
+    task_type: str = "test",
 ) -> tuple[Path, Path, dict]:
     source = tmp_path / "source.pdf"
     source.write_bytes(b"%PDF-1.7\n")
@@ -53,7 +55,7 @@ def _start_test_task(
         command=command,
         resume_command=resume_command,
         pages="all",
-        task_type="test",
+        task_type=task_type,
         work_progress_path=work_progress_path,
         run_id=run_id,
     )
@@ -381,6 +383,33 @@ def test_resume_reuses_the_existing_run_root(tmp_path: Path):
     assert marker.read_text(encoding="utf-8") == "yes"
 
 
+def test_visual_resume_can_skip_optional_asset_pruning(tmp_path: Path):
+    marker = tmp_path / "resume-args.json"
+    resume_script = (
+        "import json,pathlib,sys;"
+        f"pathlib.Path({str(marker)!r}).write_text(json.dumps(sys.argv[1:]))"
+    )
+    state_root, _, result = _start_test_task(
+        tmp_path,
+        command=[sys.executable, "-c", "raise SystemExit(3)"],
+        resume_command=[sys.executable, "-c", resume_script],
+        run_id="visual-resume-without-pruning",
+        task_type="visual-pdf",
+    )
+    _wait_for_state(state_root, result["run_id"], {"failed"})
+
+    background.resume_task(
+        state_root,
+        result["run_id"],
+        no_visual_asset_pruning=True,
+    )
+    _wait_for_state(state_root, result["run_id"], {"completed"})
+
+    assert json.loads(marker.read_text(encoding="utf-8")) == [
+        "--no-visual-asset-pruning"
+    ]
+
+
 def test_failed_task_writes_one_actionable_terminal_event(tmp_path: Path):
     state_root, _, result = _start_test_task(
         tmp_path,
@@ -515,11 +544,55 @@ def test_background_commands_keep_hybrid_and_visual_only_routes_explicit():
         ]
     )
     visual_root, visual_command, _, _ = background._build_pdf_commands(visual, "run-2")
-    assert visual_root == Path("/tmp/out/book").resolve()
+    assert visual_root.parent == Path("/tmp/out").resolve()
+    assert re.fullmatch(r"book-\d{8}-\d{6}(?:-\d{2})?", visual_root.name)
     assert "--visual-only" in visual_command
 
 
-def test_background_commands_default_to_source_named_run_root():
+def test_background_command_supports_local_apple_ocr_without_model_flags():
+    parser = background.build_parser()
+    args = parser.parse_args(
+        [
+            "start",
+            "--task-type",
+            "local-ocr-pdf",
+            "--source",
+            "/tmp/book.pdf",
+            "--output-root",
+            "/tmp/out",
+            "--run-root",
+            "/tmp/apple-ocr-run",
+            "--timeout-seconds",
+            "120",
+            "--jobs",
+            "3",
+        ]
+    )
+
+    run_root, command, resume_command, progress_path = background._build_pdf_commands(
+        args, "run-local-ocr"
+    )
+
+    assert str(background.LOCAL_OCR_ADAPTER) in command
+    assert "--visual-only" not in command
+    assert "--no-model" not in command
+    assert "--dpi" in command
+    assert command[command.index("--dpi") + 1] == "220"
+    assert "--jobs" in command
+    assert command[command.index("--jobs") + 1] == "3"
+    assert resume_command == [*command, "--resume"]
+    assert progress_path == run_root / "evidence" / "progress-current.json"
+
+
+def test_background_commands_default_to_timestamped_source_named_run_root(monkeypatch):
+    monkeypatch.setattr(
+        background,
+        "resolve_package_target",
+        lambda output_root, source, **kwargs: (
+            "Z001-人性即骗局-20260824-120000",
+            output_root / "Z001-人性即骗局-20260824-120000",
+        ),
+    )
     parser = background.build_parser()
     native = parser.parse_args(
         [
@@ -537,7 +610,7 @@ def test_background_commands_default_to_source_named_run_root():
         native, "ignored-run-id"
     )
 
-    assert run_root == Path("/tmp/out/Z001-人性即骗局").resolve()
+    assert run_root == Path("/tmp/out/Z001-人性即骗局-20260824-120000").resolve()
     assert "--run-root" in command
     assert command[command.index("--run-root") + 1] == str(run_root)
     assert resume_command == [*command, "--resume"]

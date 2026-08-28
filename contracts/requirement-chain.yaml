@@ -16,6 +16,21 @@ description_policy: >-
   才向 workflow.yaml、contracts、registry、skills、tools 和 adapters 投影。工程文件不得
   反向改写未确认的需求任务。
 
+project_process_framework:
+  universe_reference: AI-WORKFLOW-UNIVERSE.zh.md
+  navigator_reference: PROJECT-DELIVERY-WORKFLOW.zh.md
+  governance_reference: ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md
+  machine_contract: contracts/document-driven-workflow.yaml
+  navigator_stage_count: 16
+  execution_projection: A1-A7-and-B1-B7
+  reasoning_overlay: contracts/cognitive-reasoning-overlay.yaml
+  artifact_reference: contracts/artifact-reference.yaml
+  promotion_matrix: contracts/promotion-matrix.yaml
+  projection_record: contracts/projection-record.yaml
+  acceptance_scorecard: contracts/acceptance-scorecard.yaml
+  change_record: contracts/change-record.yaml
+  rule: 项目级导航环节与执行级 Workflow 阶段分层；导航不会偷偷增加或重编号 A/B 阶段。
+
 canonical_chain:
   - id: requirement
     label: Requirement
@@ -27,6 +42,8 @@ canonical_chain:
       - background
       - goals
       - user_problems
+      - statement_object_classification
+      - role_refs
       - hard_requirements
       - non_goals
       - optional_downstream_knowledge_base_pruning
@@ -46,6 +63,7 @@ canonical_chain:
       - data_flow
       - stop_conditions
       - downstream_boundaries
+      - typed_traceability
     gate:
       id: chain-complete
       assertion: 每个需求任务都映射到工程 Spec/Task/Workflow，并有停止条件和下游边界。
@@ -67,6 +85,7 @@ canonical_chain:
       - source_selection_rule
       - evidence_separation
       - status_policy
+      - temporal_relation_policy
       - output_layout
     gate:
       id: spec-complete
@@ -149,6 +168,8 @@ canonical_chain:
       - source_fingerprint
       - selected_pages
       - workflow_version
+      - projection_ref
+      - current_input_digest
     gate:
       id: run-blocked-until-confirmed
       assertion: 前六环未获人工确认前，不创建生产 Run，不读取或修改运行器。
@@ -165,6 +186,9 @@ canonical_chain:
     required_fields:
       - evidence_paths
       - provenance
+      - origin_class
+      - authority_class
+      - source_digest
       - uncertainties
       - diagnostics
     gate:
@@ -183,6 +207,8 @@ canonical_chain:
       - needs_review
       - failed
       - independent_validator
+      - acceptance_scorecard
+      - validator_identity_separation
     gate:
       id: verdict-blocked-until-evidence
       assertion: 只有独立 validator 重读当前 package 后才能产生 Verdict。
@@ -200,6 +226,11 @@ canonical_chain:
       - source_fingerprint
       - evidence_level
       - unresolved_items
+      - baseline_ref
+      - projection_ref
+      - run_ref
+      - verdict_ref
+      - claim_ceiling
     gate:
       id: claim-blocked-until-verdict
       assertion: 未有 passed Verdict 时，只能报告 Unknown、候选、needs-review 或 failed，不得扩大 Claim。
@@ -215,6 +246,11 @@ frontmatter_gate:
   engineering_task_tree_file: EXECUTION-TASK-TREE.zh.md
   projection_files:
     - contracts/requirement-chain.yaml
+    - contracts/artifact-reference.yaml
+    - contracts/promotion-matrix.yaml
+    - contracts/projection-record.yaml
+    - contracts/acceptance-scorecard.yaml
+    - contracts/change-record.yaml
     - workflow-registry.yaml
     - workflows/document-to-markdown-assets/workflow.yaml
     - skill-registry.yaml

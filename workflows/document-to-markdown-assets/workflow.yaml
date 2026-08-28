@@ -570,7 +570,7 @@ entrypoint:
   execute_pending: python3 adapters/workflow_a_dispatcher.py --workflow document-to-markdown-assets --source <absolute-file> --candidate-comparison <comparison-json> --output-root <absolute-directory> --pages <explicit-pages>
   batch: python3 adapters/workflow_a_batch.py --source <absolute-file-1> --source <absolute-file-2> --output-root <absolute-directory> --pages all
   page_batch: python3 adapters/workflow_a_batch.py --source <long-pdf> --output-root <absolute-directory> --pages all --batch-size 8
-  candidate_comparison: python3 adapters/workflow_a_candidate_compare.py --source-a <pptx> --source-b <pdf> --pages 3,4 --output <comparison-json>
+  candidate_comparison_command: python3 adapters/workflow_a_candidate_compare.py --source-a <pptx> --source-b <pdf> --pages 3,4 --output <comparison-json>
   compatibility: []
   source_isolation: one-source-per-run
   batch_source_isolation: one-independent-package-per-source

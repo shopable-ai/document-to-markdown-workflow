@@ -1,0 +1,156 @@
+id: document-driven-project-workflow
+version: 0.1.0
+title: 文档驱动项目交付流程契约
+purpose: >-
+  固定 AI 文档驱动项目的环节宇宙、16 环节人类导航、当前项目的 A/B 执行投影
+  以及漂移后的变更回写边界。
+status: design-active
+authority:
+  universe: AI-WORKFLOW-UNIVERSE.zh.md
+  navigator: PROJECT-DELIVERY-WORKFLOW.zh.md
+  governance: ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md
+  execution_map: WORKFLOW-MAP.zh.md
+  requirement_chain: contracts/requirement-chain.yaml
+  reasoning_overlay: contracts/cognitive-reasoning-overlay.yaml
+  artifact_reference: contracts/artifact-reference.yaml
+  promotion_matrix: contracts/promotion-matrix.yaml
+  temporal_case: contracts/temporal-case.yaml
+  projection_record: contracts/projection-record.yaml
+  acceptance_scorecard: contracts/acceptance-scorecard.yaml
+  change_record: contracts/change-record.yaml
+layers:
+  universe_planes: [control, cognition, design, execution, evidence]
+  navigator_stage_count: 16
+  execution_workflows: [document-to-markdown-assets, markdown-to-gpt-image]
+  execution_stage_counts: {document-to-markdown-assets: 7, markdown-to-gpt-image: 7}
+object_model:
+  statement_objects: [goal, need, problem, confusion, failure, expected-result]
+  minimum_role_ref: [role_ref, actor_kind, authority_scope]
+  relation_objects: [artifact_ref, derived_from, promotes_to, blocks, projection_ref]
+  status_namespaces: [reasoning, baseline, run_evidence, verdict, claim]
+stages:
+  - id: P01
+    name: 项目与来源建立
+    plane: [control, cognition]
+    required_question: 当前项目、来源、范围、权限和版本是什么？
+    artifacts: [project-entry, source-inventory, scope-snapshot]
+    gate: source-and-scope-are-identifiable
+    projection: [GOAL.zh.md, contracts/source-inventory.yaml, A1]
+  - id: P02
+    name: 原始需求与背景事实
+    plane: [cognition]
+    required_question: 用户原话、目标背景、事实、假设和 Unknown 是什么？
+    artifacts: [raw-request, facts, assumptions, unknowns]
+    gate: source-fact-assumption-unknown-separated
+    projection: [GOAL.zh.md, TASK-TREE.zh.md]
+  - id: P03
+    name: 参考样例与期望结果
+    plane: [cognition, evidence]
+    required_question: 哪些结果是期望、允许变化或不可接受？
+    artifacts: [examples, expected-results, counterexamples]
+    gate: example-purpose-and-boundary-declared
+    projection: [tests/fixtures, workflows/document-to-markdown-assets/ACCEPTANCE.zh.md]
+  - id: P04
+    name: AI 需求发现与推理
+    plane: [cognition]
+    required_question: AI 发现了哪些候选、冲突、缺口和待确认问题？
+    artifacts: [requirement-candidates, requirement-reasoning-trace, open-questions, ai-self-check]
+    gate: candidates-trace-to-authorized-inputs
+    projection: [contracts/requirement-chain.yaml]
+  - id: P05
+    name: 人工可读的需求梳理
+    plane: [cognition, design]
+    required_question: 人怎样理解目标、范围、角色、场景、质量和非目标？
+    artifacts: [requirement-narrative, scope-draft]
+    gate: goal-boundary-and-acceptance-direction-readable
+    projection: [GOAL.zh.md, TASK-TREE.zh.md]
+  - id: P06
+    name: 需求确认与需求基线
+    plane: [control, cognition]
+    required_question: 哪些最小范围已经被合法接受？
+    artifacts: [business-requirement, decision-gate, requirement-baseline]
+    gate: accepted-scope-is-versioned-and-recomputable
+    projection: [contracts/requirement-chain.yaml]
+  - id: P07
+    name: 业务链路、能力、功能与行为规格
+    plane: [design, evidence]
+    required_question: 用户或调用方应观察到什么行为，如何覆盖到下游？
+    artifacts: [scenario, trigger, business-chain, capability, function, functional-requirement, behavior-specification, behavior-case, temporal-case, traceability]
+    gate: normal-boundary-negative-recovery-covered
+    projection: [WORKFLOW-MAP.zh.md, EXECUTION-TASK-TREE.zh.md]
+  - id: P08
+    name: 候选方案与架构决策
+    plane: [cognition, design]
+    required_question: 哪些方案可行，关键取舍是什么？
+    artifacts: [research, solution-comparison, adr-or-not-applicable]
+    gate: critical-choice-has-rationale-and-reopen-condition
+    projection: [ARCHITECTURE.zh.md, references/]
+  - id: P09
+    name: 工程解决方案与契约设计
+    plane: [design]
+    required_question: 节点、I/O、状态、错误、权限和外部边界怎样连接？
+    artifacts: [engineering-chain, io-contracts, quality-constraints]
+    gate: handoffs-and-failure-routes-are-executable
+    projection: [contracts/, workflows/]
+  - id: P10
+    name: Spec、Task 与验证设计
+    plane: [design, execution, evidence]
+    required_question: 怎样派生可实现、可验证的工作包？
+    artifacts: [spec, acceptance, test-space, tasks, traceability]
+    gate: every-task-traces-to-approved-scope-and-criterion
+    projection: [EXECUTION-TASK-TREE.zh.md, tests/]
+  - id: P11
+    name: Workflow 与运行编排
+    plane: [control, execution]
+    required_question: 如何组织步骤、分支、并行、队列、恢复和取消？
+    artifacts: [workflow, stage-gates, retry-and-recovery-policy]
+    gate: preconditions-postconditions-and-terminal-states-declared
+    projection: [workflow-registry.yaml, workflows/]
+  - id: P12
+    name: Skill/Tool/Model/Context 投影
+    plane: [control, execution]
+    required_question: 本次运行实际加载哪些能力、模型、规则和上下文？
+    artifacts: [binding, context-snapshot, execution-manifest, projection-ref]
+    gate: projected-capabilities-and-versions-are-identifiable
+    projection: [skill-registry.yaml, tool-registry.yaml, skills/]
+  - id: P13
+    name: 代表样例试做与校准
+    plane: [execution, evidence]
+    required_question: 端到端最小样例是否暴露需求、方案或工具问题？
+    artifacts: [smoke-run, calibration-report, difference-list]
+    gate: representative-risk-sample-is-validated
+    projection: [tests/fixtures, tests/run_fixture_contract_tests.py]
+  - id: P14
+    name: 受控运行与分层证明
+    plane: [control, execution, evidence]
+    required_question: 本次实际运行发生了什么？
+    artifacts: [run, checkpoint, stage-evidence, failure-report]
+    gate: selected-scope-has-terminal-evidence
+    projection: [contracts/workflow-run-record.yaml, contracts/stage-evidence.yaml]
+  - id: P15
+    name: 交付、独立验收与声明
+    plane: [control, evidence]
+    required_question: 结果是否符合事前判据，可以声称到什么边界？
+    artifacts: [acceptance-scorecard, acceptance-verdict, delivery-package, bounded-claim]
+    gate: independent-acceptance-passed-within-scope
+    projection: [workflows/document-to-markdown-assets/ACCEPTANCE.zh.md, tests/validate_real_output_root.py]
+  - id: P16
+    name: 反馈、变更与持续演进
+    plane: [control, evidence]
+    required_question: 错误应修改哪份文档，哪些结果需要重开？
+    artifacts: [change-record, impact-preview, invalidation-ledger, regression, retrospective]
+    gate: earliest-owner-updated-and-downstream-revalidated
+    projection: [references/known-failures.zh.md, .audit/, .prompt/]
+rules:
+  - navigator_stages_are_not_execution_workflow_stage_ids
+  - each_stage_has_question_artifacts_gate_and_projection
+  - downstream_artifacts_cannot_upgrade_unapproved_upstream_content
+  - failed_or_stale_evidence_cannot_support_a_current_claim
+  - changes_create_new_versions_and_preserve_history
+  - unknown_requires_owner_impact_and_resolution_entry
+  - ai_generator_cannot_self_approve_or_self-certify
+  - candidate_to_confirmed_requires_promotion_matrix_and_confirmation_owner
+  - causal_relation_requires_mechanism_or_rule_or_contrast_evidence
+  - failure_requires_earliest_owner_artifact_and_reopen_stage
+  - claim_allowed_requires_current_non_stale_run_and_independent_verdict
+  - score_95_is_minimum_pass_and_score_97_is_recommended_target_not_a_new_status

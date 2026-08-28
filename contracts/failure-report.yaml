@@ -17,9 +17,12 @@ failure:
   remediation: string
   resolved_evidence_paths: array
   diagnostics: array
+  routing:
+    required: [earliest_owner_layer, owner_artifact_ref, reopen_from_stage, classification_basis_refs]
 invariants:
   - status=none 时 failures 必须为空数组，不能隐藏失败
   - failures 中每条记录必须有 stage_id、来源证据路径和 remediation
   - severity=P0 或 code=provenance-missing/integrity-check-failed 时总报告不得为 none
   - failure.status=resolved 必须有 resolved_evidence_paths，不能只改文字状态
+  - failure.status=resolved 或 blocked 时必须记录 routing.earliest_owner_layer、owner_artifact_ref 和 reopen_from_stage
   - 不得包含 api_key、authorization、cookie、secret 或 subscription_url

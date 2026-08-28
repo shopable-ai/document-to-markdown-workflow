@@ -13,13 +13,17 @@
 按你的目的选择入口，不要把所有文件当成同一层说明：
 
 1. 第一次进入项目：先读本文件，了解稳定目录、Workflow 边界和证据边界。
-2. 需求拆解：先读 [需求到证据任务树](TASK-TREE.zh.md)，把用户问题、测试范围、失败可见性和可声称结论对齐。
-3. 选择流程：读 [WORKFLOWS.zh.md](WORKFLOWS.zh.md)，只比较 A/B 的适用场景和主要产物。
-4. 理解链路：再读 [WORKFLOW-MAP.zh.md](WORKFLOW-MAP.zh.md)，查看任务树如何落到阶段、Skill、Tool、契约和证据。
-5. 理解执行拆分：读 [EXECUTION-TASK-TREE.zh.md](EXECUTION-TASK-TREE.zh.md)，先看单页纵向切片，再看多页、多文件、测试与旧 A1–A7/Skill 拆分复盘。
-6. 执行 Workflow A：读 [Workflow A 人工入口](workflows/document-to-markdown-assets/README.zh.md)，需要逐步执行或排障时再读 [Workflow A 执行指南](WORKFLOW-A-EXECUTION.zh.md)。
-7. 已完成路线检测并要批量跑 `native-only` PDF：读 [局域网原生 PDF 批量转换说明](references/lan-pdf-markdown-batch.zh.md)。
-8. 机器路由与验收：执行器只读取 [workflow-registry.yaml](workflow-registry.yaml)、对应 `workflow.yaml` 和 contracts；人工 README 不覆盖机器契约。
+2. 理解问题全貌：读 [AI 环节宇宙](AI-WORKFLOW-UNIVERSE.zh.md)，先区分控制、认知、设计、执行和证据平面。
+3. 需要用户认知、需求推理或复杂顺序时：读 [认知、需求推理与时序参考叠加层](COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md)，它默认只是候选参考。
+4. 查看专家共识和质量门：读 [专家共识审查](EXPERT-CONSENSUS-REVIEW.zh.md)，了解 95+ 的硬门和明确后置项。
+5. 理解项目推进：读 [文档驱动项目交付工作流](PROJECT-DELIVERY-WORKFLOW.zh.md)，查看 16 个项目级导航环节如何投影到当前项目。
+6. 需求拆解：再读 [需求到证据任务树](TASK-TREE.zh.md)，把用户问题、测试范围、失败可见性和可声称结论对齐。
+7. 理解漂移修复：读 [产物职责、漂移定位与变更回写](ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md)，出现问题时修改最早责任层的文档。
+8. 选择流程：读 [WORKFLOWS.zh.md](WORKFLOWS.zh.md)，只比较 A/B 的适用场景和主要产物。
+9. 理解链路：再读 [WORKFLOW-MAP.zh.md](WORKFLOW-MAP.zh.md)，查看任务树如何落到阶段、Skill、Tool、契约和证据。
+10. 理解执行拆分：读 [EXECUTION-TASK-TREE.zh.md](EXECUTION-TASK-TREE.zh.md)，先看单页纵向切片，再看多页、多文件、测试与旧 A1–A7/Skill 拆分复盘。
+11. 执行 Workflow A：读 [Workflow A 人工入口](workflows/document-to-markdown-assets/README.zh.md)，需要逐步执行或排障时再读 [Workflow A 执行指南](WORKFLOW-A-EXECUTION.zh.md)。
+12. 机器路由与验收：执行器只读取 [workflow-registry.yaml](workflow-registry.yaml)、对应 `workflow.yaml`、[document-driven-workflow.yaml](contracts/document-driven-workflow.yaml) 和其他 contracts；人工 README 不覆盖机器契约。
 
 人工说明解释“为什么、何时、如何阅读”；YAML 和 validator 决定“字段、顺序、状态是否合规”。
 
@@ -31,10 +35,16 @@ workflow-document-markdown-visual-assets/
 ├── GOAL.zh.md
 ├── TASK-TREE.zh.md           # 需求→任务→证据的前置功能树
 ├── EXECUTION-TASK-TREE.zh.md  # 工程 Task 的纵向切片与规模扩展树
+├── AI-WORKFLOW-UNIVERSE.zh.md # AI 文档驱动的环节宇宙与五个平面
+├── COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md # 需求/时序推理候选叠加层
+├── EXPERT-CONSENSUS-REVIEW.zh.md # 5专家×8轮交叉审议与95+质量门
+├── PROJECT-DELIVERY-WORKFLOW.zh.md # 16 个项目级人类推进环节
+├── ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md # 产物职责、漂移定位与变更回写
 ├── README.zh.md
 ├── WORKFLOWS.zh.md
 ├── WORKFLOW-MAP.zh.md
 ├── workflow-registry.yaml
+├── contracts/cognitive-reasoning-overlay.yaml # 候选认知与时序推理机器边界
 ├── .prompt/                  # 临时提示词、handoff 和续接目标
 ├── .audit/                   # 本地临时审计快照（默认忽略）
 ├── runs/                     # 正式转换运行证据与输出包（默认忽略）
@@ -82,6 +92,13 @@ workflow-document-markdown-visual-assets/
 │   ├── visual-asset-pruning.yaml
 │   ├── visual-asset-classification.yaml
 │   ├── visual-reconstruction-profile.yaml
+│   ├── document-driven-workflow.yaml
+│   ├── artifact-reference.yaml
+│   ├── promotion-matrix.yaml
+│   ├── temporal-case.yaml
+│   ├── projection-record.yaml
+│   ├── acceptance-scorecard.yaml
+│   ├── change-record.yaml
 │   └── gpt-image-generation-request.yaml
 └── references/
     ├── knowledge-map-profile.zh.md

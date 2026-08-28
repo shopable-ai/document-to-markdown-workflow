@@ -1,0 +1,79 @@
+id: promotion-matrix
+version: 0.1.0
+title: 对象状态晋升矩阵
+purpose: >-
+  防止 confidence、status、verdict 和 claim 状态串层；任何晋升都必须有合法前驱、证据和责任主体。
+status: design-active
+layers:
+  reasoning:
+    statuses: [candidate, confirmed, rejected, unknown]
+    transitions:
+      - from: candidate
+        to: confirmed
+        requires: [statement_ref, role_ref, observed_facts, alternatives, confirmation_owner, evidence_digest, confirmation_scope_digest]
+      - from: candidate
+        to: rejected
+        requires: [statement_ref, rejection_reason, decision_owner]
+      - from: candidate
+        to: unknown
+        requires: [statement_ref, unknown_reason, resolution_owner]
+      - from: unknown
+        to: candidate
+        requires: [new_evidence_ref, new_evidence_digest]
+  baseline:
+    statuses: [draft, confirmed, superseded]
+    transitions:
+      - from: draft
+        to: confirmed
+        requires: [requirement_refs, confirmation_owner, confirmed_scope_digest, confirmed_at]
+      - from: confirmed
+        to: superseded
+        requires: [change_ref, superseded_by]
+  run_evidence:
+    statuses: [running, passed, needs-review, failed, stale]
+    transitions:
+      - from: running
+        to: passed
+        requires: [current_input_digest, independent_verdict_ref]
+      - from: running
+        to: needs-review
+        requires: [review_reason, evidence_refs]
+      - from: running
+        to: failed
+        requires: [failure_ref, evidence_refs]
+      - from: passed
+        to: stale
+        requires: [invalidated_by_change]
+      - from: needs-review
+        to: stale
+        requires: [invalidated_by_change]
+      - from: failed
+        to: stale
+        requires: [invalidated_by_change]
+  claim:
+    statuses: [blocked, allowed, invalidated]
+    transitions:
+      - from: blocked
+        to: allowed
+        requires: [confirmed_baseline_ref, current_run_ref, passed_verdict_ref, current_input_digest, claim_scope]
+      - from: allowed
+        to: invalidated
+        requires: [invalidated_by_change, invalidation_reason]
+      - from: blocked
+        to: invalidated
+        requires: [invalidation_reason]
+forbidden_transitions:
+  - [reasoning.candidate, claim.allowed]
+  - [reasoning.confirmed, claim.allowed]
+  - [baseline.draft, claim.allowed]
+  - [run_evidence.running, claim.allowed]
+  - [run_evidence.needs-review, claim.allowed]
+  - [run_evidence.stale, claim.allowed]
+  - [run_evidence.failed, run_evidence.passed]
+  - [baseline.superseded, baseline.confirmed]
+  - [claim.invalidated, claim.allowed]
+cross_layer_invariants:
+  - confidence 只是推理把握度，不得直接写入 status 或 verdict
+  - reasoning.confirmed 不等于 baseline.confirmed
+  - run_evidence.passed 不等于 claim.allowed
+  - 任何正式 Claim 都必须经过独立 Verdict 和当前输入摘要校验

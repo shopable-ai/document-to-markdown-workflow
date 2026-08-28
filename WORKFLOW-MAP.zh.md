@@ -1,10 +1,18 @@
 # Workflow 链路与文件关系图
 
-这份文件是工程 Chain 的人工可读入口。它不替代 `workflow.yaml`，而是把已确认的需求任务映射到 Spec、工程 Task、执行任务树、Workflow、Skill/Tool、Run、Evidence、Verdict 和 Claim。
+这份文件是工程 Chain 的人工可读入口。它不替代 `workflow.yaml`，而是把已确认的需求任务映射到 Spec、工程 Task、执行任务树、Workflow、Skill/Tool、Run、Evidence、Verdict 和 Claim。项目级环节宇宙、需求/时序推理叠加层与 16 环节导航分别见 [AI-WORKFLOW-UNIVERSE.zh.md](AI-WORKFLOW-UNIVERSE.zh.md)、[COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md](COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md) 和 [PROJECT-DELIVERY-WORKFLOW.zh.md](PROJECT-DELIVERY-WORKFLOW.zh.md)；本文件只负责工程映射，不重复定义它们。
 
 [`TASK-TREE.zh.md`](TASK-TREE.zh.md) 只负责需求描述和需求任务分解，不再承担 Chain、Workflow 或证据结构。工程 Task 的可执行纵向切片另见 [`EXECUTION-TASK-TREE.zh.md`](EXECUTION-TASK-TREE.zh.md)。本文件只消费已确认的需求段落和任务组，不能反向改写需求。只有本文件的工程映射再被人工确认后，才投影到 `workflow.yaml`、contracts、registry 和 adapters。
 
 阅读顺序建议是：先用根 `README.md` 确定入口，再看 `TASK-TREE.zh.md` 明确需求与验收，再用 `WORKFLOWS.zh.md` 选择 Workflow；需要理解链路时看本图，实际执行 Workflow A 时进入其 `README.zh.md` 和 `WORKFLOW-A-EXECUTION.zh.md`。本图中的箭头是关系说明，不是机器执行顺序的第二份配置。
+
+## -1. 项目级环节与执行级阶段
+
+项目级 16 环节回答“项目应该怎样逐步澄清、设计、运行和演进”；A1–A7/B1–B7 回答“某一次文档转换或图片生成怎样执行”。二者通过 `contracts/document-driven-workflow.yaml` 建立机器可读映射，但不共享同一组阶段 ID。这样可以增加需求确认、样例、基线、变更和复盘环节，而不破坏当前 A/B Workflow 的兼容路由。
+
+需求推理和时序推理是按风险启用的叠加层，不增加主流程编号。需要时在 P04/P07/P10/P11/P13/P14/P16 产生 `requirement-reasoning-trace` 或 `temporal-case`；没有对应风险时记录 `not_applicable`，不创建空环节。
+
+跨层关系不再靠多份说明同步：统一引用使用 [`artifact-reference.yaml`](contracts/artifact-reference.yaml)，状态晋升使用 [`promotion-matrix.yaml`](contracts/promotion-matrix.yaml)，P12 选择使用 [`projection-record.yaml`](contracts/projection-record.yaml)，95+ 验收使用 [`acceptance-scorecard.yaml`](contracts/acceptance-scorecard.yaml)。
 
 ## 0. 从需求任务到工程 Chain
 

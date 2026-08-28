@@ -1,0 +1,14 @@
+id: change-record
+version: 0.1.0
+title: 变更影响与失效记录契约
+purpose: >-
+  让 P16 可以枚举上游变化影响的 Run、Evidence、Verdict 和 Claim，并明确是否需要重新验收。
+status: design-active
+required: [change_id, upstream_refs, supersedes, reason, impact_classification, affected_refs, requires_revalidation, revalidation_status, owner]
+impact_classification: [unaffected, review_required, invalidated]
+revalidation_status: [not_required, pending, running, passed, failed]
+invariants:
+  - upstream 版本或 digest 变化时不得静默沿用旧 Claim
+  - impact_classification=invalidated 时 affected_refs 必须非空且 claim 不得继续 allowed
+  - requires_revalidation=true 时 revalidation_status 不得为 not_required
+  - supersedes 必须保留历史引用，不得原地覆盖旧记录

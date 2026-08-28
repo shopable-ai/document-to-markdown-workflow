@@ -1,0 +1,48 @@
+id: artifact-reference
+version: 0.1.0
+title: 跨层产物引用契约
+purpose: >-
+  为 Source、需求、基线、投影、Run、Evidence、Verdict 和 Claim 提供统一、可回放的引用格式；
+  不要求立即建设全量图数据库。
+status: design-active
+required: [ref_id, artifact_type, locator, version_or_hash, authority_class, status_layer, scope]
+artifact_types:
+  - source
+  - fact
+  - unknown
+  - reasoning
+  - business-requirement
+  - scenario
+  - capability
+  - function
+  - functional-requirement
+  - baseline
+  - behavior-specification
+  - projection
+  - workflow
+  - skill
+  - tool
+  - model
+  - context
+  - run
+  - evidence
+  - verdict
+  - claim
+  - change
+authority_classes:
+  - authoritative
+  - derived
+  - candidate-only
+  - reference-only
+  - test-only
+  - historical-run
+  - current-run
+  - validator-output
+  - human-review
+status_layers: [source, cognition, requirement, baseline, design, projection, execution, run, evidence, verdict, claim, governance]
+invariants:
+  - ref_id 和 artifact_type 必须稳定且唯一，不能只用易变文件名
+  - version_or_hash 必须能定位到具体版本或内容摘要
+  - candidate-only/reference-only/test-only/historical-run 不得单独支撑生产 Verdict 或 Claim
+  - locator 必须是可回源的文件、记录、页、节点、区域或运行标识
+  - status_layer 不得用裸 status 代替，跨层状态必须按所属对象解释

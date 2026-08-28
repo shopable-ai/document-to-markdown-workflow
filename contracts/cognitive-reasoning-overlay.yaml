@@ -1,0 +1,67 @@
+id: cognitive-reasoning-overlay
+version: 0.1.0
+title: 认知、需求推理与时序参考叠加层契约
+purpose: >-
+  登记用户认知生命周期、需求推理和时序推理的候选结构，供项目按风险选择性启用；
+  不把参考材料自动升级为事实、需求、Workflow 或产品规则。
+status: reference-candidate
+authority: non-normative
+document: COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md
+promotion_matrix: contracts/promotion-matrix.yaml
+artifact_reference: contracts/artifact-reference.yaml
+activation:
+  mode: opt-in
+  required_when:
+    - sequence-sensitive-behavior-exists
+    - user-intent-or-requirement-inference-is-material
+    - multi-source-knowledge-synthesis-is-in-scope
+  otherwise: record-not-applicable-and-reason
+reasoning_artifacts:
+  requirement_reasoning:
+    id: requirement-reasoning-trace
+    relation_fields: [reasoning_id, subject_ref, role_ref, host_stage_id, derived_from, promotes_to, blocks, resolved_by]
+    required_fields:
+      - statement_ref
+      - object_type
+      - observed_facts
+      - inference
+      - alternatives
+      - confidence
+      - unknowns
+      - decision_impact
+      - confirmation_owner
+      - promotion_status
+    promotion_statuses: [candidate, confirmed, rejected, unknown]
+  temporal_case:
+    id: temporal-case
+    contract: contracts/temporal-case.yaml
+    relation_fields: [subject_ref, host_stage_id, derived_from, blocks, resolved_by]
+    required_fields:
+      - trigger
+      - preconditions
+      - events
+      - decision_points
+      - branches
+      - recovery
+      - terminal_states
+      - unknowns
+    relation_values: [observed, inferred, unknown]
+    order_types: [temporal, causal, dependency, priority, reading, execution]
+  cognitive_observation:
+    id: cognitive-lifecycle-observation
+    status: candidate
+    rule: do-not-create-empty-stage; record-not-applicable-when-out-of-scope
+    stage_ids: [J01, J02, J03, J04, J05, J06, J07, J08, J09, J10, J11, J12, J13, J14, J15, J16, J17, J18]
+promotion_gate:
+  - reference-and-user-statement-are-not-authority-by-themselves
+  - inference-traces-to-source-or-run-evidence
+  - alternatives-and-unknowns-are-preserved
+  - representative-example-and-counterexample-are-reviewed
+  - human-owner-confirms-any-business-requirement
+  - affected-downstream-evidence-is-revalidated
+non_goals:
+  - replace-the-P01-to-P16-navigator
+  - replace-A1-to-A7-or-B1-to-B7-execution-stages
+  - infer-causality-from-temporal-order-alone
+  - promote-high-confidence-to-confirmed-automatically
+  - turn-every-user-quote-into-a-product-feature

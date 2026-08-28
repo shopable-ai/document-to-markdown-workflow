@@ -1,0 +1,58 @@
+id: acceptance-scorecard
+version: 0.1.0
+title: 95+ 独立验收评分卡契约
+purpose: >-
+  将 95+ 从叙述性目标变为可计算的分数、硬门、独立性、输入摘要和声明上限；不允许高分掩盖硬失败。
+status: design-active
+required: [scorecard_id, subject_type, subject_ref, baseline_ref, projection_ref, run_ref, dimensions, hard_gates, evidence_refs, total_score, input_digest, generated_by, validated_by, scored_by, validator_execution_id, independence_mode]
+subject_types: [requirement, scenario, projection, run, package, document, page, region]
+dimension_policy:
+  - id: source_protection_and_traceability
+    maximum: 10
+    pass_line: 9
+  - id: structure_mapping
+    maximum: 14
+    pass_line: 12
+  - id: content_completeness
+    maximum: 23
+    pass_line: 20
+  - id: graphic_structure_fidelity
+    maximum: 23
+    pass_line: 20
+  - id: provenance_uncertainty_boundary
+    maximum: 10
+    pass_line: 9
+  - id: visual_asset_link_traceability
+    maximum: 10
+    pass_line: 9
+  - id: unknown_and_coverage_completeness
+    maximum: 5
+    pass_line: 5
+  - id: repair_review_and_recovery
+    maximum: 5
+    pass_line: 4
+thresholds:
+  minimum_pass: 95
+  recommended_target: 97
+  score_95_to_96_claim_ceiling: bounded
+  score_97_or_more_claim_ceiling: target
+hard_gate:
+  required: [id, passed, evidence_refs, blocking_reason]
+  ids: [no-p0, provenance-complete, integrity-complete, no-silent-omission, independent-validation]
+independence_modes: [independent-human, independent-validator, cross-run-independent-validator, same-pipeline-check, not-independent]
+verdict:
+  statuses: [passed, needs-review, failed]
+  required: [verdict_id, status, scorecard_ref, issued_by, validator_execution_id, bounded_claim_scope]
+claim:
+  statuses: [blocked, allowed, invalidated]
+  allowed_requires: [confirmed_baseline, current_non_stale_run, current_evidence, passed_verdict, score_at_least_95, all_hard_gates_passed]
+  invalidated_by: [baseline_change, projection_change, input_digest_change, evidence_stale, validator_retraction]
+invariants:
+  - total_score 必须等于 dimensions[*].score 之和
+  - 任一维度低于 pass_line 时不能 verdict=passed
+  - total_score 小于 95 时不能 verdict=passed
+  - hard_gate=false 时即使总分 100 也不能 verdict=passed 或 claim=allowed
+  - generated_by 不得等于 validated_by 或 scored_by
+  - same-pipeline-check 或 not-independent 最高只能 needs-review
+  - 95-96 是最低通过的 bounded 声明，97+ 是推荐目标，不新增生命周期状态
+  - claim=allowed 必须能回指 baseline、projection、current run、evidence 和独立 verdict

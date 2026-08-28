@@ -22,6 +22,16 @@ required:
   failure: object|null
   stage_evidence: array
   stage_evidence_contract: contracts/stage-evidence.yaml
+governance_extensions:
+  artifact_reference_contract: contracts/artifact-reference.yaml
+  projection_record_contract: contracts/projection-record.yaml
+  acceptance_scorecard_contract: contracts/acceptance-scorecard.yaml
+  claimable_requires:
+    - confirmed_baseline_ref
+    - projection_ref
+    - current_input_digest
+    - independent_verdict_ref
+    - non_stale_evidence
 forbidden_fields:
   - api_key
   - authorization
@@ -36,3 +46,4 @@ invariants:
   - stage_evidence 必须逐项覆盖 A1–A7/B1–B7 中实际声明的阶段，并包含 stage_id、status、evidence_level、evidence_paths 和 diagnostics
   - stage_evidence 的每一项必须满足 contracts/stage-evidence.yaml；验证命令未执行时不得标记 complete
   - status=needs-review 时至少一个 stage_evidence.status 必须为 needs-review 或 unavailable
+  - status=succeeded 不能单独推出 Claim=allowed；必须另外满足 acceptance-scorecard 和独立 Verdict

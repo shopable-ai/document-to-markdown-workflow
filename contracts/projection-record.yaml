@@ -1,0 +1,19 @@
+id: projection-record
+version: 0.1.0
+title: 执行投影记录契约
+purpose: >-
+  固定 P12 从已确认需求/基线到 Workflow、Skill、Tool、Model 和 Context 的实际选择、排除和授权依据。
+status: design-active
+required: [projection_id, host_stage_id, baseline_ref, workflow_ref, selected_refs, excluded_refs, selection_reason, authorization_basis, status]
+host_stage_id: P12
+selected_refs:
+  required: [source_refs, workflow_refs, skill_refs, tool_refs, model_or_route_refs, context_refs]
+excluded_refs:
+  required: [refs, reasons]
+record_status: [candidate, projected, superseded, stale]
+invariants:
+  - projection 必须从 confirmed baseline 或 confirmed functional requirement 出发
+  - selected_refs 和 excluded_refs 都必须记录，不能只记录最终选择
+  - candidate/reference/test-only/historical-run 不得作为生产投影的唯一来源
+  - projection 必须记录 workflow_id、workflow_version 和 source_fingerprint
+  - P12 投影不能改变 P01-P16 或 A/B 的阶段编号和独立运行边界

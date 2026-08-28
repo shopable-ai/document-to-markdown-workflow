@@ -18,9 +18,22 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class UniqueKeyLoader(yaml.SafeLoader):
+    """Reject duplicate YAML keys instead of silently keeping the last value."""
+
+    def construct_mapping(self, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in mapping:
+                raise AssertionError(f"duplicate YAML key: {key}")
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
+
+
 def load(path: Path):
     with path.open(encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+        return yaml.load(handle, Loader=UniqueKeyLoader)
 
 
 def frontmatter_name(path: Path) -> str:
@@ -84,10 +97,55 @@ def main() -> int:
         "workflow-a-preflight.yaml",
         "markdown-collection-output-layout.yaml",
         "ebook-page-pruning.yaml",
+        "cognitive-reasoning-overlay.yaml",
+        "artifact-reference.yaml",
+        "promotion-matrix.yaml",
+        "temporal-case.yaml",
+        "projection-record.yaml",
+        "acceptance-scorecard.yaml",
+        "change-record.yaml",
     ):
         assert (ROOT / "contracts" / contract_name).is_file(), contract_name
     assert (ROOT / "references/audit-rubric.zh.md").is_file()
     assert (ROOT / "references/quality-targets.zh.md").is_file()
+    process_contract_path = ROOT / "contracts/document-driven-workflow.yaml"
+    assert process_contract_path.is_file()
+    process_contract = load(process_contract_path)
+    assert process_contract["id"] == "document-driven-project-workflow"
+    assert process_contract["layers"]["navigator_stage_count"] == 16
+    assert [stage["id"] for stage in process_contract["stages"]] == [
+        f"P{index:02d}" for index in range(1, 17)
+    ]
+    for reference in process_contract["authority"].values():
+        assert (ROOT / reference).exists(), reference
+    reasoning_contract = load(ROOT / "contracts/cognitive-reasoning-overlay.yaml")
+    assert reasoning_contract["id"] == "cognitive-reasoning-overlay"
+    assert reasoning_contract["status"] == "reference-candidate"
+    assert reasoning_contract["authority"] == "non-normative"
+    assert reasoning_contract["reasoning_artifacts"]["cognitive_observation"]["stage_ids"] == [
+        f"J{index:02d}" for index in range(1, 19)
+    ]
+    scorecard_contract = load(ROOT / "contracts/acceptance-scorecard.yaml")
+    assert scorecard_contract["thresholds"] == {
+        "minimum_pass": 95,
+        "recommended_target": 97,
+        "score_95_to_96_claim_ceiling": "bounded",
+        "score_97_or_more_claim_ceiling": "target",
+    }
+    assert sum(item["maximum"] for item in scorecard_contract["dimension_policy"]) == 100
+    assert scorecard_contract["hard_gate"]["ids"]
+    promotion_matrix = load(ROOT / "contracts/promotion-matrix.yaml")
+    assert promotion_matrix["layers"]["reasoning"]["transitions"][0]["to"] == "confirmed"
+    assert promotion_matrix["layers"]["claim"]["transitions"][0]["to"] == "allowed"
+    for relative in (
+        "AI-WORKFLOW-UNIVERSE.zh.md",
+        "PROJECT-DELIVERY-WORKFLOW.zh.md",
+        "ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md",
+        "COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md",
+        "EXPERT-CONSENSUS-REVIEW.zh.md",
+    ):
+        assert (ROOT / relative).is_file(), relative
+    assert (ROOT / "adapters/document_governance.py").is_file()
     model_routing_contract = load(
         ROOT / "contracts/markdown-post-merge-model-routing.yaml"
     )

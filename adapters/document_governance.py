@@ -6,9 +6,18 @@ load project files, mutate runs, or promote a candidate by themselves.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+INDEX_GENERATOR_VERSION = "document-governance-index/0.1.0"
 
 def _missing(record: Mapping[str, Any], fields: Sequence[str]) -> list[str]:
     return [field for field in fields if field not in record or record[field] in (None, "", [])]
@@ -190,3 +199,130 @@ def evaluate_claim_gate(context: Mapping[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "claim_ceiling": "target" if total >= 97 else "bounded" if total >= 95 else "none",
     }
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def parse_markdown_table(path: Path, key_column: str) -> list[dict[str, str]]:
+    """Read one authoritative pipe table without treating prose as machine truth."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("|"):
+            continue
+        headers = [cell.strip() for cell in line.strip("|").split("|")]
+        if key_column not in headers:
+            continue
+        if index + 1 >= len(lines) or not lines[index + 1].startswith("|"):
+            continue
+        rows: list[dict[str, str]] = []
+        for row_line in lines[index + 2 :]:
+            if not row_line.startswith("|"):
+                break
+            values = [cell.strip() for cell in row_line.strip("|").split("|")]
+            if len(values) != len(headers):
+                raise ValueError(f"{path}: table row width does not match header: {row_line}")
+            row = dict(zip(headers, values, strict=True))
+            if row[key_column]:
+                rows.append(row)
+        if not rows:
+            raise ValueError(f"{path}: authoritative table {key_column!r} is empty")
+        ids = [row[key_column] for row in rows]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"{path}: duplicate {key_column}")
+        return rows
+    raise ValueError(f"{path}: missing authoritative table headed by {key_column!r}")
+
+
+def build_markdown_index(source: Path, key_column: str) -> dict[str, Any]:
+    return {
+        "schema": "governance-derived-index",
+        "version": "0.1.0",
+        "generated_from": str(source.relative_to(ROOT)),
+        "source_hash": _sha256(source),
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "generator_version": INDEX_GENERATOR_VERSION,
+        "do_not_edit": True,
+        "item_key": key_column,
+        "items": parse_markdown_table(source, key_column),
+    }
+
+
+def write_markdown_index(source: Path, destination: Path, key_column: str) -> None:
+    generated = build_markdown_index(source, key_column)
+    if destination.exists():
+        previous = yaml.safe_load(destination.read_text(encoding="utf-8")) or {}
+        if (
+            previous.get("source_hash") == generated["source_hash"]
+            and previous.get("generator_version") == generated["generator_version"]
+            and previous.get("generated_at")
+        ):
+            generated["generated_at"] = previous["generated_at"]
+    destination.write_text(
+        yaml.safe_dump(generated, allow_unicode=True, sort_keys=False, width=120),
+        encoding="utf-8",
+    )
+
+
+def validate_markdown_index(source: Path, destination: Path, key_column: str) -> list[str]:
+    if not destination.is_file():
+        return [f"missing-index:{destination.relative_to(ROOT)}"]
+    current = yaml.safe_load(destination.read_text(encoding="utf-8")) or {}
+    expected = build_markdown_index(source, key_column)
+    errors: list[str] = []
+    for field in (
+        "schema",
+        "version",
+        "generated_from",
+        "source_hash",
+        "generator_version",
+        "do_not_edit",
+        "item_key",
+        "items",
+    ):
+        if current.get(field) != expected.get(field):
+            errors.append(f"derived-index-drift:{destination.name}:{field}")
+    if not current.get("generated_at"):
+        errors.append(f"derived-index-drift:{destination.name}:generated_at")
+    return errors
+
+
+def governance_index_specs() -> tuple[tuple[Path, Path, str], ...]:
+    return (
+        (
+            ROOT / "requirements/REQUIREMENTS.md",
+            ROOT / "requirements/requirements.index.yaml",
+            "requirement_id",
+        ),
+        (
+            ROOT / "requirements/FUNCTIONS.md",
+            ROOT / "requirements/functions.index.yaml",
+            "function_id",
+        ),
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate or check Markdown-authoritative governance indices.")
+    parser.add_argument("command", choices=("generate-indices", "check-indices"))
+    args = parser.parse_args()
+    if args.command == "generate-indices":
+        for source, destination, key_column in governance_index_specs():
+            write_markdown_index(source, destination, key_column)
+        return 0
+    errors = [
+        error
+        for source, destination, key_column in governance_index_specs()
+        for error in validate_markdown_index(source, destination, key_column)
+    ]
+    if errors:
+        for error in errors:
+            print(error)
+        return 1
+    print("PASS: Markdown-derived requirement and function indices are current")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,6 +1,8 @@
 id: knowledge-map-image-to-md
 kind: workflow-profile
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-knowledge-map-image-to-md
+lifecycle_status: active-profile
 workflow: document-to-markdown-assets
 entrypoint_skill: knowledge-map-image-to-md
 policy_reference: ../references/knowledge-map-profile.zh.md

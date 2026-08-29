@@ -1,5 +1,8 @@
 contract: workflow-run-record
+id: workflow-run-record
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-run-record
+lifecycle_status: active
 description: 两个 Workflow 的运行生命周期、输入指纹、版本快照和证据等级记录。
 root: <output_root>/<run-id>/run-record.yaml
 required:

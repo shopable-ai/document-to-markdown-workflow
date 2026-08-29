@@ -1,5 +1,8 @@
 contract: page-markdown-unit
+id: page-markdown-unit
 version: 0.5.0
+human_reference: contracts/CONTRACTS.md#contract-page-markdown-unit
+lifecycle_status: active
 description: 单页读者层 Markdown 工作单元、图级 Mermaid/PNG 回填、阶段门、确定性合并和派生预览契约。
 status: active
 scope: reader-layer-page-repair-only

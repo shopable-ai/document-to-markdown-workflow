@@ -1,5 +1,8 @@
 contract: source-inventory
+id: source-inventory
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-source-inventory
+lifecycle_status: active
 description: A1 来源只读预检结果。
 required: [source_fingerprint, media_type, status, page_count_or_dimensions, text_layer, image_layer, readability, diagnostics]
 optional: [source_selection, candidate_comparison]

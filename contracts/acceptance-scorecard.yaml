@@ -1,5 +1,7 @@
 id: acceptance-scorecard
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-acceptance-scorecard
+lifecycle_status: design-active
 title: 95+ 独立验收评分卡契约
 purpose: >-
   将 95+ 从叙述性目标变为可计算的分数、硬门、独立性、输入摘要和声明上限；不允许高分掩盖硬失败。

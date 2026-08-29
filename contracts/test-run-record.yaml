@@ -1,5 +1,8 @@
 contract: test-run-record
+id: test-run-record
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-test-run-record
+lifecycle_status: active
 description: 测试运行记录，不是 Workflow A/B 的业务转换结果。
 root: tests/runs/<run-id>/
 required_files:

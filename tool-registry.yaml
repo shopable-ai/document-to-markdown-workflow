@@ -1,5 +1,8 @@
 registry: tool-registry
+id: tool-registry
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#yaml-tool-registry
+lifecycle_status: active
 description: Skill 所依赖的确定性代码、系统能力和外部模型适配器注册表。
 schema:
   required_entry_fields: [id, kind, used_by, implementation]

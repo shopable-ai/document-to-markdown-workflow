@@ -1,5 +1,7 @@
 id: temporal-case
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-temporal-case
+lifecycle_status: design-active
 title: 时序、状态与因果案例契约
 purpose: >-
   将事件、状态迁移、顺序关系、分支、恢复和失败回退分开记录；禁止从先后顺序静默推导因果。

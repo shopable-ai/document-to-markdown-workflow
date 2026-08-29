@@ -6,9 +6,9 @@
 
 评审对象：
 
-- [`GOAL.zh.md`](../GOAL.zh.md)
-- [`TASK-TREE.zh.md`](../TASK-TREE.zh.md)
-- [`WORKFLOW-MAP.zh.md`](../WORKFLOW-MAP.zh.md)
+- [`PROJECT-GOAL-AND-SCOPE.md`](../requirements/PROJECT-GOAL-AND-SCOPE.md)
+- [`REQUIREMENT-TREE.md`](../requirements/REQUIREMENT-TREE.md)
+- [`WORKFLOW-MAP.md`](../design/WORKFLOW-MAP.md)
 - [`contracts/requirement-chain.yaml`](../contracts/requirement-chain.yaml)
 
 ## 上一版专家评分：99/100（历史基线）

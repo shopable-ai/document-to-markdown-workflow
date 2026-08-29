@@ -1,276 +1,102 @@
 id: document-to-markdown-requirement-chain
-version: 0.1.0
-title: 文档转 Markdown 前置需求链路契约
+version: 0.2.0
+human_reference: contracts/CONTRACTS.md#contract-document-to-markdown-requirement-chain
+lifecycle_status: awaiting-human-confirmation
+title: 文档资产化 Markdown-first 需求交接投影
 purpose: >-
-  在进入任何运行器、候选比较器或真实转换前，固定 Requirement、Chain、Spec、Task、
-  Workflow、Skill/Tool 的来源、字段、验收门和交接边界。
-scope: frontmatter-only
+  机器检查需求 Markdown、三次基线、派生索引和向设计/工程的交接门；
+  本合同不定义、确认或改写业务需求。
 status: awaiting-human-confirmation
-authority_order:
-  - markdown-content-repair
-  - machine-contract-projection
-  - execution-adapter
-description_policy: >-
-  背景、目标和用户问题先在 GOAL.zh.md 确认；需求描述、需求任务、依赖和验收问题先在
-  TASK-TREE.zh.md 确认；工程 Chain 单独在 WORKFLOW-MAP.zh.md 映射。只有前一层被人工确认，
-  才向 workflow.yaml、contracts、registry、skills、tools 和 adapters 投影。工程文件不得
-  反向改写未确认的需求任务。
-
-project_process_framework:
-  universe_reference: AI-WORKFLOW-UNIVERSE.zh.md
-  navigator_reference: PROJECT-DELIVERY-WORKFLOW.zh.md
-  governance_reference: ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md
-  machine_contract: contracts/document-driven-workflow.yaml
-  navigator_stage_count: 16
-  execution_projection: A1-A7-and-B1-B7
-  reasoning_overlay: contracts/cognitive-reasoning-overlay.yaml
-  artifact_reference: contracts/artifact-reference.yaml
-  promotion_matrix: contracts/promotion-matrix.yaml
-  projection_record: contracts/projection-record.yaml
-  acceptance_scorecard: contracts/acceptance-scorecard.yaml
-  change_record: contracts/change-record.yaml
-  rule: 项目级导航环节与执行级 Workflow 阶段分层；导航不会偷偷增加或重编号 A/B 阶段。
-
-canonical_chain:
-  - id: requirement
-    label: Requirement
-    reader_question: 为什么做、解决谁的什么问题、什么不能假设？
-    source_files:
-      - GOAL.zh.md
-      - TASK-TREE.zh.md
-    required_fields:
-      - background
-      - goals
-      - user_problems
-      - statement_object_classification
-      - role_refs
-      - hard_requirements
-      - non_goals
-      - optional_downstream_knowledge_base_pruning
-    gate:
-      id: requirement-complete
-      assertion: 背景、目标、用户问题、硬性约束和非目标均已写入中文入口文档。
-      failure_status: blocked
-
-  - id: chain
-    label: Chain
-    reader_question: 已确认需求任务如何映射到 Spec、工程 Task、Workflow、Skill/Tool 和停止点？
-    source_files:
-      - WORKFLOW-MAP.zh.md
-    required_fields:
-      - requirement_task_mapping
-      - engineering_dependencies
-      - data_flow
-      - stop_conditions
-      - downstream_boundaries
-      - typed_traceability
-    gate:
-      id: chain-complete
-      assertion: 每个需求任务都映射到工程 Spec/Task/Workflow，并有停止条件和下游边界。
-      failure_status: blocked
-
-  - id: spec
-    label: Spec
-    reader_question: 哪些规则可以被机器检查，哪些结果只能是 Unknown？
-    source_files:
-      - workflows/document-to-markdown-assets/workflow.yaml
-      - contracts/source-inventory.yaml
-      - contracts/native-content-model.yaml
-      - contracts/reconciliation.yaml
-      - contracts/workflow-a-output-layout.yaml
-      - contracts/ebook-page-pruning.yaml
-      - references/known-failures.zh.md
-    required_fields:
-      - input_boundary
-      - source_selection_rule
-      - evidence_separation
-      - status_policy
-      - temporal_relation_policy
-      - output_layout
-    gate:
-      id: spec-complete
-      assertion: 单源、候选、Unknown、needs-review、failed 和独立验收规则均有契约来源。
-      failure_status: blocked
-
-  - id: task
-    label: Task
-    reader_question: 需求任务和工程 Task 是否分离，且工程 Task 能回指已确认需求？
-    source_files:
-      - TASK-TREE.zh.md
-      - WORKFLOW-MAP.zh.md
-      - EXECUTION-TASK-TREE.zh.md
-    required_fields:
-      - requirement_groups
-      - engineering_task_mapping
-      - execution_task_tree
-      - execution_control_tree
-      - content_quality_tree
-      - vertical_slice_gate
-      - language_quality_repair
-      - observability_gate
-      - scale_expansion
-      - test_matrix
-      - acceptance_questions
-      - dependency_order
-      - downstream_knowledge_base_pruning
-    gate:
-      id: task-complete
-      assertion: TASK-TREE 只含需求语言和推进顺序；工程 Task 在 Chain 中单列并回指已确认的需求组；执行任务树先完成单页纵向切片，再扩展多页、多文件和测试门。
-      failure_status: blocked
-
-  - id: workflow
-    label: Workflow
-    reader_question: 需求如何变成可触发、可停止、可交接的阶段流程？
-    source_files:
-      - workflow-registry.yaml
-      - workflows/document-to-markdown-assets/workflow.yaml
-      - workflows/document-to-markdown-assets/README.zh.md
-      - workflows/document-to-markdown-assets/ACCEPTANCE.zh.md
-    required_fields:
-      - trigger
-      - stages
-      - stage_gates
-      - outputs
-      - failure_states
-      - handoff_boundary
-      - optional_downstream_steps
-    gate:
-      id: workflow-complete
-      assertion: Workflow 入口、阶段、输出、失败态和独立验收入口相互引用且不重复定义。
-      failure_status: blocked
-
-  - id: skill-tool
-    label: Skill/Tool
-    reader_question: 每个阶段需要什么判断能力和确定性工具，哪些仍是 planned？
-    source_files:
-      - skill-registry.yaml
-      - tool-registry.yaml
-      - skills/
-    required_fields:
-      - skill_ids
-      - tool_ids
-      - ownership_mapping
-      - implementation_status
-      - planned_boundary
-    gate:
-      id: skill-tool-complete
-      assertion: Workflow 中引用的 Skill/Tool 均可定位；planned 不得写成 production-ready。
-      failure_status: blocked
-
-  - id: run
-    label: Run
-    reader_question: 哪一次真实运行、用的哪个 source 和版本？
-    source_files:
-      - contracts/workflow-run-record.yaml
-      - contracts/test-run-record.yaml
-    required_fields:
-      - run_id
-      - source_fingerprint
-      - selected_pages
-      - workflow_version
-      - projection_ref
-      - current_input_digest
-    gate:
-      id: run-blocked-until-confirmed
-      assertion: 前六环未获人工确认前，不创建生产 Run，不读取或修改运行器。
-      failure_status: blocked
-
-  - id: evidence
-    label: Evidence
-    reader_question: 什么可重读证据支持每个字段和选择？
-    source_files:
-      - contracts/stage-evidence.yaml
-      - contracts/failure-report.yaml
-      - references/failure-states.zh.md
-      - references/known-failures.zh.md
-    required_fields:
-      - evidence_paths
-      - provenance
-      - origin_class
-      - authority_class
-      - source_digest
-      - uncertainties
-      - diagnostics
-    gate:
-      id: evidence-blocked-until-run
-      assertion: 没有当前 source 的 Run，就不能把 fixture、HTTP 200 或 runner 自报状态当证据。
-      failure_status: blocked
-
-  - id: verdict
-    label: Verdict
-    reader_question: 结果是 passed、needs-review 还是 failed？
-    source_files:
-      - workflows/document-to-markdown-assets/ACCEPTANCE.zh.md
-      - contracts/failure-report.yaml
-    required_fields:
-      - passed
-      - needs_review
-      - failed
-      - independent_validator
-      - acceptance_scorecard
-      - validator_identity_separation
-    gate:
-      id: verdict-blocked-until-evidence
-      assertion: 只有独立 validator 重读当前 package 后才能产生 Verdict。
-      failure_status: blocked
-
-  - id: claim
-    label: Claim
-    reader_question: 在什么来源、页码和证据上允许声称到哪一级？
-    source_files:
-      - GOAL.zh.md
-      - WORKFLOW-MAP.zh.md
-      - references/quality-targets.zh.md
-    required_fields:
-      - claim_scope
-      - source_fingerprint
-      - evidence_level
-      - unresolved_items
-      - baseline_ref
-      - projection_ref
-      - run_ref
-      - verdict_ref
-      - claim_ceiling
-    gate:
-      id: claim-blocked-until-verdict
-      assertion: 未有 passed Verdict 时，只能报告 Unknown、候选、needs-review 或 failed，不得扩大 Claim。
-      failure_status: blocked
-
-frontmatter_gate:
-  required_chain_ids: [requirement, chain, spec, task, workflow, skill-tool]
-  confirmation_required: true
-  current_decision: pending-user-confirmation
-  human_readable_first: true
-  primary_review_files: [GOAL.zh.md, TASK-TREE.zh.md]
-  engineering_chain_review_file: WORKFLOW-MAP.zh.md
-  engineering_task_tree_file: EXECUTION-TASK-TREE.zh.md
-  projection_files:
-    - contracts/requirement-chain.yaml
-    - contracts/artifact-reference.yaml
-    - contracts/promotion-matrix.yaml
-    - contracts/projection-record.yaml
-    - contracts/acceptance-scorecard.yaml
-    - contracts/change-record.yaml
-    - workflow-registry.yaml
-    - workflows/document-to-markdown-assets/workflow.yaml
-    - skill-registry.yaml
-    - tool-registry.yaml
-  allowed_before_confirmation:
-    - edit_requirement_and_spec_documents
-    - validate_yaml_and_markdown_links
-    - audit_file_reference_closure
-  forbidden_before_confirmation:
-    - run_document_conversion
-    - run_candidate_comparison
-    - modify_adapter_implementation
-    - treat_fixture_as_production_evidence
-  handoff_to_execution_requires:
-    - human_confirmation_of_frontmatter
-    - explicit_scope_for_run
-    - source_path_and_output_root
-
-state_vocabulary:
-  ready-for-confirmation: 前置内容已写入并可供人工确认，但未授权执行后续 Run。
-  confirmed: 人工确认前置链路，可进入下一阶段。
-  blocked: 依赖的前置环节或证据尚未完成。
-  needs-review: 内容存在但有明确未决项，不能升级为 confirmed。
+semantic_authority:
+  goal_scope:
+    path: requirements/PROJECT-GOAL-AND-SCOPE.md
+    document_id: PROJECT-GOAL-AND-SCOPE
+    version: 0.3.0
+  requirements:
+    path: requirements/REQUIREMENTS.md
+    document_id: REQUIREMENTS
+    version: 0.3.0
+  requirement_tree:
+    path: requirements/REQUIREMENT-TREE.md
+    authority: derived
+  baselines:
+    path: requirements/BASELINES.md
+  scenarios:
+    path: requirements/BUSINESS-SCENARIOS-AND-CHAINS.md
+  functions:
+    path: requirements/FUNCTIONS.md
+    document_id: FUNCTIONS
+    version: 0.3.0
+  behaviors:
+    path: requirements/BEHAVIOR-STATE-AND-TEMPORAL-SPECS.md
+  acceptance:
+    path: requirements/ACCEPTANCE-AND-TEST-SPACE.md
+  traceability:
+    path: requirements/TRACEABILITY.md
+  discovery:
+    paths:
+      - requirements/discovery/RAW-REQUESTS.md
+      - requirements/discovery/REQUIREMENT-DISCOVERY.md
+    authority: reference-candidate
+    default_after_V2: excluded
+derived_indices:
+  requirements:
+    path: requirements/requirements.index.yaml
+    generated_from: requirements/REQUIREMENTS.md
+    do_not_edit: true
+  functions:
+    path: requirements/functions.index.yaml
+    generated_from: requirements/FUNCTIONS.md
+    do_not_edit: true
+baseline_gates:
+  V1:
+    current_status: pending-human-reconfirmation
+    permits: [scenario-function-behavior-acceptance-elaboration]
+    forbids: [formal-solution-design, spec, engineering-task, production-run]
+  V2:
+    current_status: blocked-by-V1
+    permits_after_confirmed: [solution-and-architecture-design, brownfield-gap-analysis]
+    forbids_before_confirmed: [architecture-baseline, formal-spec, engineering-task]
+  V3:
+    current_status: blocked-by-V2
+    permits_after_confirmed: [formal-spec, engineering-task, workflow-projection, implementation]
+canonical_objects:
+  - Requirement
+  - Scenario
+  - Function
+  - Behavior
+  - Acceptance
+  - Design
+  - Spec
+  - Task
+  - Workflow
+  - Code
+  - Test
+  - Run
+  - Evidence
+  - Verdict
+  - Delivery
+  - Claim
+rules:
+  - markdown-business-semantics-precede-machine-projection
+  - requirement-tree-cannot-create-requirements
+  - function-tree-cannot-create-functions
+  - generated-index-cannot-overwrite-markdown
+  - workflow-code-test-and-run-cannot-confirm-requirements
+  - unknown-requires-owner-impact-resolution-entry
+  - V1-before-V2-before-V3
+  - V3-before-formal-spec-and-task
+  - run-success-is-not-verdict
+  - stale-evidence-cannot-support-claim
+handoff:
+  current_status: blocked
+  reason: V1-V2-V3-not-confirmed
+  allowed_now:
+    - edit-and-review-requirement-markdown
+    - refresh-derived-indices
+    - validate-links-and-contract-pairs
+    - read-only-brownfield-gap-analysis
+  forbidden_now:
+    - treat-existing-workflow-as-approved-requirement
+    - run-real-document-conversion
+    - issue-production-claim

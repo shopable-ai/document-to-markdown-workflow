@@ -1,5 +1,8 @@
 contract: long-task-interaction
+id: long-task-interaction
 version: 1.1.0
+human_reference: contracts/CONTRACTS.md#contract-long-task-interaction
+lifecycle_status: active
 status: active
 description: 长时间后台任务与当前 Codex 对话的隔离、状态、消息预算和停止语义。
 

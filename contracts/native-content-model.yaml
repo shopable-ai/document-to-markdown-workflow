@@ -1,5 +1,8 @@
 contract: native-content-model
+id: native-content-model
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-native-content-model
+lifecycle_status: active
 description: A2 原生结构提取的跨格式最小模型。
 required: [source_fingerprint, status, text_blocks, nodes, relations, coordinates, source_locations, diagnostics]
 status: enum[complete, partial, needs-review, unavailable, failed]

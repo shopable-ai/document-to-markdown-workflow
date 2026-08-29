@@ -1,5 +1,8 @@
 contract: stage-evidence
+id: stage-evidence
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-stage-evidence
+lifecycle_status: active
 description: 每个 A1-A7/B1-B7 阶段的可验证证据记录；设计规格与生产运行证据分开。
 item:
   required: [stage_id, status, evidence_level, evidence_paths, diagnostics, verification_commands]

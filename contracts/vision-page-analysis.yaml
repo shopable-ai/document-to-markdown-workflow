@@ -1,5 +1,8 @@
 contract: vision-page-analysis
+id: vision-page-analysis
 version: 0.3.0
+human_reference: contracts/CONTRACTS.md#contract-vision-page-analysis
+lifecycle_status: active
 description: 对当前单图执行文字识别和 Markdown 结构候选生成；Apple Vision OCR、小视觉模型与 mac96 30B 都是待实测选择的候选路线，不预设固定主次。
 authorization:
   mac96:

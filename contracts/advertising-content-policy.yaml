@@ -1,5 +1,8 @@
 contract: advertising-content-policy
+id: advertising-content-policy
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-advertising-content-policy
+lifecycle_status: active
 description: 广告与推广内容的独立后置分类及处理契约；基础提取必须保留全部可见文字。
 stage: advertising-classification-and-treatment
 depends_on:

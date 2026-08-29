@@ -1,5 +1,8 @@
 contract: visual-reconstruction-profile
+id: visual-reconstruction-profile
 version: 0.4.0
+human_reference: contracts/CONTRACTS.md#contract-visual-reconstruction-profile
+lifecycle_status: active
 description: 复杂视觉资产的结构化重建信息、可复用图像模型提示词与可选 Mermaid 派生表达契约。
 purpose: 在保留原图和 PNG fallback 的同时，保存足以指导后续图像模型或 Mermaid 保守重建的可核对结构、文字、样式和提示词。
 required:

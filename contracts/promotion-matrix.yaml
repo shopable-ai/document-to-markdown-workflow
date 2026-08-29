@@ -1,5 +1,7 @@
 id: promotion-matrix
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-promotion-matrix
+lifecycle_status: design-active
 title: 对象状态晋升矩阵
 purpose: >-
   防止 confidence、status、verdict 和 claim 状态串层；任何晋升都必须有合法前驱、证据和责任主体。

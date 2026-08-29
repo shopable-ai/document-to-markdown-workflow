@@ -1,5 +1,7 @@
 id: change-record
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-change-record
+lifecycle_status: design-active
 title: 变更影响与失效记录契约
 purpose: >-
   让 P16 可以枚举上游变化影响的 Run、Evidence、Verdict 和 Claim，并明确是否需要重新验收。

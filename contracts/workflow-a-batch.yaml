@@ -1,5 +1,8 @@
 contract: workflow-a-batch-run
+id: workflow-a-batch-run
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-a-batch-run
+lifecycle_status: active
 description: 多来源队列与单一长 PDF 的 smoke、分批、checkpoint、恢复和单包输出边界。
 root: <output_root>/<source-name>-<timestamp>/run-record.yaml
 required:

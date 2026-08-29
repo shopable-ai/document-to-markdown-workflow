@@ -59,7 +59,7 @@ def main() -> int:
     workflow_registry = load(workflow_registry_path)
     registry = load(registry_path)
     tool_registry = load(tool_registry_path)
-    assert (ROOT / "WORKFLOW-MAP.zh.md").is_file()
+    assert (ROOT / "design/WORKFLOW-MAP.md").is_file()
     assert (ROOT / "references/omitted-gates.zh.md").is_file()
     archive_root = ROOT / "archive/legacy-skills/knowledge-map-image-to-md"
     archived_skill = archive_root / "SKILL.md"
@@ -138,11 +138,11 @@ def main() -> int:
     assert promotion_matrix["layers"]["reasoning"]["transitions"][0]["to"] == "confirmed"
     assert promotion_matrix["layers"]["claim"]["transitions"][0]["to"] == "allowed"
     for relative in (
-        "AI-WORKFLOW-UNIVERSE.zh.md",
-        "PROJECT-DELIVERY-WORKFLOW.zh.md",
-        "ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md",
-        "COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.zh.md",
-        "EXPERT-CONSENSUS-REVIEW.zh.md",
+        "governance/AI-WORKFLOW-UNIVERSE.md",
+        "PROJECT-DELIVERY-WORKFLOW.md",
+        "governance/ARTIFACT-AND-CHANGE-GOVERNANCE.md",
+        "governance/COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.md",
+        "design/WORKFLOW-ARCHITECTURE.md",
     ):
         assert (ROOT / relative).is_file(), relative
     assert (ROOT / "adapters/document_governance.py").is_file()
@@ -166,7 +166,7 @@ def main() -> int:
     assert len(workflow_entries) == len(workflow_registry["workflows"]), "duplicate Workflow IDs"
     assert set(workflow_entries) == {"document-to-markdown-assets", "markdown-to-gpt-image"}
     assert workflow_entries["document-to-markdown-assets"]["aliases"] == ["knowledge-map-image-to-md"]
-    assert (ROOT / "WORKFLOWS.zh.md").is_file()
+    assert (ROOT / "design/WORKFLOWS.md").is_file()
     for entry in workflow_entries.values():
         for field in ("path", "readme", "acceptance"):
             target = ROOT / entry[field]
@@ -472,7 +472,7 @@ if __name__ == "__main__":
     workflow_entries = {entry["id"]: entry for entry in workflow_registry["workflows"]}
     assert len(workflow_entries) == len(workflow_registry["workflows"])
     assert set(workflow_entries) == {"document-to-markdown-assets", "markdown-to-gpt-image"}
-    assert (ROOT / "WORKFLOWS.zh.md").is_file()
+    assert (ROOT / "design/WORKFLOWS.md").is_file()
 
     for entry in workflow_entries.values():
         for field in ("path", "readme", "acceptance"):

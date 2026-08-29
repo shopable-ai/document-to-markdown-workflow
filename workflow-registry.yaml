@@ -1,5 +1,8 @@
 registry: workflow-registry
+id: workflow-registry
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#yaml-workflow-registry
+lifecycle_status: active
 description: 规格包根目录的 Workflow 入口索引；详细阶段仍以各 Workflow 目录中的 workflow.yaml 为准。
 schema:
   required_entry_fields: [id, title, path, readme, acceptance, independent]

@@ -1,5 +1,7 @@
 id: markdown-collection-output-layout
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-markdown-collection-output-layout
+lifecycle_status: active
 scope: reader_collection
 description: 多个页面单元整理为中文读者层集合时的文件命名、链接和迁移契约。
 not_workflow_a_package: true

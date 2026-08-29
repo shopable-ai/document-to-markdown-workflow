@@ -1,5 +1,7 @@
 id: lan-pdf-markdown-simple
 version: 0.3.0
+human_reference: contracts/CONTRACTS.md#workflow-lan-pdf-markdown-simple
+lifecycle_status: independent-unregistered
 title: 局域网视觉 PDF 转 Markdown（简单独立工作流）
 status: independent-unregistered
 purpose: 作为显式 visual-only worker，使用固定局域网视觉模型完成忠实逐页转写、保守页面整理、确定性合并和受限标题修复；不负责页面混合路由。

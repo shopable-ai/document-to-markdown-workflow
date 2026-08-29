@@ -1,5 +1,8 @@
 contract: reconciliation
+id: reconciliation
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-reconciliation
+lifecycle_status: active
 description: A4 原生文本、OCR 候选和视觉复核的分层合并结果。
 required: [native_input, ocr_input, visual_input, reconciled_items, conflicts, unresolved, unknown_forms, coverage_notes, status, diagnostics]
 status: enum[complete, needs-review, unavailable, failed]

@@ -1,5 +1,8 @@
 contract: vision-text-transcription
+id: vision-text-transcription
 version: 0.2.0
+human_reference: contracts/CONTRACTS.md#contract-vision-text-transcription
+lifecycle_status: compatibility-only
 description: vision-page-analysis 文字模式的兼容契约；实际路线由真实页面基准决定，不保留历史固定 fallback 顺序。
 status: compatibility-only
 superseded_by: contracts/vision-page-analysis.yaml

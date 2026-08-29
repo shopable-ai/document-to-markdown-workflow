@@ -1,5 +1,8 @@
 contract: ocr-markdown-structure
+id: ocr-markdown-structure
 version: 0.2.0
+human_reference: contracts/CONTRACTS.md#contract-ocr-markdown-structure
+lifecycle_status: active
 description: 将逐行 OCR 文字、bbox 和置信度确定性投影为保守 Markdown，并逐候选登记来源。
 stage: markdown-structure-reconstruction
 input:

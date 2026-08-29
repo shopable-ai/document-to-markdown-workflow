@@ -1,5 +1,8 @@
 contract: markdown-post-merge-model-routing
+id: markdown-post-merge-model-routing
 version: 1.0.0
+human_reference: contracts/CONTRACTS.md#contract-markdown-post-merge-model-routing
+lifecycle_status: active
 status: active
 description: 合并后 Markdown 整理的模型选择、调用、回退、结构守卫和审计契约。
 

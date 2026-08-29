@@ -1,5 +1,8 @@
 contract: page-markdown-noise-cleanup
+id: page-markdown-noise-cleanup
 version: 1.0.0
+human_reference: contracts/CONTRACTS.md#contract-page-markdown-noise-cleanup
+lifecycle_status: active
 description: page-unit 生成后、语言模型内容修复前的确定性页眉页脚与边界噪声清洗契约。
 status: active
 scope: post-page-unit-pre-language-repair

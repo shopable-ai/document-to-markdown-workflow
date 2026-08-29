@@ -1,5 +1,8 @@
 contract: recognition-route-benchmark
+id: recognition-route-benchmark
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-recognition-route-benchmark
+lifecycle_status: active
 description: 在相同真实页面、相同图片哈希和相同质量维度下比较文字识别及 Markdown 结构路线。
 input:
   required: [run_id, source_fingerprint, page_images]

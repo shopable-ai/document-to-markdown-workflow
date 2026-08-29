@@ -1,5 +1,8 @@
 contract: failure-report
+id: failure-report
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-failure-report
+lifecycle_status: active
 description: Workflow 运行期间的可诊断失败、降级和未决事项；没有失败也必须输出空报告。
 required: [status, evidence_level, failures, warnings, diagnostics]
 status: enum[none, needs-review, failed]

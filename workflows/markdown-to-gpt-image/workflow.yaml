@@ -1,5 +1,7 @@
 id: markdown-to-gpt-image
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#workflow-markdown-to-gpt-image
+lifecycle_status: active
 title: Markdown 局部内容到 GPT-image-2 单图
 purpose: 将一个 Markdown 知识单元规划为一张可读、可记忆、可复核的视觉图片。
 independent: true

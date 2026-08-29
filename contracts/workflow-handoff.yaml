@@ -1,5 +1,8 @@
 contract: workflow-handoff
+id: workflow-handoff
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-handoff
+lifecycle_status: active
 description: Workflow A 向 Workflow B 可选传递 Markdown 片段和来源视觉资产的最小交接契约。
 producer: document-to-markdown-assets
 consumer: markdown-to-gpt-image

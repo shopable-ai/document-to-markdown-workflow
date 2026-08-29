@@ -1,5 +1,8 @@
 contract: workflow-b-output-layout
+id: workflow-b-output-layout
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-b-output-layout
+lifecycle_status: active
 description: Workflow B 成功运行时的单图输出目录；不包含 PPTX/PDF/SVG 或图片批次。
 root: <output_root>/<run-id>/
 required_files:

@@ -1,5 +1,8 @@
 contract: reader-markdown-output-layout
+id: reader-markdown-output-layout
 version: 1.1.0
+human_reference: contracts/CONTRACTS.md#contract-reader-markdown-output-layout
+lifecycle_status: active
 description: Workflow A 默认交付的最小读者包；纯文本结果可只有 index.md，存在必要读者图片时才创建 assets/。
 root: <output_root>/<package-name>/
 required_files:

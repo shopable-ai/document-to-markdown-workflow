@@ -1,5 +1,7 @@
 id: artifact-reference
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-artifact-reference
+lifecycle_status: design-active
 title: 跨层产物引用契约
 purpose: >-
   为 Source、需求、基线、投影、Run、Evidence、Verdict 和 Claim 提供统一、可回放的引用格式；

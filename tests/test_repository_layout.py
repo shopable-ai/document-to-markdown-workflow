@@ -53,8 +53,7 @@ def test_active_stage_gate_docs_do_not_hardcode_6_to_100_for_full_batch():
     checked = {
         "workflows/document-to-markdown-assets/workflow.yaml": True,
         "contracts/page-markdown-unit.yaml": True,
-        "WORKFLOW-MAP.zh.md": True,
-        "WORKFLOW-A-EXECUTION.zh.md": True,
+        "execution/WORKFLOW-A-EXECUTION.md": True,
         "workflows/document-to-markdown-assets/ACCEPTANCE.zh.md": True,
     }
 
@@ -66,11 +65,11 @@ def test_active_stage_gate_docs_do_not_hardcode_6_to_100_for_full_batch():
 
 def test_ebook_page_pruning_is_document_driven_across_requirement_chain():
     required_markers = {
-        "GOAL.zh.md": "### 4.8 知识库输入可以选择性剔除整页低价值内容",
-        "TASK-TREE.zh.md": "十二、知识库低价值页清洗必须晚于完整汇合",
-        "WORKFLOW-MAP.zh.md": "知识库导入前可选剔除整页低价值内容",
-        "EXECUTION-TASK-TREE.zh.md": "#### ET5.4 可选知识库低价值页清洗与下游重建门",
-        "WORKFLOW-A-EXECUTION.zh.md": "### 知识库低价值页清洗（可选下游步骤）",
+        "requirements/REQUIREMENTS.md": "### REQ-DOC-019 知识库低价值整页清洗只能晚于完整汇合",
+        "requirements/REQUIREMENT-TREE.md": "REQ-DOC-019：完整汇合后的知识库工作副本清洗",
+        "design/WORKFLOW-MAP.md": "可选 post-complete 清洗",
+        "execution/ENGINEERING-TASK-TREE.md": "ET5-01 知识库工作副本清洗",
+        "workflows/document-to-markdown-assets/workflow.yaml": "knowledge_base_page_pruning:",
     }
 
     for relative, marker in required_markers.items():

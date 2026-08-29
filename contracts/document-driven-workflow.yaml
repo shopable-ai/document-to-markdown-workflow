@@ -1,15 +1,17 @@
 id: document-driven-project-workflow
-version: 0.1.0
-title: 文档驱动项目交付流程契约
+version: 0.2.0
+human_reference: contracts/CONTRACTS.md#contract-document-driven-project-workflow
+lifecycle_status: design-active
+title: 项目需求到工程交付机器投影
 purpose: >-
-  固定 AI 文档驱动项目的环节宇宙、16 环节人类导航、当前项目的 A/B 执行投影
-  以及漂移后的变更回写边界。
+  将 PROJECT-DELIVERY-WORKFLOW.md 的 C01-C40 人类权威主链投影为可校验节点，
+  并保留 P01-P16 作为压缩导航；P 导航、Workflow 和工程资产不能反向定义需求。
 status: design-active
 authority:
-  universe: AI-WORKFLOW-UNIVERSE.zh.md
-  navigator: PROJECT-DELIVERY-WORKFLOW.zh.md
-  governance: ARTIFACT-AND-CHANGE-GOVERNANCE.zh.md
-  execution_map: WORKFLOW-MAP.zh.md
+  universe: governance/AI-WORKFLOW-UNIVERSE.md
+  navigator: PROJECT-DELIVERY-WORKFLOW.md
+  governance: governance/ARTIFACT-AND-CHANGE-GOVERNANCE.md
+  execution_map: design/WORKFLOW-MAP.md
   requirement_chain: contracts/requirement-chain.yaml
   reasoning_overlay: contracts/cognitive-reasoning-overlay.yaml
   artifact_reference: contracts/artifact-reference.yaml
@@ -19,138 +21,96 @@ authority:
   acceptance_scorecard: contracts/acceptance-scorecard.yaml
   change_record: contracts/change-record.yaml
 layers:
-  universe_planes: [control, cognition, design, execution, evidence]
+  canonical_chain_node_count: 40
   navigator_stage_count: 16
+  universe_domain_count: 24
   execution_workflows: [document-to-markdown-assets, markdown-to-gpt-image]
   execution_stage_counts: {document-to-markdown-assets: 7, markdown-to-gpt-image: 7}
-object_model:
-  statement_objects: [goal, need, problem, confusion, failure, expected-result]
-  minimum_role_ref: [role_ref, actor_kind, authority_scope]
-  relation_objects: [artifact_ref, derived_from, promotes_to, blocks, projection_ref]
-  status_namespaces: [reasoning, baseline, run_evidence, verdict, claim]
+baselines:
+  V1: {name: business-scope, human_reference: requirements/BASELINES.md, current_status: pending-human-reconfirmation}
+  V2: {name: complete-requirements, human_reference: requirements/BASELINES.md, current_status: blocked-by-V1}
+  V3: {name: architecture, human_reference: requirements/BASELINES.md, current_status: blocked-by-V2}
+canonical_chain:
+  - {id: C01, file_refs: [requirements/discovery/RAW-REQUESTS.md], sample_status: existing}
+  - {id: C02, file_refs: [requirements/discovery/RAW-REQUESTS.md], sample_status: existing}
+  - {id: C03, file_refs: [requirements/PROJECT-GOAL-AND-SCOPE.md], sample_status: partial}
+  - {id: C04, file_refs: [requirements/discovery/REQUIREMENT-DISCOVERY.md, requirements/REQUIREMENTS.md], sample_status: partial}
+  - {id: C05, file_refs: [requirements/discovery/REQUIREMENT-DISCOVERY.md, governance/COGNITIVE-REASONING-AND-TEMPORAL-OVERLAY.md], sample_status: partial}
+  - {id: C06, file_refs: [requirements/PROJECT-GOAL-AND-SCOPE.md], sample_status: partial}
+  - {id: C07, file_refs: [requirements/REQUIREMENTS.md, requirements/REQUIREMENT-TREE.md], sample_status: existing}
+  - {id: C08, file_refs: [requirements/BASELINES.md], sample_status: missing}
+  - {id: C09, file_refs: [requirements/BASELINES.md], sample_status: missing}
+  - {id: C10, file_refs: [requirements/BUSINESS-SCENARIOS-AND-CHAINS.md], sample_status: partial}
+  - {id: C11, file_refs: [requirements/BUSINESS-SCENARIOS-AND-CHAINS.md], sample_status: partial}
+  - {id: C12, file_refs: [requirements/FUNCTIONS.md], sample_status: partial}
+  - {id: C13, file_refs: [requirements/FUNCTIONS.md], sample_status: partial}
+  - {id: C14, file_refs: [requirements/REQUIREMENTS.md], sample_status: partial}
+  - {id: C15, file_refs: [requirements/BEHAVIOR-STATE-AND-TEMPORAL-SPECS.md], sample_status: partial}
+  - {id: C16, file_refs: [requirements/BEHAVIOR-STATE-AND-TEMPORAL-SPECS.md], sample_status: partial}
+  - {id: C17, file_refs: [requirements/ACCEPTANCE-AND-TEST-SPACE.md], sample_status: partial}
+  - {id: C18, file_refs: [requirements/BASELINES.md], sample_status: missing}
+  - {id: C19, file_refs: [references/legacy-code-status.zh.md, design/WORKFLOW-MAP.md], sample_status: partial, conditional: brownfield-only}
+  - {id: C20, file_refs: [design/SOLUTION-AND-ARCHITECTURE.md, references/], sample_status: partial}
+  - {id: C21, file_refs: [design/SOLUTION-AND-ARCHITECTURE.md], sample_status: partial}
+  - {id: C22, file_refs: [requirements/BASELINES.md], sample_status: missing}
+  - {id: C23, file_refs: [design/ENGINEERING-DESIGN.md], sample_status: partial}
+  - {id: C24, file_refs: [design/VERIFICATION-DESIGN.md], sample_status: partial}
+  - {id: C25, file_refs: [contracts/, workflows/], sample_status: partial}
+  - {id: C26, file_refs: [requirements/TRACEABILITY.md], sample_status: partial}
+  - {id: C27, file_refs: [execution/ENGINEERING-TASKS.md, execution/ENGINEERING-TASK-TREE.md], sample_status: partial}
+  - {id: C28, file_refs: [workflow-registry.yaml, workflows/], sample_status: existing}
+  - {id: C29, file_refs: [skill-registry.yaml, tool-registry.yaml, contracts/projection-record.yaml], sample_status: partial}
+  - {id: C30, file_refs: [adapters/, skills/], sample_status: existing}
+  - {id: C31, file_refs: [tests/], sample_status: existing}
+  - {id: C32, file_refs: [contracts/workflow-a-preflight.yaml, references/execution-preflight.zh.md], sample_status: existing}
+  - {id: C33, file_refs: [tests/fixtures, tests/runs], sample_status: partial}
+  - {id: C34, file_refs: [references/quality-targets.zh.md, workflows/document-to-markdown-assets/ACCEPTANCE.zh.md], sample_status: partial}
+  - {id: C35, file_refs: [contracts/workflow-run-record.yaml, runs/], sample_status: not_applicable}
+  - {id: C36, file_refs: [contracts/stage-evidence.yaml, runs/], sample_status: not_applicable}
+  - {id: C37, file_refs: [contracts/acceptance-scorecard.yaml], sample_status: not_applicable}
+  - {id: C38, file_refs: [requirements/TRACEABILITY.md], sample_status: not_applicable}
+  - {id: C39, file_refs: [requirements/TRACEABILITY.md, governance/ARTIFACT-AND-CHANGE-GOVERNANCE.md], sample_status: not_applicable}
+  - {id: C40, file_refs: [governance/ARTIFACT-AND-CHANGE-GOVERNANCE.md, contracts/change-record.yaml], sample_status: partial}
+navigation_to_chain:
+  P01: [C01, C02, C03]
+  P02: [C02, C03, C04]
+  P03: [C04]
+  P04: [C05]
+  P05: [C06, C07]
+  P06: [C08, C09]
+  P07: [C10, C11, C12, C13, C14, C15, C16, C17, C18]
+  P08: [C20]
+  P09: [C21, C22, C23]
+  P10: [C24, C25, C26, C27]
+  P11: [C28]
+  P12: [C29]
+  P13: [C33]
+  P14: [C32, C35, C36]
+  P15: [C34, C37, C38, C39]
+  P16: [C40]
 stages:
-  - id: P01
-    name: 项目与来源建立
-    plane: [control, cognition]
-    required_question: 当前项目、来源、范围、权限和版本是什么？
-    artifacts: [project-entry, source-inventory, scope-snapshot]
-    gate: source-and-scope-are-identifiable
-    projection: [GOAL.zh.md, contracts/source-inventory.yaml, A1]
-  - id: P02
-    name: 原始需求与背景事实
-    plane: [cognition]
-    required_question: 用户原话、目标背景、事实、假设和 Unknown 是什么？
-    artifacts: [raw-request, facts, assumptions, unknowns]
-    gate: source-fact-assumption-unknown-separated
-    projection: [GOAL.zh.md, TASK-TREE.zh.md]
-  - id: P03
-    name: 参考样例与期望结果
-    plane: [cognition, evidence]
-    required_question: 哪些结果是期望、允许变化或不可接受？
-    artifacts: [examples, expected-results, counterexamples]
-    gate: example-purpose-and-boundary-declared
-    projection: [tests/fixtures, workflows/document-to-markdown-assets/ACCEPTANCE.zh.md]
-  - id: P04
-    name: AI 需求发现与推理
-    plane: [cognition]
-    required_question: AI 发现了哪些候选、冲突、缺口和待确认问题？
-    artifacts: [requirement-candidates, requirement-reasoning-trace, open-questions, ai-self-check]
-    gate: candidates-trace-to-authorized-inputs
-    projection: [contracts/requirement-chain.yaml]
-  - id: P05
-    name: 人工可读的需求梳理
-    plane: [cognition, design]
-    required_question: 人怎样理解目标、范围、角色、场景、质量和非目标？
-    artifacts: [requirement-narrative, scope-draft]
-    gate: goal-boundary-and-acceptance-direction-readable
-    projection: [GOAL.zh.md, TASK-TREE.zh.md]
-  - id: P06
-    name: 需求确认与需求基线
-    plane: [control, cognition]
-    required_question: 哪些最小范围已经被合法接受？
-    artifacts: [business-requirement, decision-gate, requirement-baseline]
-    gate: accepted-scope-is-versioned-and-recomputable
-    projection: [contracts/requirement-chain.yaml]
-  - id: P07
-    name: 业务链路、能力、功能与行为规格
-    plane: [design, evidence]
-    required_question: 用户或调用方应观察到什么行为，如何覆盖到下游？
-    artifacts: [scenario, trigger, business-chain, capability, function, functional-requirement, behavior-specification, behavior-case, temporal-case, traceability]
-    gate: normal-boundary-negative-recovery-covered
-    projection: [WORKFLOW-MAP.zh.md, EXECUTION-TASK-TREE.zh.md]
-  - id: P08
-    name: 候选方案与架构决策
-    plane: [cognition, design]
-    required_question: 哪些方案可行，关键取舍是什么？
-    artifacts: [research, solution-comparison, adr-or-not-applicable]
-    gate: critical-choice-has-rationale-and-reopen-condition
-    projection: [ARCHITECTURE.zh.md, references/]
-  - id: P09
-    name: 工程解决方案与契约设计
-    plane: [design]
-    required_question: 节点、I/O、状态、错误、权限和外部边界怎样连接？
-    artifacts: [engineering-chain, io-contracts, quality-constraints]
-    gate: handoffs-and-failure-routes-are-executable
-    projection: [contracts/, workflows/]
-  - id: P10
-    name: Spec、Task 与验证设计
-    plane: [design, execution, evidence]
-    required_question: 怎样派生可实现、可验证的工作包？
-    artifacts: [spec, acceptance, test-space, tasks, traceability]
-    gate: every-task-traces-to-approved-scope-and-criterion
-    projection: [EXECUTION-TASK-TREE.zh.md, tests/]
-  - id: P11
-    name: Workflow 与运行编排
-    plane: [control, execution]
-    required_question: 如何组织步骤、分支、并行、队列、恢复和取消？
-    artifacts: [workflow, stage-gates, retry-and-recovery-policy]
-    gate: preconditions-postconditions-and-terminal-states-declared
-    projection: [workflow-registry.yaml, workflows/]
-  - id: P12
-    name: Skill/Tool/Model/Context 投影
-    plane: [control, execution]
-    required_question: 本次运行实际加载哪些能力、模型、规则和上下文？
-    artifacts: [binding, context-snapshot, execution-manifest, projection-ref]
-    gate: projected-capabilities-and-versions-are-identifiable
-    projection: [skill-registry.yaml, tool-registry.yaml, skills/]
-  - id: P13
-    name: 代表样例试做与校准
-    plane: [execution, evidence]
-    required_question: 端到端最小样例是否暴露需求、方案或工具问题？
-    artifacts: [smoke-run, calibration-report, difference-list]
-    gate: representative-risk-sample-is-validated
-    projection: [tests/fixtures, tests/run_fixture_contract_tests.py]
-  - id: P14
-    name: 受控运行与分层证明
-    plane: [control, execution, evidence]
-    required_question: 本次实际运行发生了什么？
-    artifacts: [run, checkpoint, stage-evidence, failure-report]
-    gate: selected-scope-has-terminal-evidence
-    projection: [contracts/workflow-run-record.yaml, contracts/stage-evidence.yaml]
-  - id: P15
-    name: 交付、独立验收与声明
-    plane: [control, evidence]
-    required_question: 结果是否符合事前判据，可以声称到什么边界？
-    artifacts: [acceptance-scorecard, acceptance-verdict, delivery-package, bounded-claim]
-    gate: independent-acceptance-passed-within-scope
-    projection: [workflows/document-to-markdown-assets/ACCEPTANCE.zh.md, tests/validate_real_output_root.py]
-  - id: P16
-    name: 反馈、变更与持续演进
-    plane: [control, evidence]
-    required_question: 错误应修改哪份文档，哪些结果需要重开？
-    artifacts: [change-record, impact-preview, invalidation-ledger, regression, retrospective]
-    gate: earliest-owner-updated-and-downstream-revalidated
-    projection: [references/known-failures.zh.md, .audit/, .prompt/]
+  - {id: P01, name: 项目来源与目标, required_question: 当前项目来源目标和范围是什么, artifacts: [raw-request, source-record, goal-scope], gate: source-and-goal-identifiable, projection: [requirements/discovery/RAW-REQUESTS.md, requirements/PROJECT-GOAL-AND-SCOPE.md]}
+  - {id: P02, name: 原始需求事实与Unknown, required_question: 哪些是原话事实假设冲突和未知, artifacts: [raw-request, facts, unknowns], gate: facts-and-inference-separated, projection: [requirements/discovery/REQUIREMENT-DISCOVERY.md, requirements/REQUIREMENTS.md]}
+  - {id: P03, name: 样例与反例, required_question: 什么结果可接受或不可接受, artifacts: [examples, counterexamples], gate: example-boundaries-declared, projection: [requirements/discovery/REQUIREMENT-DISCOVERY.md, requirements/ACCEPTANCE-AND-TEST-SPACE.md]}
+  - {id: P04, name: AI需求发现, required_question: AI提出了什么候选和替代解释, artifacts: [candidate-requirements, reasoning-records], gate: candidate-traces-to-source, projection: [requirements/discovery/REQUIREMENT-DISCOVERY.md]}
+  - {id: P05, name: 人工可读需求草稿, required_question: 目标需求和非目标是否可读, artifacts: [goal-scope, requirement-list, requirement-tree], gate: markdown-first-draft-complete, projection: [requirements/PROJECT-GOAL-AND-SCOPE.md, requirements/REQUIREMENTS.md]}
+  - {id: P06, name: 业务范围确认, required_question: 哪个范围被合法确认, artifacts: [V1-record], gate: V1-confirmed, projection: [requirements/BASELINES.md]}
+  - {id: P07, name: 完整需求模型, required_question: 场景功能行为状态和验收是否闭合, artifacts: [scenarios, functions, behaviors, acceptance, V2], gate: V2-confirmed, projection: [requirements/BUSINESS-SCENARIOS-AND-CHAINS.md, requirements/FUNCTIONS.md, requirements/BEHAVIOR-STATE-AND-TEMPORAL-SPECS.md, requirements/ACCEPTANCE-AND-TEST-SPACE.md]}
+  - {id: P08, name: 候选方案与决策, required_question: 哪个方案和取舍被选择, artifacts: [research, candidate-decisions], gate: decision-rationale-recorded, projection: [design/SOLUTION-AND-ARCHITECTURE.md, references/]}
+  - {id: P09, name: 架构与工程设计, required_question: 边界组件IO状态权限和错误如何实现需求, artifacts: [solution, architecture, engineering-design, V3], gate: V3-confirmed, projection: [design/SOLUTION-AND-ARCHITECTURE.md, design/ENGINEERING-DESIGN.md]}
+  - {id: P10, name: 验证Spec与任务, required_question: 如何形成可验证的精确工程工作包, artifacts: [verification-design, specs, tasks, traceability], gate: traceability-closed, projection: [design/VERIFICATION-DESIGN.md, requirements/TRACEABILITY.md, execution/ENGINEERING-TASKS.md]}
+  - {id: P11, name: Workflow, required_question: 已批准任务如何编排, artifacts: [workflow, stage-gates], gate: workflow-traces-to-task, projection: [workflow-registry.yaml, workflows/]}
+  - {id: P12, name: 执行投影, required_question: 本次选哪些SkillToolModel和Context, artifacts: [projection-record], gate: current-authorized-projection, projection: [skill-registry.yaml, tool-registry.yaml, contracts/projection-record.yaml]}
+  - {id: P13, name: 代表样例, required_question: 最小风险样例是否通过事前判据, artifacts: [smoke, calibration], gate: representative-risk-covered, projection: [tests/fixtures, tests/runs]}
+  - {id: P14, name: Preflight受控运行与Evidence, required_question: 本次实际运行发生了什么, artifacts: [preflight, run, evidence], gate: terminal-evidence-complete, projection: [contracts/workflow-a-preflight.yaml, contracts/workflow-run-record.yaml, contracts/stage-evidence.yaml]}
+  - {id: P15, name: ReadinessVerdictDelivery与Claim, required_question: 当前Evidence支持什么交付和声明, artifacts: [readiness, verdict, delivery, bounded-claim], gate: independent-verdict-current, projection: [contracts/acceptance-scorecard.yaml, requirements/TRACEABILITY.md]}
+  - {id: P16, name: 反馈失效与重建, required_question: 哪些对象失效应从哪里重开, artifacts: [change-record, invalidation, retest, retrospective], gate: earliest-owner-updated-and-revalidated, projection: [governance/ARTIFACT-AND-CHANGE-GOVERNANCE.md, contracts/change-record.yaml]}
 rules:
-  - navigator_stages_are_not_execution_workflow_stage_ids
-  - each_stage_has_question_artifacts_gate_and_projection
-  - downstream_artifacts_cannot_upgrade_unapproved_upstream_content
-  - failed_or_stale_evidence_cannot_support_a_current_claim
-  - changes_create_new_versions_and_preserve_history
-  - unknown_requires_owner_impact_and_resolution_entry
-  - ai_generator_cannot_self_approve_or_self-certify
-  - candidate_to_confirmed_requires_promotion_matrix_and_confirmation_owner
-  - causal_relation_requires_mechanism_or_rule_or_contrast_evidence
-  - failure_requires_earliest_owner_artifact_and_reopen_stage
-  - claim_allowed_requires_current_non_stale_run_and_independent_verdict
-  - score_95_is_minimum_pass_and_score_97_is_recommended_target_not_a_new_status
+  - C01-C40-is-the-canonical-human-chain
+  - P01-P16-is-derived-compressed-navigation
+  - C19-is-brownfield-conditional-not-a-universal-start
+  - downstream-artifacts-cannot-upgrade-unapproved-requirements
+  - unknown-requires-owner-impact-and-resolution-entry
+  - causal-relation-requires-basis-beyond-order
+  - failed-or-stale-evidence-cannot-support-current-claim
+  - AI-generator-cannot-self-approve-or-self-certify

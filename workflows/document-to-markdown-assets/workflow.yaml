@@ -1,9 +1,11 @@
 id: document-to-markdown-assets
 version: 0.10.0
+human_reference: contracts/CONTRACTS.md#workflow-document-to-markdown-assets
+lifecycle_status: active
 title: 文档资产化与 Markdown 转换
 purpose: 将来源文档转换为可检索 Markdown，并保留可追溯的来源视觉资产。
 independent: true
-engineering_task_tree: ../../EXECUTION-TASK-TREE.zh.md
+engineering_task_tree: ../../execution/ENGINEERING-TASK-TREE.md
 execution_slice: ET1-single-page-vertical-slice
 scale_overlays: [ET2-single-file-pages, ET3-multi-file-batch]
 page_unit_contract: ../../contracts/page-markdown-unit.yaml

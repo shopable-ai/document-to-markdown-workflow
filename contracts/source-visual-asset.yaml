@@ -1,5 +1,8 @@
 contract: source-visual-asset
+id: source-visual-asset
 version: 0.5.0
+human_reference: contracts/CONTRACTS.md#contract-source-visual-asset
+lifecycle_status: active
 description: 来源页面、嵌入媒体、裁切图、可读性增强图或复杂区域视觉资产的单一 manifest 登记契约。
 required:
   asset_id: string

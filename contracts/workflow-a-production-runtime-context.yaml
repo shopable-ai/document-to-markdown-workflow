@@ -1,5 +1,8 @@
 contract: workflow-a-production-runtime-context
+id: workflow-a-production-runtime-context
 version: 1.1.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-a-production-runtime-context
+lifecycle_status: active
 status: active
 description: Workflow A 的精简生产运行投影；让执行器调用稳定接口，而不是重新读取需求史、Workflow 全文或 Python 实现。
 
@@ -21,11 +24,11 @@ default_context:
     - 当前运行的 reports/validation-result.json
   do_not_load_by_default:
     - .prompt/**
-    - GOAL.zh.md
-    - TASK-TREE.zh.md
-    - EXECUTION-TASK-TREE.zh.md
-    - WORKFLOW-MAP.zh.md
-    - WORKFLOWS.zh.md
+    - requirements/PROJECT-GOAL-AND-SCOPE.md
+    - requirements/REQUIREMENT-TREE.md
+    - execution/ENGINEERING-TASK-TREE.md
+    - design/WORKFLOW-MAP.md
+    - design/WORKFLOWS.md
     - README.zh.md
     - references/**
     - workflows/document-to-markdown-assets/workflow.yaml

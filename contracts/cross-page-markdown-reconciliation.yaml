@@ -1,5 +1,8 @@
 contract: cross-page-markdown-reconciliation
+id: cross-page-markdown-reconciliation
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-cross-page-markdown-reconciliation
+lifecycle_status: active
 description: 对两个相邻页的显式目录断点生成独立、可追溯的派生合并建议。
 stage: markdown-structure-reconstruction
 input:

@@ -1,5 +1,8 @@
 contract: workflow-a-output-layout
+id: workflow-a-output-layout
 version: 0.2.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-a-output-layout
+lifecycle_status: active
 description: Workflow A 显式 --engineering-output 模式的完整工程交付目录；默认 reader-only 转换不使用此布局。
 root: <output_root>/<package-name>/
 required_files:

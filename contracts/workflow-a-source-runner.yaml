@@ -1,5 +1,8 @@
 contract: workflow-a-source-runner
+id: workflow-a-source-runner
 version: 0.3.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-a-source-runner
+lifecycle_status: active
 description: 来源无关的 Workflow A runner 接口；默认返回 reader-only 输出摘要，完整工程证据仅在显式 --engineering-output 时落盘。
 status: active
 required:

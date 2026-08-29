@@ -1,5 +1,8 @@
 contract: markdown-asset-package
+id: markdown-asset-package
 version: 0.4.0
+human_reference: contracts/CONTRACTS.md#contract-markdown-asset-package
+lifecycle_status: active
 description: Workflow A 显式 --engineering-output 模式的完整资产包；默认 reader-only 输出使用 reader-markdown-output-layout。
 output_layout: workflow-a-output-layout.yaml
 required:

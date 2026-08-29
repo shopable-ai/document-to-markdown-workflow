@@ -1,5 +1,8 @@
 contract: markdown-content-repair
+id: markdown-content-repair
 version: 0.4.0
+human_reference: contracts/CONTRACTS.md#contract-markdown-content-repair
+lifecycle_status: active
 description: 页面单元生成后的读者层内容结构修复；优先使用局域网语言模型，在线模型只作为明确授权的失败后回退。
 scope: post-page-unit-reader-layer-repair
 write_policy: direct-when-deterministic

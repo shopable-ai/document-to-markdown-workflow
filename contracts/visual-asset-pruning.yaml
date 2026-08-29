@@ -1,5 +1,8 @@
 contract: visual-asset-pruning
+id: visual-asset-pruning
 version: 0.4.0
+human_reference: contracts/CONTRACTS.md#contract-visual-asset-pruning
+lifecycle_status: active
 description: 读者层视觉资产语义筛选的页级报告，区分删除候选、最小充分裁图、整页保留和待复核。
 required: [schema, version, status, mode, source_fingerprint, selected_pages, excluded_pages, kept_pages, rule, assets, synchronization, diagnostics]
 status: enum[complete, needs-review, failed]

@@ -1,5 +1,8 @@
 contract: recognition-route-quality-assessment
+id: recognition-route-quality-assessment
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-recognition-route-quality-assessment
+lifecycle_status: active
 description: 对真实页面识别路线进行人工可复核的结构质量验收；非空输出和文件存在不能替代本契约。
 input:
   required: [contract, version, source_fingerprint, benchmark_report, assessments, route_selection]

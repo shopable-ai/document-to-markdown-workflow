@@ -1,5 +1,8 @@
 contract: ebook-page-pruning
+id: ebook-page-pruning
 version: 1.0.0
+human_reference: contracts/CONTRACTS.md#contract-ebook-page-pruning
+lifecycle_status: active-optional
 description: 电子书页面单元全部生成并汇合后、知识库导入前的可选整页低价值内容清洗契约。
 status: active-optional
 scope: post-complete-page-unit-merge-pre-knowledge-base-export

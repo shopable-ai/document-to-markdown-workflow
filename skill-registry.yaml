@@ -1,5 +1,8 @@
 registry: skill-registry
+id: skill-registry
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#yaml-skill-registry
+lifecycle_status: active
 description: Workflow 阶段引用的可复用 Skill 注册表；条目可以是正式 Skill 或指向正式 Skill 的兼容别名。
 schema:
   required_entry_fields: [id, path]

@@ -1,5 +1,8 @@
 contract: gpt-image-generation-request
+id: gpt-image-generation-request
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-gpt-image-generation-request
+lifecycle_status: active
 description: Workflow B 的无秘密单图生成请求与结果登记契约。
 required:
   request_id: string

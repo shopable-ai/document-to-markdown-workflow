@@ -1,5 +1,7 @@
 id: projection-record
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-projection-record
+lifecycle_status: design-active
 title: 执行投影记录契约
 purpose: >-
   固定 P12 从已确认需求/基线到 Workflow、Skill、Tool、Model 和 Context 的实际选择、排除和授权依据。

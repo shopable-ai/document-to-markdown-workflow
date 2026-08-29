@@ -1,5 +1,8 @@
 contract: asset-extraction-strategy
+id: asset-extraction-strategy
 version: 0.4.0
+human_reference: contracts/CONTRACTS.md#contract-asset-extraction-strategy
+lifecycle_status: active
 description: 多格式图片资产提取、来源页到裁切/增强的派生链、视觉模型校准、质量比较和成本路线选择的证据契约。
 required:
   source:

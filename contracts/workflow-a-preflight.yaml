@@ -1,5 +1,8 @@
 contract: workflow-a-preflight
+id: workflow-a-preflight
 version: 0.1.0
+human_reference: contracts/CONTRACTS.md#contract-workflow-a-preflight
+lifecycle_status: active
 purpose: 在 Workflow A 的 A1 来源预检和任何转换/模型调用前，阻断可廉价确定的执行风险。
 scope: cross-cutting-before-A1
 required: [contract, preflight_version, checked_at, status, can_start, source, output, selected_pages, checks, failures, warnings, next_action, policy]

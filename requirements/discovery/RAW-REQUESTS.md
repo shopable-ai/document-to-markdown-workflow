@@ -6,9 +6,11 @@ order: 20
 
 # 原始请求与来源登记
 
+> **Brownfield 参考：** 本文件不是当前原始请求。当前人工原话见[中文原始请求](../../项目需求/需求发现/原始请求.md)，旧材料身份和哈希见[历史材料迁移对账](../../项目需求/需求发现/历史材料迁移对账.md)。
+
 | source_id | 来源 | 状态 | 可支持什么 | 不可支持什么 |
 |---|---|---|---|---|
-| SRC-20260828-01 | 2026-08-28 用户给出的本轮治理、迁移、验证与禁止项 | authoritative-input | 本轮治理需求、目录约束、C/U 模型、验收边界 | 自动确认历史业务需求或生产能力 |
+| SRC-20260828-01 | 2026-08-28 用户给出的旧轮次治理、迁移、验证与禁止项 | legacy-input-record | 迁移核对 | 自动确认当前业务需求或生产能力 |
 | SRC-LEGACY-GOAL | [迁移前目标与需求快照](../../archive/governance-migration-20260828/GOAL.zh.md)，SHA-256 2ec1dcc6a6c2ca9c93c0009f2d9fdae4170bf4c99b736c67937d189f5d378c9b | historical-human-draft | 形成 DOC 类需求草稿和迁移来源 | 证明当前用户重新确认了全部业务细节 |
 | SRC-LEGACY-TREE | [迁移前需求树快照](../../archive/governance-migration-20260828/TASK-TREE.zh.md)，SHA-256 10fb67349b379ec6dabd9acb3e3572812748d1e3f2472c7158cb549379999b35 | historical-derived-view | 保留旧分组、反例和验收问题 | 产生正式需求 ID |
 | SRC-LEGACY-MAP | [迁移前工程映射快照](../../archive/governance-migration-20260828/WORKFLOW-MAP.zh.md)，SHA-256 1181975e7e8869da77778c8ec92c6efe2709f224fce29877da5e8a7ab9c7242e | historical-engineering-view | 辅助迁移既有投影 | 反向定义业务需求 |

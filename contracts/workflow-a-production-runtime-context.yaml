@@ -24,6 +24,7 @@ default_context:
     - 当前运行的 reports/validation-result.json
   do_not_load_by_default:
     - .prompt/**
+    - prompts/**
     - requirements/PROJECT-GOAL-AND-SCOPE.md
     - requirements/REQUIREMENT-TREE.md
     - execution/ENGINEERING-TASK-TREE.md
@@ -46,9 +47,15 @@ execution:
       entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <pdf> --run-root <exact-run-root> --pages <selector>
       default_mode: page-hybrid
       page_routes: [native-only, native-plus-visual, visual-only]
+      reader_visual_gate: verify-final-page-text-and-order-including-unrendered-pages; lock-v3-local-second-ocr-for-eligible-scans; preserve-scan-fallback-without-independent-transcription
       explicit_full_visual: --visual-only
       existing_run_resume: pass-the-exact-run-root-and---resume
       no_prompt_rule_repetition: true
+      batch_packages:
+        new_batch_run_root: <output-root>/conversions/<route>/<package>
+        copy_source_ancestry_into_output: false
+        resume: use-registered-exact-run-root
+        relocate_active_packages: false
     non_pdf:
       entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --pages <selector> --execute
   parameter_discovery: python3 adapters/workflow_a_source_runner.py --help

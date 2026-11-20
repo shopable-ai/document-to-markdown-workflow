@@ -6,7 +6,9 @@ order: 30
 
 # 文档资产化需求发现记录
 
-状态：reference-candidate。这里保存从人类需求稿中拆出的事实、冲突、候选和待确认问题，不是第二份需求列表。
+> **Brownfield 参考：** 当前 Fact、Inference、Unknown 和 Conflict 见[中文需求发现记录](../../项目需求/需求发现/需求发现记录.md)。本文件不参与当前 C01—C07 权威链。
+
+旧状态：reference-candidate。这里保存旧人工需求稿中拆出的事实、冲突、候选和待确认问题。
 
 ## 已有事实
 

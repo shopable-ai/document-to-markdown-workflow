@@ -138,6 +138,19 @@ def test_status_reads_only_latest_snapshot_and_does_not_append_history(
     assert ledger.read_bytes() == before
 
 
+def test_hybrid_failed_postprocess_does_not_hide_completed_pages(tmp_path: Path):
+    progress = tmp_path / "progress.json"
+    progress.write_text(json.dumps({"status": "needs-review", "page_completion": {
+        "completed_pages": [1, 2, 3], "failed_pages": [4],
+    }}), encoding="utf-8")
+
+    status = background._refresh_page_counts({"work_progress_path": str(progress)})
+
+    assert status["completed_pages"] == 3
+    assert status["failed_pages"] == 1
+    assert status["work_status"] == "needs-review"
+
+
 def test_status_supports_runner_passed_count_and_cli_emits_one_json_line(tmp_path: Path):
     work_progress = tmp_path / "work-progress-current.json"
     work_progress.write_text(

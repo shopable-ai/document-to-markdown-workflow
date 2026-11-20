@@ -218,15 +218,17 @@ def _refresh_page_counts(state: dict[str, Any]) -> dict[str, Any]:
     progress = _read_json(Path(str(progress_path_raw)))
     if not progress:
         return state
+    coverage = progress.get("page_completion")
+    page_counts = coverage if isinstance(coverage, dict) else progress
     completed = _count_pages(
-        progress.get(
+        page_counts.get(
             "completed_pages",
-            progress.get("processed_pages", progress.get("passed_count", 0)),
+            page_counts.get("processed_pages", page_counts.get("passed_count", 0)),
         )
     )
     if completed == 0 and progress.get("status") in {"passed", "completed"}:
         completed = _count_pages(progress.get("selected_pages", 0))
-    failed = _count_pages(progress.get("failed_pages", 0))
+    failed = _count_pages(page_counts.get("failed_pages", 0))
     return {
         **state,
         "completed_pages": completed,

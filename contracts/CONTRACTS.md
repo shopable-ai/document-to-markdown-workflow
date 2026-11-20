@@ -305,11 +305,12 @@
 
 ## contract-visual-asset-pruning
 
-- contract_id: visual-asset-pruning；contract_version: 0.4.0；lifecycle: active；YAML: [visual-asset-pruning.yaml](visual-asset-pruning.yaml)
+- contract_id: visual-asset-pruning；contract_version: 0.6.0；lifecycle: active；YAML: [visual-asset-pruning.yaml](visual-asset-pruning.yaml)
 - 目的与范围：读者视觉资产 preview/apply 决策和同步结果。
 - I/O：输入 source/pages/assets/hash；输出 kept/excluded、reason、synchronization 和 Evidence。
 - 状态/案例：preview 正常；apply 需 hash-lock 和质量门；冲突 needs-review；恢复为删除零项。
 - 不变量/失效/示例：原 source 禁删，复杂视觉 fail closed；hash 变化计划失效；示例移除纯文字冗余截图。
+- Page-hybrid：工程验收后复核终稿每一页（含原本无图页）。3.0.0 对合格扫描候选使用本地 Tesseract 与原 Apple Vision 交叉验证精确文字、阅读顺序和独立像素遮罩；验收离线重放绑定到同页终稿的证据，历史 2.0.0 不变。省图仅发生在内部 reader/ 投影，无可靠证据又无图保底的页为 needs-review；不改工程正文或旧交付。
 
 ## contract-visual-reconstruction-profile
 

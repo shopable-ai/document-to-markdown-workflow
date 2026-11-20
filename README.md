@@ -1,84 +1,52 @@
-# 文档资产化与 Markdown 视觉生成工作流
+# 文档转 Markdown 项目
 
-本仓库既是文档资产化样板项目，也是“人工治理、AI 推导、Markdown 权威、工程投影、证据闭环”架构的实例。业务需求从人类 Markdown 开始；已有 Workflow、Contract、代码、测试和历史 Run 只作为 Brownfield 工程资产，不能反向批准需求。
+这个项目把用户指定的页或完整文档范围端到端转换成真正可用的 Markdown 结果包：保留内容、文档结构和能够确认的关系；复杂视觉在授权允许时同时具有可搜索表达和最小充分的静态核对依据；Markdown 与获准随附的正文图片可以一起复制和移动。
 
-## 稳定阅读入口
+项目在 Markdown 交付处结束，不负责知识库、问答、内容整理、图片生成或视觉重绘。
 
-1. [C01–C40 项目需求到工程交付主链](PROJECT-DELIVERY-WORKFLOW.md)：唯一推进主链和样板逐节点状态。
-2. [需求语义权威](requirements/README.md)：目标、需求、场景、功能、行为、时序、验收和追溯。
-3. [治理层](governance/README.md)：U01–U24、AI 推理、生命周期和失效传播。
-4. [设计层](design/README.md)：V2/V3 后的方案、架构、工程和验证设计；当前均为 Brownfield candidate。
-5. [执行层](execution/README.md)：工程任务和人工执行指南；单次 Run 状态不写入长期文件。
-6. [工程 YAML 人类目录](contracts/README.md)：活跃 YAML 的 ID、版本、human_reference 和失败语义。
+已有电子书 Markdown？直接打开手工修复提示词：[简版](prompts/ebook-md-电子书格式内容修复-简版.md) · [完整版](prompts/ebook-md-电子书格式内容修复-完整版.md)（[使用说明](prompts/README.md)）。
 
-## 目录与职责
+## 先看这四个文件
 
-    /
-    ├── README.zh.md
-    ├── PROJECT-DELIVERY-WORKFLOW.md
-    ├── requirements/
-    │   ├── PROJECT-GOAL-AND-SCOPE.md
-    │   ├── REQUIREMENTS.md
-    │   ├── REQUIREMENT-TREE.md
-    │   ├── BASELINES.md
-    │   ├── BUSINESS-SCENARIOS-AND-CHAINS.md
-    │   ├── FUNCTIONS.md
-    │   ├── BEHAVIOR-STATE-AND-TEMPORAL-SPECS.md
-    │   ├── ACCEPTANCE-AND-TEST-SPACE.md
-    │   ├── TRACEABILITY.md
-    │   └── discovery/
-    ├── governance/
-    ├── design/
-    ├── execution/
-    ├── contracts/
-    ├── workflows/
-    ├── skills/
-    ├── references/
-    ├── tests/
-    ├── runs/
-    ├── archive/
-    ├── .prompt/
-    └── .audit/
+1. [项目说明](项目说明.md)：用一页了解项目做什么、不做什么。
+2. [项目需求说明](项目需求/说明.md)：直接阅读六项核心需求、非目标和两个仍未回答的问题。
+3. [项目目标与范围](项目需求/项目目标与范围.md)：核对业务目标、优先级和结束边界。
+4. [需求说明](项目需求/需求说明.md)：核对转换结果必须满足的十一项详细要求。
 
-生命周期和默认加载范围见 [governance/README.md](governance/README.md)。迁移前根文档已按原文保存到 [archive/governance-migration-20260828](archive/governance-migration-20260828/README.md)，不参与当前路由。
+如果要检查这些要求从哪里来，再读[需求发现说明](项目需求/需求发现/说明.md)。如果要了解当前允许推进到哪里，再读[项目治理说明](项目治理/说明.md)。
 
-## 当前基线边界
+## 现在已经有什么
 
-- V1 业务范围基线：pending-human-reconfirmation。
-- V2 完整需求基线：blocked-by-V1。
-- V3 架构基线：blocked-by-V2。
+- 中文需求文件已经形成 C01—C07 的草稿，并从历史 GOAL、TASK 和旧 requirements 恢复了完整转换、内容/结构/视觉保真、可携带结果包和可复核交付主线。
+- 仓库已有较成熟的 Workflow、Skill、Contract、适配器、测试和历史运行材料；本轮规格包验证通过，扩展后的核心执行路径 82 项测试通过，但没有执行真实来源转换。
+- 这些工程资产仍要逐项对照确认后的需求；“已经能运行”不自动等于“所有需求都正确”。
 
-因此，requirements 中的文档资产化需求、功能、行为和验收是可审查 draft；design/execution 中的现有映射是 Brownfield candidate。当前静态文件、测试或既有实现都不能把它们升级为 confirmed。
+## 现在要确认什么
 
-## 现有 Workflow
+人工首先只需判断：
 
-- document-to-markdown-assets：来源文档到 reader Markdown 和必要视觉资产。
-- markdown-to-gpt-image：一个 Markdown 单元到一张派生图片。
-- knowledge-map-image-to-md：Workflow A 的兼容入口，不增加第三套阶段。
-- lan-pdf-markdown-simple：显式 visual-only 的独立未注册 worker。
+1. 端到端完整转换、内容与结构保真、复杂视觉保真和可携带结果包是否是正确的业务主线。
+2. R01—R11 是否完整表达了可信、完整、可用、可复核的结果，同时把来源隔离放在正确的约束位置。
+3. [样例与反例](项目需求/需求发现/样例与反例.md)是否能帮助区分正确结果和错误结果。
+4. U-B01、U-B02 是否继续保持未决定。
 
-层级和边界见 [design/WORKFLOW-ARCHITECTURE.md](design/WORKFLOW-ARCHITECTURE.md)。机器入口在 [workflow-registry.yaml](workflow-registry.yaml)，精确阶段在各 workflow.yaml。
+在人工完成阅读、讨论、纠正和决定前，不把需求草稿写成已建立的业务范围基线。
 
-## 日常生产触发
+## 文件的权威边界
 
-日常用户只需提供：
+| 内容 | 当前权威 | 其他材料的地位 |
+|---|---|---|
+| 项目目标、范围和需求 | `项目需求/` 中的中文 Markdown | 旧英文需求、代码和历史运行只能提供核对材料 |
+| 当前项目怎样推进 | `项目治理/` 中的中文 Markdown | 通用治理稿只是临时方法来源 |
+| 实际执行能力 | `workflows/`、`skills/`、`contracts/`、`adapters/`、`tests/` | C19 以后核对保留、修改、替换或退役 |
+| 正式运行证据 | `runs/<source-name>/` 的实际结果包 | 当前阶段不创建空 Run、Evidence、Verdict 或 Claim |
 
-> 文档转 Markdown：来源 SOURCE；输出到 OUTPUT_ROOT；页码全部。
+旧英文 `requirements/`、`governance/`、`design/`、`execution/` 和 `PROJECT-DELIVERY-WORKFLOW.md` 均为 Brownfield 或方法参考，不是当前业务权威。
 
-执行器按 AGENTS.md 和 contracts/workflow-a-production-runtime-context.yaml 加载最小生产上下文。多个来源分别执行；只有用户明确声明同一逻辑文档候选关系时才比较。
+根入口继续使用约定俗成的 `README.md`，不再新建第二个中文 README。其他新增人工文件优先使用中文名称；英文名称需要出现时使用小写。
 
-本轮治理迁移不启动真实文档转换。实际执行说明见 [execution/WORKFLOW-A-EXECUTION.md](execution/WORKFLOW-A-EXECUTION.md) 和 [Workflow A 人工入口](workflows/document-to-markdown-assets/README.zh.md)。
+## 当前阶段
 
-## 证据与声明
+当前正在完善前期需求链和配套治理文件，尚未进入人工阅读、讨论、纠正和决定，也没有建立业务范围基线、完整需求基线或架构基线。
 
-Run、Evidence、Independent Verdict、Delivery 和 Bounded Claim 分离。fixture、HTTP 200、文件存在、runner succeeded 或静态测试通过都不能单独证明业务正确或生产能力。
-
-## 规格包验证
-
-维护完成后，从仓库根目录执行：
-
-    python3 tests/validate_workflow_package.py
-    python3 -m pytest -q tests/test_repository_layout.py tests/test_real_output_root_validator.py
-    python3 -m pytest -q tests/test_document_driven_workflow_contract.py tests/test_document_governance.py
-
-这些命令只验证规格、契约和既有测试范围；真实包仍需独立 real output validator，且本轮不运行真实转换。
+本批次不修改机器契约、Workflow、Skill、代码和测试，不执行真实转换，不生成正式运行结论，也不提交 Git。

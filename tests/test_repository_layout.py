@@ -1,21 +1,51 @@
 import re
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMP_PROMPTS = (
-    "新对话继续推进_GOAL.md",
-    "新对话继续推进_HANDOFF_20260814.md",
-    "新对话继续推进_REAL_EXECUTION_GOAL.md",
-)
+TEMP_PROMPT_ROOT = ROOT / ".prompt"
+MANUAL_PROMPT_ROOT = ROOT / "prompts"
+PROMPT_HISTORY_ROOT = ROOT / "archive/prompt-history"
 
 
-def test_temporary_prompts_are_kept_under_prompt_directory():
-    prompt_root = ROOT / ".prompt"
-    assert prompt_root.is_dir()
-    for name in TEMP_PROMPTS:
-        assert not (ROOT / name).exists()
-        assert (prompt_root / name).is_file()
+def test_manual_ebook_prompts_are_directly_accessible_from_the_homepage():
+    index_path = MANUAL_PROMPT_ROOT / "README.md"
+    index = index_path.read_text(encoding="utf-8")
+    homepage = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert not list(TEMP_PROMPT_ROOT.glob("ebook-md-*.md"))
+    assert not list((ROOT / "提示词").glob("ebook-md-*.md"))
+    for edition in ("简版", "完整版"):
+        name = f"ebook-md-电子书格式内容修复-{edition}.md"
+        prompt = MANUAL_PROMPT_ROOT / name
+        assert prompt.is_file()
+        assert f"]({name})" in index
+        assert f"]({prompt.relative_to(ROOT).as_posix()})" in homepage
+    relative_index = index_path.relative_to(ROOT).as_posix()
+    assert f"]({relative_index})" in homepage
+    project_overview = (ROOT / "项目说明.md").read_text(encoding="utf-8")
+    assert f"]({relative_index})" in project_overview
+    temporary_index = (TEMP_PROMPT_ROOT / "README.zh.md").read_text(encoding="utf-8")
+    assert f"](../{relative_index})" in temporary_index
+
+
+def test_manual_prompts_are_excluded_from_default_production_context():
+    contract_path = ROOT / "contracts/workflow-a-production-runtime-context.yaml"
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    exclusions = contract["default_context"]["do_not_load_by_default"]
+    assert f"{MANUAL_PROMPT_ROOT.name}/**" in exclusions
+
+
+def test_archived_prompts_are_indexed_without_temporary_copies():
+    index_path = PROMPT_HISTORY_ROOT / "README.zh.md"
+    index = index_path.read_text(encoding="utf-8")
+    snapshots = sorted(path for path in PROMPT_HISTORY_ROOT.glob("*.md") if path != index_path)
+    assert snapshots
+    for snapshot in snapshots:
+        assert f"]({snapshot.name})" in index
+        assert not (TEMP_PROMPT_ROOT / snapshot.name).exists()
+        assert not (ROOT / snapshot.name).exists()
 
 
 def test_real_run_directories_are_not_at_repository_root():

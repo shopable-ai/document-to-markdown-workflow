@@ -6,7 +6,9 @@ order: 50
 
 # 文档资产化项目验收判据与测试空间
 
-状态：authoritative-draft。这里定义项目级“什么算满足需求”；Workflow 的 ACCEPTANCE 只能在 V3 后成为执行投影。
+> **Brownfield 参考：** 本文件不是当前验收权威，也未获 V2 确认。当前中文业务入口见[项目需求说明](../项目需求/说明.md)；本文件留待 C19 以后差距对账。
+
+旧状态为 `authoritative-draft`；该状态已经被目录级降级覆盖。这里的验收草稿不能用于当前 Verdict。
 
 ## 需求验收判据
 

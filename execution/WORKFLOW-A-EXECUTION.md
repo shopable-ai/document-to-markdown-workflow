@@ -25,7 +25,7 @@
 
 - 第 1 页是首个工作单元；
 - 第 1 页通过后只开放第 2–5 页；
-- 第 2–5 页有人工查看记录后才开放第 6–total_pages；
+- 第 2–5 页有人工查看记录后才开放第 6-total_pages；
 - raw OCR、bbox、confidence、Vision JSON、页面图和原始 manifest 只读；
 - document-temp.md 是派生预览，不替代 index.md。
 
@@ -38,4 +38,3 @@
 报告 source、fingerprint、actual pages、package path、status、independent validator 和 validation-result。passed 才能交给后续；needs-review 保留证据并请求人工；failed 不声称完成。
 
 本轮明确不执行上述真实流程。
-

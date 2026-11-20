@@ -1,6 +1,8 @@
 # 认知、需求推理与时序叠加层
 
-状态：reference-candidate；其中“候选不得自动晋升、先后不得自动推出因果”是规范性硬约束。
+> **方法参考：** 本文件不是当前项目治理权威。当前推理与时序规则见[AI 推理与时序关系](../项目治理/AI推理与时序关系.md)。
+
+旧状态：reference-candidate；其中规则只作为临时方法输入，须经真实项目验证。
 
 ## 六类用户对象
 
@@ -52,4 +54,3 @@ AI 先分类对象，再生成候选；不能把 failure 直接改写成永久�
 ## 晋升和回退
 
 candidate → draft 需要来源、owner 和人工选择；draft → confirmed 需要合法基线记录。上游变化后 confirmed 可转 stale/invalidated，并回到最早责任对象。AI 生成者不得同时充当确认人、独立 validator 或 Claim 签发者。
-

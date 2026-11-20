@@ -39,7 +39,9 @@ out/
 !.env.example
 *.log
 
-# Automatically generated workflow/test run directories
+# Automatically generated workflow/test runs and reader exports
+conversions/
+Markdown成品/
 runs/
 runs/pdf-route-detection/
 tests/runs/

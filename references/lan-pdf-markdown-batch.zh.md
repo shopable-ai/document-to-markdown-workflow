@@ -139,7 +139,7 @@ python3 adapters/lan_pdf_markdown_batch.py \
 <output-root>/conversions/
 ├── _current/          # 当前入口：CURRENT_PATHS.md、directory-registry.json/csv
 ├── _consolidated/     # 来源级 strict acceptance 总账，不放每本书工程包
-├── native-only/       # 固定路线批次根，含 manifest/results/runs
+├── native-only/       # 固定路线批次根，含 manifest/results 和每本工程包
 ├── hybrid/
 └── vision-only/
 ```
@@ -147,11 +147,13 @@ python3 adapters/lan_pdf_markdown_batch.py \
 - `_current/CURRENT_PATHS.md` 是给人和下次会话看的固定入口；后续续接先读它。
 - `_consolidated/source-consolidation.json` 是唯一的来源级完成总账；它从所有历史 run root
   中选择每个来源最新的 strict accepted 工程包，并列出未完成来源。
-- 路线目录（如 `vision-only/`）才保存真实转换工程包：`manifest.json`、`results.json`、
-  `source-output-map.csv` 和 `runs/<source-relative-dir>/...`。
+- 新批次采用 `flat-v1`，工程包直接放在路线目录（如 `hybrid/<书名>-<来源标识>/`）。来源路径与指纹仍记录在
+  `manifest.json`、`results.json` 和 `source-output-map.csv`，不复制成输出子目录。来源路径不同的同名文件即使内容相同，也不会共用工程包。
+- 批次布局写入 `manifest.json` 的 `package_layout`，逐来源真实路径与 SHA-256 写入 `run_roots`；续跑重新核对来源指纹并复用已登记的包。登记路径不得越出批次根或彼此嵌套，且必须与结果快照中的登记一致。
+- 旧清单仍按 `runs/<来源父目录>/<书名>-<指纹>/` 续跑；缺旧清单时必须找到与当前来源匹配的旧包及转换证据才能认领布局，无法辨认的目录不会被自动接管。
 - 旧时间戳目录不删除、不覆盖；只登记到 `_current/directory-registry.json/csv`，作为历史证据
   或被 `_consolidated` 选择的候选 run root。
-- 如果固定路线目录正在运行，只能更新 `_current` 指针或登记表，不移动它的 `runs/`。
+- 如果固定路线目录正在运行，只能更新 `_current` 指针或登记表，不移动其包。迁移已停批次时，必须核对包内文件哈希及验收结果，更新活动索引；若历史证据仍引用原绝对路径，可保留定向的兼容别名，索引始终使用真实包路径。
 - 只有 `_consolidated` 证明 expected sources 全部 strict accepted 后，才允许创建最终读者层目录
   并运行集合导出脚本。
 
@@ -161,6 +163,11 @@ attempt，不承诺从中断页面进行增量续传。
 
 ## 运行结果会保存什么
 
+逐页 hybrid 路线的 `reports/validation-result.json` 由独立的 PDF 包验收器重读生成：核对
+来源 SHA-256、原 PDF 页数、逐页证据的哈希、终稿页序及本地图片链接。逐页覆盖通过、
+标题校验通过或生成 `index.md` 都不能单独代替整包验收。可用
+`python3 adapters/pdf_hybrid_output_validator.py <run-root> --source <pdf>` 重新核验现有包。
+
 每个批次会生成独立目录，大致结构如下：
 
 ```text
@@ -169,8 +176,10 @@ attempt，不承诺从中断页面进行增量续传。
 ├── results.json
 ├── selected-sources.txt
 ├── source-output-map.csv
-└── runs/
-    └── <source-relative-dir>/...
+├── logs/
+└── <书名>-<来源标识>/
+    ├── index.md
+    └── ...
 ```
 
 其中最重要的是：
@@ -210,6 +219,10 @@ python3 adapters/lan_pdf_markdown_graph.py \
 - 文档级 `native-only` 会显式使用无模型路线；文档级 `hybrid` 和 `vision-only` 都进入
   逐页混合路由，由页面证据决定 `native-only`、`native-plus-visual` 或 `visual-only`，
   不会把整本书强制一次性送入视觉模型。
+- 新的全页 page-hybrid 工程包验收后生成内部 `reader/index.md`、`reports/reader-visual-audit.json` 和
+  `reports/reader-visual-validation.json`。只在副本跳过已通过整页字符、阅读顺序和非文字结构门的图片；
+  低置信与待裁页仍保留。工程验收、读者副本字节验收与语义待复核分别记录；内部副本不是批量成品目录。
+- 3.0.0 只对有扫描底图且无已证实图形的 Apple Vision 候选采集本地 Tesseract `chi_sim+eng`；未安装或冲突时保留页图。`evidence/reader-scan-ocr/` 保存逐页引擎/模型、耗时与绑定；独立验收重放不再启动 OCR。已锁定的旧包不升级或改写。
 - 同一个 `batch-root` 续跑时只跳过已有独立验收为 `passed` 的书；失败、半成品和
   `needs-review` 继续使用原 source run root 的恢复证据，不另建替代成品目录。
 - 真实路线清单里如果有某些 PDF 已经不存在，批量入口会跳过这些失效路径，并把它们记录在 `manifest.json -> origin -> missing_sources`，不会因为单个失效条目让整批中断。

@@ -2579,11 +2579,21 @@ def run_page_hybrid_graph(
     )
     completed_pages = list(completion.get("completed_pages") or [])
     failed_pages = list(completion.get("incomplete_pages") or [])
+    reader = summary.get("reader_visual") or {}
+    reader_paths = {
+        key: str(run_root / path)
+        for key, path in {
+            "reader_index": "reader/index.md",
+            "reader_visual_audit": "reports/reader-visual-audit.json",
+            "reader_visual_validation": "reports/reader-visual-validation.json",
+        }.items()
+        if reader and (run_root / path).is_file()
+    }
     return {
         "source_path": str(source),
         "source_sha256": facts["sha256"],
         "run_root": str(run_root),
-        "current_phase": "page-hybrid-validation",
+        "current_phase": "reader-visual-projection" if reader else "page-hybrid-validation",
         "completed_pages": completed_pages,
         "failed_pages": failed_pages,
         "file_paths": {
@@ -2593,7 +2603,8 @@ def run_page_hybrid_graph(
             "index": str(run_root / "index.md"),
             "summary": str(run_root / "summary.json"),
             "progress": str(run_root / "progress.json"),
-            "validation_report": str(run_root / "acceptance.json"),
+            "validation_report": str(run_root / "reports" / "validation-result.json"),
+            **reader_paths,
         },
         "file_hashes": {},
         "final_status": str(result.get("status") or summary.get("status") or "failed"),
@@ -2639,7 +2650,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-visual-asset-pruning",
         action="store_true",
-        help="跳过终端视觉资产判定与派生页面 PNG 清理；默认执行 fail-closed 后置阶段",
+        help="仅 --visual-only：跳过终端视觉资产判定与派生页面 PNG 清理；不影响 page-hybrid 读者副本验收",
     )
     parser.add_argument(
         "--smoke",

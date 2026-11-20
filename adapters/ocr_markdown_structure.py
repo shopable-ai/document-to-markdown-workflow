@@ -21,7 +21,7 @@ from typing import Any
 
 CONTRACT = "ocr-markdown-structure"
 VERSION = "0.3.0"
-PROMPT_VERSION = "deterministic-bbox-structure-v3"
+PROMPT_VERSION = "deterministic-bbox-structure-v4"
 CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百零〇0-9]+[章节篇部卷]\s*[：:]?")
 EXPLICIT_LIST_RE = re.compile(
     r"^(?:\d{1,4}[.、]|[（(]?[一二三四五六七八九十百零〇]+[）)、.]|[-*•·])\s*"
@@ -32,6 +32,7 @@ TRAILING_PAGE_RE = re.compile(
     r"(?:[/／]|[.．…·⋯,:：，]+|[?？])\s*\d{1,4}\s*$"
 )
 STRONG_TERMINAL_RE = re.compile(r"[。！？!?；;]$|[”’」』）)]$")
+INTERNAL_SENTENCE_END_RE = re.compile(r"[。！？!?；;]\s*\S")
 PARAGRAPH_GAP_FACTOR = 3.5
 
 
@@ -192,6 +193,11 @@ def _heading_level(
         return 1
     if CHAPTER_RE.match(text):
         return 2
+    # A tall OCR box can still be a wrapped line of prose. A nearly full-width
+    # line containing a sentence ending followed by more text is not a title
+    # solely because this box is taller than its neighbors.
+    if len(row) == 1 and row[0].width >= 0.70 and INTERNAL_SENTENCE_END_RE.search(text):
+        return None
     if len(text) <= 40 and height >= max(median_height * 1.55, max_height * 0.82):
         return 1 if not first_heading_seen else 2
     if len(text) <= 50 and height >= median_height * 1.3:

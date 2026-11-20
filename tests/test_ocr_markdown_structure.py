@@ -10,11 +10,11 @@ sys.path.insert(0, str(ROOT / "adapters"))
 import ocr_markdown_structure as structure  # noqa: E402
 
 
-def candidate(text: str, *, x: float, y: float, height: float = 0.03, confidence: float = 1.0):
+def candidate(text: str, *, x: float, y: float, height: float = 0.03, confidence: float = 1.0, width: float = 0.5):
     return {
         "text": text,
         "confidence": confidence,
-        "bbox": {"x": x, "y": y, "width": 0.5, "height": height},
+        "bbox": {"x": x, "y": y, "width": width, "height": height},
     }
 
 
@@ -63,6 +63,26 @@ def test_reconstruct_joins_wrapped_chinese_line_despite_normal_book_line_spacing
     assert "答：现在全国的房子都没销量了。" in result["markdown"]
     assert "没销\n\n量了" not in result["markdown"]
     assert "量了。\n\n为什么？" in result["markdown"]
+
+
+def test_a_tall_full_width_prose_line_does_not_split_a_paragraph_as_a_heading():
+    result = structure.reconstruct(
+        payload(
+            candidate("第一章 正式标题", x=0.11, y=0.90, height=0.045),
+            candidate("这一段记录了当时参加复查的人在会上作出的", x=0.11, y=0.855, height=0.019, width=0.77),
+            candidate("他们在会上商量，认为之所以要继续复查，是因", x=0.11, y=0.83, height=0.019, width=0.77),
+            candidate("为记录还有遗漏。这时同事给大家出了一个主", x=0.11, y=0.80, height=0.029, width=0.77),
+            candidate("意，说可以分头核对，最后再把结果汇总起来。", x=0.11, y=0.78, height=0.020, width=0.77),
+            candidate("上述情况应写入记录。", x=0.11, y=0.75, height=0.019),
+            candidate("为什么要复查？", x=0.36, y=0.69, height=0.039, width=0.28),
+        ),
+        page=7,
+    )
+
+    assert [block["kind"] for block in result["blocks"]] == ["heading", "paragraph", "paragraph", "heading"]
+    assert result["blocks"][1]["source_candidate_indices"] == [1, 2, 3, 4]
+    assert "是因为记录还有遗漏。这时同事给大家出了一个主意" in result["markdown"]
+    assert result["candidate_accounting"] == {"unmapped_indices": [], "duplicate_indices": []}
 
 
 def test_directory_rows_keep_chapters_cases_and_right_column_page_numbers():

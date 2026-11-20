@@ -1,6 +1,6 @@
 contract: visual-asset-pruning
 id: visual-asset-pruning
-version: 0.4.0
+version: 0.7.0
 human_reference: contracts/CONTRACTS.md#contract-visual-asset-pruning
 lifecycle_status: active
 description: 读者层视觉资产语义筛选的页级报告，区分删除候选、最小充分裁图、整页保留和待复核。
@@ -22,6 +22,45 @@ text_heavy_reader_asset_audit:
   required_deletion_gates: [ocr_text_present, ocr_confidence_sufficient, markdown_multiset_coverage, markdown_ordered_coverage, visual_increment_covered]
   removal_plan: evidence/text-heavy-reader-asset-removal-plan.json
   removal_result: evidence/text-heavy-reader-asset-removal-result.json
+page_hybrid_reader_projection:
+  schema: pdf-hybrid-reader-visual-audit
+  version: 3.0.0
+  legacy_read_version: 1.0.0
+  previous_read_version: 2.0.0
+  scope: all-final-index-page-sections-including-pages-without-page-render-references
+  audit_report: reports/reader-visual-audit.json
+  validation_report: reports/reader-visual-validation.json
+  projection: reader/index.md
+  decisions: enum[candidate-remove, crop-required, retain, needs-review]
+  reader_actions: enum[omit, retain, no-reference-unverified]
+  no_reference: verify-native-text-without-render-or-ocr; unverified-without-fallback-blocks-reader-acceptance
+  required_per_page: [page, asset, asset_sha256, decision, reader_action, reason_code, gates, independent_text_evidence, route_sha256, body_sha256, evidence_sha256]
+  new_run_version_binding: acceptance.json.reader_visual_audit_version
+  omission_gates: [text_confident, character_coverage, reading_order_coverage, visual_clear]
+  source_verification: enum[live-pdf, accepted-package-snapshot]
+  independent_scan_ocr:
+    adapter: adapters/pdf_scan_ocr.py
+    version: 1.0.0
+    evidence: evidence/reader-scan-ocr/pNNN.json
+    engine: local-tesseract-chi_sim+eng
+    only_for: rendered-apple-vision-full-background-or-scan-fallback-without-confirmed-visual-structure
+    cache_binding: [source_sha256, page, asset_sha256, primary_sha256, final_sha256]
+    provenance: [engine_sha256, engine_version, model_sha256, recognition_profile, payload_sha256, elapsed_ms]
+    verifier: reread-and-recompute-without-running-ocr
+    omission_requires: both-ocr-orders-and-exact-characters-match-final-body-and-both-visual-masks-clear
+    unavailable_or_conflicting: retain-with-page-reason
+  invariants:
+    - 审计复用 hash 锁定的 Poppler bbox/plain text、pdfplumber 向量对象计数或 Apple Vision OCR 坐标；扫描底图不是插图。向量计数只覆盖 line/rect/curve，不宣称识别全部 PDF 绘制语义或证明文字可见性。
+    - 无图页也要重读；只有原生正文、来源 bbox 和终稿同页文字顺序一致，且无图像或向量等视觉候选时，才记录已验证 omit。原来无图但缺证的页不得作为读者验收 passed；本版本不会自动补渲染或重写该工程页。
+    - 省图须核对同一完整页区段；不丢弃标点、正负号或大小写，只豁免明确的几何页脚页码和已识别的 Markdown 格式。不能用图 alt、注释或跨页正文补足。
+    - 生成正文的同一份 OCR、同引擎换参数和隐藏 PDF 文字均不能授权省图；只对符合条件的扫描页采集另一识别家族的同页光栅 OCR。不修改终稿，也不以相似度替代字符及顺序相等。
+    - 白底、少量离散扫描点和几何上已确定的边缘直线可忽略；正文外的成簇浅色字迹、颜色、细线/交叉或未解空间关系可独立否决省图。两个 OCR 遮罩分别核查，不取并集；不调用局域网模型。
+    - 字符冲突或漏码定位只提出候选；不得把去图投影当作补字入口。实际更改限新生产 run 的终稿生成前，遵守页面修复阶段门及独立图像核对，且仍须重算整页文字/顺序/视觉门。
+    - 只在副本中移除精确、独占、整行且哈希匹配的页面图引用；正文、页序、其余链接及资产字节必须相同。
+    - crop-required 只报告区域候选，不自动裁切或换链；needs-review 与 crop-required 仍保留原图并单列语义状态。
+    - 工程包 index.md、page-units、来源资产、OCR、渲染或来源 PDF 不原地修改；既有包报告和副本写到包外。
+    - 独立验收重算分类与投影，不以字节校验通过代替语义闭环，也不自动发布批量成品。
+    - 既有 1.0.0 和 2.0.0 报告按原版规则只读复核；新运行锁定 3.0.0 规则，不能回退来规避门槛。
 standalone_image_corpus:
   aliases: [standalone-image-corpus, image-only]
   markdown_access: forbidden

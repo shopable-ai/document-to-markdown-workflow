@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from adapters import run_pdf_batches as batch
 
@@ -8,6 +12,64 @@ from adapters import run_pdf_batches as batch
 class _ProcResult:
     def __init__(self, stdout: str):
         self.stdout = stdout
+
+
+@pytest.mark.parametrize("engineering_passed", [True, False])
+def test_hybrid_reader_starts_only_after_final_index_and_engineering_gate(tmp_path, monkeypatch, engineering_passed):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"fixture PDF")
+    root = tmp_path / "run"
+    root.mkdir()
+    _, native_summary, native_evidence = batch._page_package_paths(root / "pages", 1)
+    fingerprint = batch.sha256(source)
+    batch._write_json_atomic(native_summary, {"status": "passed", "source_sha256": fingerprint})
+    batch._write_json_atomic(native_evidence, {
+        "status": "passed", "source_sha256": fingerprint, "text": "Fixture body", "nonempty_line_ids": ["1"],
+    })
+
+    monkeypatch.setattr(batch.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        stdout="Pages: 1\n", returncode=0, stderr="",
+    ))
+    monkeypatch.setattr(batch, "_collect_page_image_stats", lambda *args, **kwargs: ({}, {}))
+    monkeypatch.setattr(batch, "_page_route_decision", lambda **kwargs: {"page": 1, "route": "native-only", "status": "passed"})
+    monkeypatch.setattr(batch, "_background_process_matches", lambda *args: [])
+
+    def helper(command, _timeout):
+        if command[1] == str(batch.HEADING_REPAIR_ADAPTER):
+            index = root / "index.md"
+            index.write_bytes((root / "document-temp.md").read_bytes())
+            batch._write_json_atomic(root / "reports/heading-repair.json", {
+                "status": "passed", "index_sha256": batch.sha256(index) if engineering_passed else "mismatch",
+                "validation": {"heading_prefix_only": True}, "formatting_validation": {"passed": True},
+            })
+        else:
+            assert command[1] == str(batch.NOISE_CLEANUP_ADAPTER)
+        return {"returncode": 0, "stdout": json.dumps({"status": "passed"})}
+
+    entered = []
+
+    def finalize(package, pdf, selected):
+        entered.append(True)
+        assert (package, pdf, selected) == (root, source, [1])
+        assert batch._read_json(root / "reports/validation-result.json")["status"] == "passed"
+        assert batch._read_json(root / "acceptance.json")["status"] == "passed"
+        assert batch._read_json(root / "progress.json")["status"] == "running"
+        assert (root / "index.md").is_file()
+        return {"status": "failed", "bytes_verified": False, "error": "fixture reader failure"}
+
+    monkeypatch.setattr(batch, "_run_command", helper)
+    monkeypatch.setattr(batch, "_finalize_hybrid_reader", finalize)
+    code, result = batch.run_page_batches.__wrapped__(source, tmp_path, resume_package=root, hybrid=True)
+    assert code == 1 and result["status"] == "failed"
+    assert entered == ([True] if engineering_passed else [])
+    acceptance = batch._read_json(root / "acceptance.json")
+    assert acceptance["status"] == ("passed" if engineering_passed else "failed")
+    if engineering_passed:
+        assert acceptance[batch.hybrid_validator.READER_AUDIT_VERSION] == "3.0.0"
+        assert result["summary"]["engineering_status"] == "passed"
+        assert result["summary"]["reader_visual"]["status"] == "failed"
+    else:
+        assert "reader_visual" not in result["summary"]
 
 
 def test_native_page_command_targets_the_shared_pages_root():
@@ -89,7 +151,34 @@ def test_visual_structure_page_keeps_visual_model_worker(tmp_path: Path):
     assert route == "lan-visual-model"
 
 
-def test_full_page_background_text_supplement_uses_local_ocr(tmp_path: Path):
+@pytest.mark.parametrize("probe_status", ["passed", "unavailable", "timeout"])
+def test_full_page_background_with_unverified_text_uses_local_ocr(tmp_path, monkeypatch, probe_status):
+    def render(_source, _page):
+        if probe_status == "timeout":
+            raise batch.page_router.DetectionError("fixture timeout")
+        return {"status": probe_status, "visual_structure_present": False, "structure_types": []}
+
+    monkeypatch.setattr(batch.page_router, "inspect_rendered_structure", render)
+    decision = batch._page_route_decision(
+        source=tmp_path / "book.pdf",
+        page=57,
+        native_evidence={
+            "text": "Dense extractable text is not proof of visible text. " * 8,
+            "table_count_pdfplumber_find_tables": 1,
+        },
+        images=batch.page_router.PageImageStats(image_count=1, max_area_ratio=0.9355),
+        image_probe={"status": "passed"},
+    )
+    assert decision["native_body_sufficient"] is True
+    assert decision["route"] == "visual-only"
+    assert decision["visual_model_required"] is False
+    assert decision["signals"]["page_image_required"] is True
+    assert decision["signals"]["native_text_visibility"] == {
+        "version": 1, "status": "unknown", "reason": "full-page-background-text-visibility-unverified",
+    }
+    assert "full-page-background-with-complete-text-layer" not in decision["reason_codes"]
+    assert "page-image-and-local-ocr-required" in decision["reason_codes"]
+
     command, route = batch._visual_page_command(
         helper_python="/tmp/python",
         source=Path("/tmp/book.pdf"),
@@ -98,22 +187,167 @@ def test_full_page_background_text_supplement_uses_local_ocr(tmp_path: Path):
         visual_dpi=220,
         timeout=7200,
         can_resume=False,
-        decision={
-            "route": "native-plus-visual",
-            "native_body_sufficient": True,
-            "text_signals": {"present": False},
-            "image_stats": {"max_area_ratio": 0.9355},
-            "table_detection": {"present": True},
-            "rendered_structure": {
-                "status": "passed",
-                "visual_structure_present": False,
-            },
-        },
+        decision=decision,
     )
 
     assert command[1] == str(batch.APPLE_OCR_ADAPTER)
     assert "convert" not in command
     assert route == "apple-vision-ocr"
+
+
+def test_full_page_background_with_rendered_structure_keeps_visual_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(batch.page_router, "inspect_rendered_structure", lambda *_: {
+        "status": "passed", "visual_structure_present": True, "structure_types": ["table-or-matrix"],
+    })
+    decision = batch._page_route_decision(
+        source=tmp_path / "book.pdf", page=1,
+        native_evidence={"text": "Dense extractable text. " * 8, "table_count_pdfplumber_find_tables": 1},
+        images=batch.page_router.PageImageStats(image_count=1, max_area_ratio=1),
+        image_probe={"status": "passed"},
+    )
+    assert decision["route"] == "native-plus-visual"
+    assert decision["visual_model_required"] is True
+    assert "page_image_required" not in decision["signals"]
+    assert decision["signals"]["native_text_visibility"]["status"] == "unknown"
+
+
+@pytest.mark.parametrize("curves", [0, 1])
+def test_vector_signal_corroborates_visual_even_without_raster_grid(tmp_path, monkeypatch, curves):
+    renders = []
+
+    def render(_source, page):
+        renders.append(page)
+        return {"status": "passed", "visual_structure_present": False, "structure_types": []}
+
+    monkeypatch.setattr(batch.page_router, "inspect_rendered_structure", render)
+    vectors = {"version": "pdfplumber-vector-v1", "status": "complete", "counts": {"line": 0, "rect": 0, "curve": curves}}
+    decision = batch._page_route_decision(
+        source=tmp_path / "book.pdf", page=1,
+        native_evidence={"text": "Plain text body with normal reading order. " * 8,
+                         "table_count_pdfplumber_find_tables": 0, "pdf_vector_objects": vectors},
+        images=batch.page_router.PageImageStats(), image_probe={"status": "passed"},
+    )
+
+    assert decision["signals"]["pdf_vector_objects"] == vectors
+    assert decision["signals"]["native_text_visibility"] == {
+        "version": 1, "status": "unknown", "reason": "no-paint-visibility-detector",
+    }
+    assert "native_fast_path" not in decision["signals"]
+    assert decision["visual_model_required"] is False
+    if curves:
+        assert renders == [1]
+        assert decision["route"] == "native-plus-visual"
+        assert "pdf-vector-objects-present" in decision["reason_codes"]
+        assert decision["signals"]["page_image_required"] is True
+    else:
+        assert renders == []
+        assert decision["route"] == "native-only"
+        assert "page_image_required" not in decision["signals"]
+
+
+@pytest.mark.parametrize("worker_fault", [None, "missing-link", "missing-image", "missing-ocr"])
+def test_background_guard_reroutes_legacy_page_and_requires_worker_evidence(tmp_path, monkeypatch, worker_fault):
+    source = tmp_path / "fixture.pdf"
+    source.write_bytes(b"synthetic source; all tools stubbed")
+    fingerprint = batch.sha256(source)
+    root = tmp_path / "run"
+    package, native_summary, native_evidence = batch._page_package_paths(root / "pages", 1)
+    native_text = "Unverified extracted characters not in the page image. " * 8
+    batch._write_json_atomic(native_summary, {"status": "passed", "source_sha256": fingerprint})
+    batch._write_json_atomic(native_evidence, {
+        "status": "passed", "page": 1, "source_sha256": fingerprint, "text": native_text,
+        "table_count_pdfplumber_find_tables": 0,
+    })
+    native_sha = batch.sha256(native_evidence)
+    unit = root / "page-units/p001.md"
+    batch._write_text_atomic(unit, f"<!-- page:1 -->\n\n{native_text}\n")
+    route_path = root / "evidence/page-routes/p001.json"
+    batch._write_json_atomic(route_path, {
+        "page": 1, "source_sha256": fingerprint, "route": "native-only", "status": "passed",
+        "page_unit_sha256": batch.sha256(unit), "native_evidence": str(native_evidence),
+        "native_evidence_sha256": native_sha,
+        "reason_codes": ["native-text-usable", "full-page-background-with-complete-text-layer"],
+    })
+    old_attempt = package / "visual"
+    old_unit = old_attempt / "page-units/p001.md"
+    batch._write_text_atomic(old_unit, "<!-- page:1 -->\n\nOld model attempt.\n")
+    batch._write_json_atomic(old_attempt / "summary.json", {"status": "passed", "source_sha256": fingerprint})
+    batch._write_json_atomic(old_attempt / "evidence/page-result-p001.json", {
+        "status": "passed", "page": 1, "source_sha256": fingerprint, "route": "lan-visual-model",
+        "markdown": {"current_sha256": batch.sha256(old_unit)},
+    })
+
+    def pdf_info(command, **_kwargs):
+        assert command == ["pdfinfo", str(source)]
+        return SimpleNamespace(stdout="Pages: 1\n", returncode=0, stderr="")
+
+    monkeypatch.setattr(batch.subprocess, "run", pdf_info)
+    monkeypatch.setattr(batch, "_collect_page_image_stats", lambda *_, **__: (
+        {1: batch.page_router.PageImageStats(image_count=1, max_area_ratio=1)}, {"status": "passed"},
+    ))
+    monkeypatch.setattr(batch.page_router, "inspect_rendered_structure", lambda *_: {
+        "status": "passed", "visual_structure_present": False, "structure_types": [],
+    })
+    commands = []
+
+    def worker(command, _timeout):
+        commands.append(command[1])
+        if command[1] == str(batch.NOISE_CLEANUP_ADAPTER):
+            # Stop after exercising per-page routing and artifact handling.
+            return {"returncode": 1, "stdout": '{"status":"needs-review"}'}
+        assert command[1] == str(batch.APPLE_OCR_ADAPTER)
+        assert "--resume" not in command
+        visual = Path(command[command.index("--run-root") + 1])
+        assert visual == package / "visual-attempt-002"
+        worker_unit = visual / "page-units/p001.md"
+        image_link = "![Page 1](../assets/page-001.png)\n"
+        if worker_fault == "missing-link":
+            image_link = "[Only a hyperlink](../assets/page-001.png)\n"
+        batch._write_text_atomic(worker_unit, f"<!-- page:1 -->\n\nOCR body.\n\n{image_link}")
+        worker_asset = visual / "assets/page-001.png"
+        if worker_fault != "missing-image":
+            worker_asset.parent.mkdir()
+            worker_asset.write_bytes(b"synthetic image artifact")
+        ocr_path = visual / "evidence/apple-vision-p001.json"
+        if worker_fault != "missing-ocr":
+            batch._write_json_atomic(ocr_path, {"candidates": [{"text": "OCR body.", "bbox": [0, 0, 1, 1]}]})
+        batch._write_json_atomic(visual / "summary.json", {
+            "status": "passed", "source": {"sha256": fingerprint}, "completed_pages": [1],
+        })
+        batch._write_json_atomic(visual / "evidence/page-result-p001.json", {
+            "status": "passed", "page": 1, "source_sha256": fingerprint,
+            "route": "apple-vision-ocr", "markdown": {"current_sha256": batch.sha256(worker_unit)},
+            "asset": {"sha256": batch.sha256(worker_asset) if worker_asset.exists() else "missing"},
+            "ocr_evidence_sha256": batch.sha256(ocr_path) if ocr_path.exists() else "missing",
+        })
+        return {"returncode": 0, "stdout": '{"status":"passed"}'}
+
+    monkeypatch.setattr(batch, "_run_command", worker)
+    batch.run_page_batches.__wrapped__(source, tmp_path, resume_package=root, hybrid=True)
+    assert commands == [str(batch.APPLE_OCR_ADAPTER), str(batch.NOISE_CLEANUP_ADAPTER)]
+    route = batch._read_json(route_path)
+    assert route["signals"]["page_image_required"] is True
+    assert route["native_resume_reused"] is True
+    assert route["native_evidence_sha256"] == batch.sha256(native_evidence) == native_sha
+    assert old_unit.read_text(encoding="utf-8") == "<!-- page:1 -->\n\nOld model attempt.\n"
+    assert route["recognition_route"] == "apple-vision-ocr"
+    assert route["model_called"] is False
+    asset = root / "assets/page-001.png"
+    if worker_fault in {"missing-image", "missing-ocr"}:
+        assert route["status"] == "failed"
+        assert "required-page-image-or-local-ocr-evidence-unverified" in route["reason_codes"]
+        assert not asset.exists()
+    else:
+        assert route["status"] == "passed"
+        body = unit.read_text(encoding="utf-8")
+        assert "OCR body." in body and native_text not in body
+        expected_alt = "第1页原始页面图" if worker_fault == "missing-link" else "Page 1"
+        assert f"![{expected_alt}](../assets/page-001.png)" in body
+        assert batch.sha256(asset) == route["visual_asset_sha256"]
+        reuse = dict(page=1, source_sha256=fingerprint, page_unit_path=unit, route_record_path=route_path)
+        assert batch._reusable_routed_page(**reuse)["resume_reused"] is True
+        asset.unlink()
+        assert batch._reusable_routed_page(**reuse) is None
 
 
 def test_confirmed_table_count_rejects_title_bar_false_positive():

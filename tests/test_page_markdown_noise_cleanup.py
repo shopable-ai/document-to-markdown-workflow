@@ -254,6 +254,32 @@ def test_page_number_is_deleted_only_in_footer_before_original_image(tmp_path: P
     assert result["counts_by_kind"] == {"footer-page-number": 1}
 
 
+def test_hybrid_visual_supplement_and_other_semantic_headings_are_not_discovered(tmp_path: Path):
+    for page in range(1, 7):
+        write_page(tmp_path, page, f"# 重复章节标题\n\n正文 {page}。\n\n- {page} -\n\n"
+                   f"### 视觉补充\n\n- -{page}-\n\n![原始页面图](../assets/page-{page:03d}.png)\n")
+
+    result = cleanup.cleanup_directory(tmp_path, apply=True)
+
+    assert result["status"] == "passed"
+    assert result["discovered_rules"] == []
+    assert result["counts_by_kind"] == {"footer-page-number": 12}
+    assert result["residual_high_confidence"] == []
+    text = (tmp_path / "p001.md").read_text(encoding="utf-8")
+    assert "# 重复章节标题" in text and "### 视觉补充" in text
+    assert "正文 1。" in text and "../assets/page-001.png" in text
+
+
+def test_adjacent_different_numbers_are_not_assumed_duplicate_footers(tmp_path: Path):
+    path = write_page(tmp_path, 1, "正文。\n\n- 12 -\n- 13 -\n\n![原始页面图](../assets/page-001.png)\n")
+
+    result = cleanup.cleanup_directory(tmp_path, apply=True)
+
+    assert result["status"] == "needs-review"
+    assert "- 12 -" in path.read_text(encoding="utf-8")
+    assert [entry["raw"] for entry in result["residual_high_confidence"]] == ["- 12 -"]
+
+
 def test_cli_writes_auditable_evidence_without_rewriting_scan_mode(tmp_path: Path):
     page_units = tmp_path / "page-units"
     page = write_page(

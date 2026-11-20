@@ -30,6 +30,7 @@ PAGE_FILE = re.compile(r"^p(\d{3})\.md$")
 ORIGINAL_IMAGE = re.compile(r"\.\./assets/page-\d{3}\.png")
 MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*(?:<[^>]+>|[^)]+)\s*\)")
 PAGE_NUMBER_LINE = re.compile(r"^(?:[-*+]\s+)?[-–—−\s]+\d{1,4}[-–—−\s]+$")
+PAGE_NUMBER_VALUE = re.compile(r"\d+")
 HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 LIST_MARKER = re.compile(r"^\s{0,3}(?:[-*+]\s+|>\s+)")
 
@@ -50,6 +51,7 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "header_rules": [],
     "protected_exact": [
         "正文",
+        "视觉补充",
         "列表/图示文字",
         "表格与公式",
         "解读",
@@ -294,6 +296,11 @@ def _is_banner_like(raw: str, protected_exact: set[str]) -> bool:
     return bool(re.search(r"[A-Za-z0-9\u3400-\u9fff]", normalized))
 
 
+def _is_semantic_markup(raw: str) -> bool:
+    stripped = raw.strip()
+    return bool(HEADING.match(stripped) or LIST_MARKER.match(stripped) or re.match(r"\d+[.)]\s+", stripped))
+
+
 def _nonempty_indices(record: PageRecord) -> list[int]:
     return [i for i, line in enumerate(record.lines) if _line_without_newline(line).strip()]
 
@@ -310,7 +317,11 @@ def _boundary_pool(record: PageRecord, profile: dict[str, Any], protected_exact:
     images = _original_image_indices(record)
     before_image = [i for i in nonempty if not images or i < images[0]]
     pool.update(before_image[-footer_limit:])
-    return {i for i in pool if _is_banner_like(_line_without_newline(record.lines[i]), protected_exact)}
+    return {
+        i for i in pool
+        if not _is_semantic_markup(record.lines[i])
+        and _is_banner_like(_line_without_newline(record.lines[i]), protected_exact)
+    }
 
 
 def _anchor_compatible(left: str, right: str) -> bool:
@@ -407,6 +418,8 @@ def _match_rules(record: PageRecord, rules: list[Rule], protected_exact: set[str
         if _is_protected(raw, protected_exact):
             continue
         for rule in rules:
+            if rule.source != "profile" and _is_semantic_markup(raw):
+                continue
             if rule.matches(raw):
                 matches[index].append(rule)
     return matches
@@ -490,6 +503,21 @@ def _footer_page_number(index: int, record: PageRecord, deletions: set[int], pro
         if nonempty_seen > limit or not _is_ignorable_scaffold(raw, protected_exact):
             return False
     return True
+
+
+def _footer_number_indices(record: PageRecord, deletions: set[int], protected_exact: set[str], limit: int) -> set[int]:
+    """Plan duplicate copies of the same footer, preserving different numbers for review."""
+    numbers: dict[int, str] = {}
+    for index, line in enumerate(record.lines):
+        raw = _line_without_newline(line).strip()
+        if PAGE_NUMBER_LINE.fullmatch(raw):
+            numbers[index] = PAGE_NUMBER_VALUE.search(raw).group()
+    planned: dict[int, str] = {}
+    for index, value in reversed(list(numbers.items())):
+        same_number = {other for other, other_value in planned.items() if other_value == value}
+        if _footer_page_number(index, record, deletions | same_number, protected_exact, limit):
+            planned[index] = value
+    return set(planned)
 
 
 def _boundary_delimiters(record: PageRecord, deletions: set[int]) -> set[int]:
@@ -655,12 +683,8 @@ def cleanup_directory(
                         "raw": _line_without_newline(record.lines[index]),
                     }
                 )
-        for index, line in enumerate(record.lines):
-            raw = _line_without_newline(line)
-            if PAGE_NUMBER_LINE.fullmatch(raw.strip()) and _footer_page_number(
-                index, record, set(deletions), protected_exact, footer_limit
-            ):
-                deletions[index] = ("footer-page-number", "footer-page-number")
+        for index in _footer_number_indices(record, set(deletions), protected_exact, footer_limit):
+            deletions[index] = ("footer-page-number", "footer-page-number")
         for index in _boundary_delimiters(record, set(deletions)):
             deletions[index] = ("boundary-delimiter", "boundary-delimiter")
         for index, line in enumerate(record.lines):

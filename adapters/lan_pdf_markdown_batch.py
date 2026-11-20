@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import csv
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 import fcntl
 import hashlib
@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 from typing import Any, Iterator
+import unicodedata
 from urllib.parse import unquote, urlparse
 
 try:
@@ -31,6 +32,8 @@ ROOT = Path(__file__).resolve().parents[1]
 GRAPH_ADAPTER = ROOT / "adapters" / "lan_pdf_markdown_graph.py"
 DEFAULT_BATCHES_PARENT = Path("/Users/a0000/pdf_runs/lan-pdf-batches")
 FORMAT_VERSION = "0.1.0"
+FLAT_LAYOUT = "flat-v1"
+LEGACY_LAYOUT = "nested-runs-v1"
 STATUS_VALUES = {"passed", "failed", "needs-review"}
 ROUTE_VALUES = {"native-only", "hybrid", "vision-only"}
 FINAL_STAGE = "heading-audit-repair-validation"
@@ -631,9 +634,101 @@ def _source_slot(entry: SourceEntry) -> tuple[list[str], str]:
     return parents, leaf
 
 
-def run_root_for_entry(batch_root: Path, entry: SourceEntry) -> Path:
-    parents, leaf = _source_slot(entry)
-    return batch_root / "runs" / Path(*parents) / leaf if parents else batch_root / "runs" / leaf
+def _package_layout(
+    batch_root: Path, manifest: dict[str, Any] | None, entries: list[SourceEntry]
+) -> str:
+    if manifest is not None:
+        # Manifests written before this field always used nested runs.
+        layout = manifest.get("package_layout", LEGACY_LAYOUT)
+        if layout not in (FLAT_LAYOUT, LEGACY_LAYOUT):
+            raise ValueError(f"unsupported batch package layout: {layout!r}")
+        return layout
+    runs = batch_root / "runs"
+    # An alias-only runs directory is not a second set of packages. A real
+    # legacy tree without a manifest needs an exact expected package slot and
+    # evidence of prior conversion before we adopt it.
+    if runs.is_dir() and any(path.is_dir() and not path.is_symlink() for path in runs.iterdir()):
+        for entry in entries:
+            candidate = run_root_for_entry(batch_root, entry, layout=LEGACY_LAYOUT)
+            if (candidate.is_dir() and candidate.resolve() == candidate
+                    and any((candidate / marker).is_file() for marker in (
+                        "plan.json", "summary.json", "progress.json", "index.md",
+                        "evidence/progress-current.json", ".stages/native-smoke/evidence/progress-current.json",
+                    ))):
+                return LEGACY_LAYOUT
+        raise ValueError(f"ambiguous legacy directory: {runs}; restore the batch manifest or select a new batch root")
+    return FLAT_LAYOUT
+
+
+def run_root_for_entry(batch_root: Path, entry: SourceEntry, *, layout: str = FLAT_LAYOUT) -> Path:
+    if layout == LEGACY_LAYOUT:
+        parents, leaf = _source_slot(entry)
+        return batch_root / "runs" / Path(*parents) / leaf
+    if layout != FLAT_LAYOUT:
+        raise ValueError(f"unsupported batch package layout: {layout!r}")
+    # Source identity includes the path: the same PDF bytes in two different
+    # input locations remain separate sources, even with identical titles.
+    fingerprint = entry.source_sha256 or sha256(entry.source)
+    identity = hashlib.sha256(os.fsencode(entry.source) + bytes(1) + fingerprint.encode("ascii"))
+    title = readable_package_stem(entry.source.stem, fallback="pdf", max_chars=48)
+    return batch_root / f"{title}-{identity.hexdigest()[:16]}"
+
+
+def _owned_package_root(batch_root: Path, value: object) -> Path:
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError(f"invalid registered package path: {value!r}")
+    path = Path(value).resolve()
+    if not path.is_relative_to(batch_root):
+        raise ValueError(f"package path outside batch: {path}")
+    parts = path.relative_to(batch_root).parts
+    if (not parts or parts[0].casefold() == "logs" or parts[0].startswith(".")
+            or (parts[0].casefold() == "runs" and len(parts) < 2) or (path.exists() and not path.is_dir())):
+        raise ValueError(f"invalid registered package path: {path}")
+    return path
+
+
+def _registered_run_roots(
+    batch_root: Path, entries: list[SourceEntry], layout: str,
+    manifest: dict[str, Any] | None, results: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    registered = (manifest or {}).get("run_roots", {})
+    if not isinstance(registered, dict):
+        raise ValueError("batch manifest run_roots must be an object")
+    roots: dict[str, dict[str, str]] = {}
+    used: dict[tuple[str, ...], Path] = {}
+    for entry in entries:
+        source = str(entry.source)
+        fingerprint = sha256(entry.source)
+        if entry.source_sha256 and entry.source_sha256 != fingerprint:
+            raise ValueError(f"selected source fingerprint differs: {source}")
+        previous = results.get(source)
+        manifest_root = None
+        if source in registered:
+            registration = registered[source]
+            if not isinstance(registration, dict) or registration.get("source_sha256") != fingerprint:
+                raise ValueError(f"manifest package source fingerprint differs: {source}")
+            manifest_root = _owned_package_root(batch_root, registration.get("path"))
+        result_root = None
+        if previous and previous.get("run_root"):
+            if previous.get("source_sha256") != fingerprint:
+                raise ValueError(f"registered package source fingerprint differs: {source}")
+            result_root = _owned_package_root(batch_root, previous["run_root"])
+        if manifest_root and result_root and manifest_root != result_root:
+            raise ValueError(f"conflicting registered package paths: {source}")
+        path = manifest_root or result_root or _owned_package_root(
+            batch_root, str(run_root_for_entry(batch_root, replace(entry, source_sha256=fingerprint), layout=layout))
+        )
+        # macOS may resolve different case/Unicode spellings to the same
+        # directory while Path.resolve() preserves the spelling supplied.
+        key = tuple(unicodedata.normalize("NFC", part).casefold() for part in path.relative_to(batch_root).parts)
+        if key in used:
+            raise ValueError(f"multiple sources share a registered package path: {path}")
+        used[key] = path
+        roots[source] = {"path": str(path), "source_sha256": fingerprint}
+    for key, path in used.items():
+        if any(key[:i] in used for i in range(1, len(key))):
+            raise ValueError(f"registered package paths overlap: {path}")
+    return roots
 
 
 def _inspect_final_completion(
@@ -967,6 +1062,8 @@ def persist_batch_state(
     batch_root: Path,
     batch_id: str,
     created_at: str,
+    package_layout: str,
+    run_roots: dict[str, dict[str, str]],
     entries: list[SourceEntry],
     origin: dict[str, Any],
     config: dict[str, Any],
@@ -981,6 +1078,8 @@ def persist_batch_state(
         "format_version": FORMAT_VERSION,
         "batch_id": batch_id,
         "mode": "lan-pdf-route-aware-batch",
+        "package_layout": package_layout,
+        "run_roots": run_roots,
         "created_at": created_at,
         "updated_at": now_iso(),
         "origin": origin,
@@ -1054,12 +1153,14 @@ def _read_log_tail(path: Path, *, max_bytes: int = 12000) -> str:
 
 def _child_log_root(run_root: Path) -> Path:
     resolved = run_root.expanduser().resolve()
-    for ancestor in resolved.parents:
-        if ancestor.name == "runs":
-            key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
-            return ancestor.parent / "logs" / f"{resolved.name}-{key}"
     key = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
-    return resolved.parent / ".batch-child-logs" / f"{resolved.name}-{key}"
+    name = f"{resolved.name}-{key}"
+    if (_load_manifest(resolved.parent) or {}).get("package_layout") == FLAT_LAYOUT:
+        return resolved.parent / "logs" / name
+    for ancestor in resolved.parents:
+        if ancestor.name == "runs" and (ancestor.parent / "manifest.json").is_file():
+            return ancestor.parent / "logs" / name
+    return resolved.parent / ".batch-child-logs" / name
 
 
 def _active_conversion_processes(entry: SourceEntry, run_root: Path) -> list[str]:
@@ -1253,6 +1354,7 @@ def _run_batch_unlocked(
     batch_root = batch_root.expanduser().resolve()
     batch_root.mkdir(parents=True, exist_ok=True)
     manifest = _load_manifest(batch_root)
+    layout = _package_layout(batch_root, manifest, entries)
     if manifest:
         _ensure_input_match(entries, manifest)
         batch_id = str(manifest.get("batch_id") or batch_root.name)
@@ -1266,9 +1368,11 @@ def _run_batch_unlocked(
         for item in existing_results
         if item.get("source_path")
     }
+    run_roots = _registered_run_roots(batch_root, entries, layout, manifest, result_by_source)
     results: list[dict[str, Any]] = []
     for index, entry in enumerate(entries, 1):
         previous = result_by_source.get(str(entry.source))
+        registration = run_roots[str(entry.source)]
         base = {
             "index": index,
             "source_path": str(entry.source),
@@ -1276,18 +1380,20 @@ def _run_batch_unlocked(
             "route": entry.route or "native-only",
             "route_confidence": entry.route_confidence,
             "reason_codes": list(entry.reason_codes),
-            "source_sha256": entry.source_sha256 or sha256(entry.source),
+            "source_sha256": registration["source_sha256"],
             "file_size": entry.file_size,
             "modified_at": entry.modified_at,
         }
-        run_root = run_root_for_entry(batch_root, entry)
+        run_root = Path(registration["path"])
         if previous and _existing_success(previous, requested_pages=str(config["pages"])):
-            item = {**previous, **base, "execution": "skipped-existing", "resume_used": bool(previous.get("resume_used"))}
+            item = {**previous, **base, "run_root": str(run_root), "execution": "skipped-existing", "resume_used": bool(previous.get("resume_used"))}
             results.append(item)
             persist_batch_state(
                 batch_root=batch_root,
                 batch_id=batch_id,
                 created_at=created_at,
+                package_layout=layout,
+                run_roots=run_roots,
                 entries=entries,
                 origin=origin,
                 config=config,
@@ -1320,6 +1426,8 @@ def _run_batch_unlocked(
             batch_root=batch_root,
             batch_id=batch_id,
             created_at=created_at,
+            package_layout=layout,
+            run_roots=run_roots,
             entries=entries,
             origin=origin,
             config=config,
@@ -1368,6 +1476,8 @@ def _run_batch_unlocked(
             batch_root=batch_root,
             batch_id=batch_id,
             created_at=created_at,
+            package_layout=layout,
+            run_roots=run_roots,
             entries=entries,
             origin=origin,
             config=config,
@@ -1380,6 +1490,8 @@ def _run_batch_unlocked(
         batch_root=batch_root,
         batch_id=batch_id,
         created_at=created_at,
+        package_layout=layout,
+        run_roots=run_roots,
         entries=entries,
         origin=origin,
         config=config,
@@ -1420,7 +1532,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(ROUTE_VALUES),
         help="route to load from --route-report or annotate sources; source directories default to hybrid",
     )
-    parser.add_argument("--source-root", type=Path, help="preserve source-relative paths under this root")
+    parser.add_argument("--source-root", type=Path, help="record source paths relative to this root in batch metadata")
     parser.add_argument("--pages", default="all")
     parser.add_argument("--evidence-level", default="compact")
     parser.add_argument("--batch-size", type=int, default=1)

@@ -6,11 +6,13 @@ order: 100
 
 # 文档资产化需求到 Claim 的类型化追溯
 
+> **Brownfield 参考：** 当前尚未解锁正式追溯文件，本文件不能证明 Requirement→Claim 已闭合。当前业务语义见[项目需求说明](../项目需求/说明.md)。
+
 ## 对象链
 
 Requirement → Scenario → Function → Behavior → Acceptance → Design → Spec → Task → Workflow → Code → Test → Run → Evidence → Verdict → Delivery → Claim。
 
-上游业务对象由 requirements Markdown 权威定义；Design 之后的现有文件在 V2/V3 前只能是 Brownfield 候选投影。
+上游业务对象当前由 `项目需求/` 中文 Markdown 定义；本文件和 Design 之后的现有文件在 V2/V3 前都只是 Brownfield 候选或参考。
 
 ## 边类型
 

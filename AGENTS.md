@@ -5,8 +5,9 @@
 ## 目录契约
 
 - 根目录只放稳定入口：`README.zh.md`、目标/架构/工作流说明、注册表和其他长期维护的项目文档。
-- `.prompt/` 放临时性提示词、跨对话续接、handoff 和一次性执行目标。新增此类文件不得放到根目录；测试专用提示词继续放在 `tests/prompts/`。
+- `.prompt/` 只放仍需续接的临时提示词、handoff 和一次性执行目标。完成或被替代后，有追溯价值的放到 `archive/prompt-history/`；测试专用提示词放在 `tests/prompts/`。
 - `workflows/` 放 Workflow 的 `README.zh.md`、`workflow.yaml` 和 `ACCEPTANCE.zh.md`；`skills/` 放可复用 Skill；`contracts/` 放 YAML 契约；`references/` 放长期参考资料。
+- 常用手工提示词放在根目录的 `prompts/`，由 `prompts/README.md` 索引，不接入生产运行。`references/prompts/` 中的工作流提示词仍以对应的 Workflow 或契约所登记的文件为准。
 - `.audit/` 放本机带日期的工程审计、质量评分和复盘记录；它们是临时工程快照，不是稳定入口，也不是临时提示词，默认不提交 Git。新增 `AUDIT-*`、`QUALITY-*` 或类似快照不得放在根目录。
 - `runs/` 只放正式转换的原始证据和输出包。结果包直接使用 `runs/<source-name>/`，不再增加 `real/` 中间目录；该目录及其内容默认被 Git 忽略。
 - `runs/pdf-route-detection/` 专门保存 PDF 转换前路线检测证据；运行目录使用 `<timestamp>-<digest>`，不得重复 `real-runs-route-detection` 前缀。来源目录只保留中文总览和分流清单，完整 JSON/NDJSON 留在本目录。
@@ -37,7 +38,7 @@ Agent 读取本文件后，日常关键词直接进入 `contracts/workflow-a-pro
 
 - 默认只加载当前 `source`、`output_root`、`pages`、精简生产契约、当前进度摘要和最终验收摘要。
 - 参数不明确时先运行 `python3 adapters/workflow_a_source_runner.py --help`；正常生产执行不得读取 `adapters/*.py`。
-- `.prompt/`、目标/任务树、设计说明、完整 Workflow、`references/`、测试和历史运行是开发或诊断材料，不是生产上下文。
+- `prompts/`、`.prompt/`、目标/任务树、设计说明、完整 Workflow、`references/`、测试和历史运行不进入默认生产上下文。
 - 只有用户明确要求改代码、命令失败且错误已定位、或实际行为与契约不一致时，才读取相关 Python 的最小故障范围。
 - 需要改变路线、阶段或验收规则时才加载完整 `workflows/document-to-markdown-assets/workflow.yaml` 和相关 Skill/契约。
 
@@ -52,8 +53,9 @@ Agent 读取本文件后，日常关键词直接进入 `contracts/workflow-a-pro
 ### 批量转换固定入口与续跑目录
 
 - 同一批来源集合只能有一个当前入口目录，用 `<output_root>/conversions/_current/` 记录 `CURRENT_PATHS.md` 和历史目录登记表；后续续接必须先读该入口，再读 `<output_root>/conversions/_consolidated/source-consolidation.json`。
-- `_consolidated/` 只保存来源级 strict acceptance 总账和已选 run root，不保存每本 PDF 的工程包；工程包继续保留在路线固定批次根的 `runs/` 下。
-- 路线恢复批次使用稳定名称，例如 `<output_root>/conversions/native-only`、`hybrid`、`vision-only`。除首次路线检测或用户明确要求保留实验批次外，不得默认创建 `*-<timestamp>` 恢复目录。
+- `_consolidated/` 只保存来源级 strict acceptance 总账和已选 run root，不保存每本 PDF 的工程包；工程包保留在登记的路线批次根。
+- 路线恢复批次使用稳定名称，例如 `<output_root>/conversions/native-only`、`hybrid`、`vision-only`。恢复时不默认创建带时间戳的批次目录。
+- 新的 PDF 批次将每本书的工程包直接放在固定路线根目录，使用 `conversions/<route>/<package>/`；来源相对路径记录在元数据中，不复制成输出层级。已有批次按登记路径续跑，不自动迁移旧布局。已迁移包保留的旧路径别名只供历史证据解析，不是新的运行目录。
 - 继续未完成集合前，先基于所有既有 run root 刷新来源级去重总账；只对未 strict accepted 的来源续跑。旧 `results.json`、stale `running`、smoke、needs-review、failed 或空 `index.md` 不能作为完成依据。
 - 正在写入的固定批次根不得移动或重排。需要目录收束时，只新增 `_current` 指针和登记表；等运行停止后再刷新 `_consolidated`。
 - 最终读者层目录（如 `Markdown成品`）只能在 `_consolidated` 显示 100% 来源 strict accepted 后创建和导出。

@@ -135,6 +135,7 @@ execution_policy:
       - pdfimages-page-object-and-area-ratio
       - native-bbox-large-blank-region
       - pdfplumber-table-detection
+      - pdfplumber-page-vector-object-counts
       - local-candidate-page-render-structure
     route_rules:
       native-only: usable-native-text-and-no-corroborated-visual;no-visual-model-call
@@ -142,11 +143,26 @@ execution_policy:
       visual-only: empty-or-sparse-native-text-plus-corroborated-image-table-or-rendered-structure
     cue_without_image_object: native-only-needs-review;do-not-invent-visual-content
     rendered_probe_policy: local-deterministic-and-candidate-pages-only
+    full_page_background_with_text: extractable-not-proof-of-visible-text; retain-page-render-and-use-local-ocr-if-structure-not-confirmed
     visual_merge_policy: visual-output-must-not-overwrite-native-text
     page_failure_policy: write-failed-route-and-incomplete-page-unit;continue-later-pages
     resume_policy: require-source-sha256-page-number-passed-route-record-and-one-valid-page-marker
     completion_evidence: reports/page-completion.json
     completion_gate: no-missing-duplicate-or-unexpected-selected-pages
+    reader_visual_projection:
+      scope: independently-accepted-page-hybrid-engineering-package
+      after: engineering-index-and-independent-acceptance
+      audit_adapter: ../../adapters/pdf_hybrid_visual_audit.py
+      export_adapter: ../../adapters/pdf_hybrid_reader_export.py
+      independent_validator: ../../adapters/pdf_hybrid_output_validator.py
+      contract: ../../contracts/visual-asset-pruning.yaml
+      evidence: [reports/reader-visual-audit.json, reports/reader-visual-validation.json]
+      projection: reader/index.md
+      audit_policy_version: 3.0.0
+      policy: verify-all-final-page-sections; omit-only-with-independent-source-text-and-no-visual-candidates; preserve-unresolved-renders-and-engineering-evidence
+      scan_second_ocr: local-tesseract-only-on-eligible-apple-vision-scan-pages; replay-hash-locked-evidence-offline; fail-closed
+      no_reference_policy: verified-native-or-needs-review; do-not-auto-render-or-rewrite-engineering-package-at-reader-stage
+      public_delivery: false
   source_rendering_policy:
     deterministic_phase: producer-consumer-incremental-page-assets
     orchestration: single-runner-producer-consumer

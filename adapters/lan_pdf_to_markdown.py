@@ -289,7 +289,14 @@ def execute_pure_native(
         text = raw.get("stdout", "")
         lines = text.splitlines()
         line_ids = [f"p{page}-native-l{index:04d}" for index, value in enumerate(lines, 1) if value.strip()]
-        page_table_count = len(plumber_pdf.pages[page - 1].find_tables()) if plumber_pdf else {"status": "unavailable"}
+        plumber_page = plumber_pdf.pages[page - 1] if plumber_pdf else None
+        page_table_count = len(plumber_page.find_tables()) if plumber_page is not None else {"status": "unavailable"}
+        # find_tables already parsed these page objects. Reuse the cached
+        # object lists without rendering or scanning any other page.
+        vector_objects = {"version": "pdfplumber-vector-v1", "status": "unavailable"}
+        if plumber_page is not None:
+            objects = {"line": plumber_page.lines, "rect": plumber_page.rects, "curve": plumber_page.curves}
+            vector_objects.update(status="complete", counts={kind: len(items) for kind, items in objects.items()})
         page_record = {
             "page": page,
             "status": "passed" if text.strip() and blocks else "needs-review",
@@ -305,6 +312,7 @@ def execute_pure_native(
             "visual_model": "not-run",
             "rendering": "not-run",
             "table_count_pdfplumber_find_tables": page_table_count,
+            "pdf_vector_objects": vector_objects,
         }
         write_json(evidence_dir / f"page-{page:03d}.json", page_record)
         page_records.append(page_record)

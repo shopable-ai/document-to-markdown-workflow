@@ -66,6 +66,130 @@ def test_source_directory_discovers_pdfs_recursively_and_defaults_to_hybrid(
     }
 
 
+def test_flat_package_names_keep_deep_same_title_sources_separate(tmp_path: Path):
+    source_root = tmp_path / "library"
+    left = _write_pdf(source_root / "left" / "deep" / "Book.pdf")
+    right = _write_pdf(source_root / "right" / "deep" / "Book.pdf")
+    entries = batch.entries_from_paths([left, right], source_root=source_root, route="hybrid")
+    batch_root = tmp_path / "conversions" / "hybrid"
+    roots = [batch.run_root_for_entry(batch_root, entry) for entry in entries]
+
+    assert len(set(roots)) == 2
+    assert all(root.parent == batch_root and root.name.startswith("Book-") for root in roots)
+    assert roots == [batch.run_root_for_entry(batch_root, entry) for entry in entries]
+
+
+def test_existing_batch_layout_is_pinned_and_aliases_are_not_legacy_packages(tmp_path: Path):
+    source = _write_pdf(tmp_path / "library" / "Book.pdf")
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (tmp_path / "book").mkdir()
+    (runs / "book").symlink_to("../book", target_is_directory=True)
+    assert batch._package_layout(tmp_path, None, entries) == batch.FLAT_LAYOUT
+
+    (runs / "old-package").mkdir()
+    with pytest.raises(ValueError, match="ambiguous legacy directory"):
+        batch._package_layout(tmp_path, None, entries)
+    expected = batch.run_root_for_entry(tmp_path, entries[0], layout=batch.LEGACY_LAYOUT)
+    expected.mkdir(parents=True)
+    (expected / "progress.json").write_text("{}", encoding="utf-8")
+    assert batch._package_layout(tmp_path, None, entries) == batch.LEGACY_LAYOUT
+    assert batch._package_layout(tmp_path, {"format_version": "0.1.0"}, entries) == batch.LEGACY_LAYOUT
+    assert batch._package_layout(tmp_path, {"package_layout": "flat-v1"}, entries) == batch.FLAT_LAYOUT
+    with pytest.raises(ValueError, match="unsupported batch package layout"):
+        batch._package_layout(tmp_path, {"package_layout": "future"}, entries)
+
+
+def test_legacy_run_root_keeps_original_source_parents_and_fingerprint(tmp_path: Path):
+    source = _write_pdf(tmp_path / "A" / "B" / "Book.pdf")
+    entry, = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    root = tmp_path / "batch"
+
+    assert batch.run_root_for_entry(root, entry, layout=batch.LEGACY_LAYOUT) == (
+        root / "runs" / "A" / "B" / f"Book-{batch.sha256(source)[:8]}"
+    )
+
+
+@pytest.mark.parametrize("layout", [batch.FLAT_LAYOUT, batch.LEGACY_LAYOUT])
+def test_child_logs_stay_at_the_batch_root_in_both_layouts(tmp_path: Path, layout: str):
+    source = _write_pdf(tmp_path / "input" / "deep" / "Book.pdf")
+    entry, = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    root = tmp_path / "runs" / "batch"
+    root.mkdir(parents=True)
+    (root / "manifest.json").write_text(json.dumps({"package_layout": layout}), encoding="utf-8")
+
+    package = batch.run_root_for_entry(root, entry, layout=layout)
+    assert batch._child_log_root(package).parent == root / "logs"
+
+
+def test_resume_preserves_relocated_package_even_after_results_snapshot_is_lost(tmp_path: Path):
+    source = _write_pdf(tmp_path / "Book.pdf")
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    root = tmp_path / "batch"
+    relocated = root / "Book-existing"
+    relocated.mkdir(parents=True)
+    (relocated / "progress.json").write_text("{}", encoding="utf-8")
+    result = {"source_path": str(source), "source_sha256": batch.sha256(source),
+              "run_root": str(relocated), "status": "failed"}
+    results_path = root / "results.json"
+    results_path.write_text(json.dumps({"items": [result]}), encoding="utf-8")
+
+    calls = []
+
+    def executor(entry, *, run_root, resume, **kwargs):
+        calls.append((run_root, resume))
+        return result
+
+    config = {"pages": "all", "evidence_level": "compact", "batch_size": 1, "timeout_seconds": 30}
+    batch.run_batch(entries, batch_root=root, origin={}, config=config, executor=executor)
+    results_path.unlink()
+    batch.run_batch(entries, batch_root=root, origin={}, config=config, executor=executor)
+
+    assert calls == [(relocated, True), (relocated, True)]
+    assert not batch.run_root_for_entry(root, entries[0]).exists()
+
+
+def test_registered_package_cannot_point_outside_batch(tmp_path: Path):
+    source = _write_pdf(tmp_path / "Book.pdf")
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    root = tmp_path / "batch"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root.mkdir()
+    alias = root / "book"
+    alias.symlink_to(outside, target_is_directory=True)
+    result = {"source_sha256": batch.sha256(source), "run_root": str(alias)}
+    with pytest.raises(ValueError, match="package path outside batch"):
+        batch._registered_run_roots(root, entries, batch.FLAT_LAYOUT, None, {str(source): result})
+
+
+def test_manifest_only_resume_rejects_changed_pdf_at_same_path(tmp_path: Path):
+    source = _write_pdf(tmp_path / "Book.pdf", b"%PDF-old")
+    entry = batch.SourceEntry(str(source), "Book.pdf")
+    root = tmp_path / "batch"
+    run_roots = batch._registered_run_roots(root, [entry], batch.FLAT_LAYOUT, None, {})
+    source.write_bytes(b"%PDF-new")
+
+    with pytest.raises(ValueError, match="manifest package source fingerprint differs"):
+        batch._registered_run_roots(root, [entry], batch.FLAT_LAYOUT, {"run_roots": run_roots}, {})
+
+
+@pytest.mark.parametrize("parent_spelling", ["Café", "CAFÉ", "Café"])
+def test_registered_packages_may_not_nest_inside_one_another(tmp_path: Path, parent_spelling: str):
+    left = _write_pdf(tmp_path / "A.pdf")
+    right = _write_pdf(tmp_path / "B.pdf")
+    entries = batch.entries_from_paths([left, right], source_root=tmp_path, route="hybrid")
+    root = tmp_path / "batch"
+    run_roots = {
+        str(left): {"path": str(root / "Café"), "source_sha256": batch.sha256(left)},
+        str(right): {"path": str(root / parent_spelling / "assets" / "B"), "source_sha256": batch.sha256(right)},
+    }
+
+    with pytest.raises(ValueError, match="registered package paths overlap"):
+        batch._registered_run_roots(root, entries, batch.FLAT_LAYOUT, {"run_roots": run_roots}, {})
+
+
 def _report_record(path: Path, *, route: str, sha: str, relative_path: str) -> dict:
     stat = path.stat()
     return {
@@ -491,12 +615,20 @@ def test_run_batch_stops_before_next_book_when_previous_left_a_live_worker(
     assert payload["summary"]["halted"] is True
 
 
-def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path):
+@pytest.mark.parametrize("layout", [batch.FLAT_LAYOUT, batch.LEGACY_LAYOUT])
+def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path, layout: str):
     source_root = tmp_path / "books"
     first = _write_pdf(source_root / "A" / "first.pdf", b"first")
     second = _write_pdf(source_root / "B" / "second.pdf", b"second")
     entries = batch.entries_from_paths([first, second], source_root=source_root, route="native-only")
     batch_root = tmp_path / "batch-root"
+    if layout == batch.LEGACY_LAYOUT:
+        batch_root.mkdir()
+        # A manifest without package_layout predates the new layout.
+        (batch_root / "manifest.json").write_text(
+            json.dumps({"batch_id": "legacy", "inputs": [batch._serialise_entry(e) for e in entries]}),
+            encoding="utf-8",
+        )
     calls: list[str] = []
 
     def fake_executor(
@@ -548,6 +680,9 @@ def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path):
     assert code == 0
     assert len(calls) == 2
     assert first_payload["summary"]["passed"] == 2
+    assert (batch_root / "runs").exists() == (layout == batch.LEGACY_LAYOUT)
+    manifest = json.loads((batch_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["package_layout"] == layout
 
     calls.clear()
     code, second_payload = batch.run_batch(
@@ -566,6 +701,9 @@ def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path):
     assert len(rows) == 2
     assert rows[0]["status"] == "passed"
     assert rows[0]["execution"] == "skipped-existing"
+    assert [Path(row["run_root"]) for row in rows] == [
+        batch.run_root_for_entry(batch_root, entry, layout=layout) for entry in entries
+    ]
 
 
 def test_smoke_only_run_is_not_existing_success(tmp_path: Path):

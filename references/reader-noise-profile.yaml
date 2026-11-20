@@ -13,6 +13,7 @@ discovery:
 header_rules: []
 protected_exact:
   - 正文
+  - 视觉补充
   - 列表/图示文字
   - 表格与公式
   - 解读

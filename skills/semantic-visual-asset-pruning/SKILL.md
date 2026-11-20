@@ -67,6 +67,28 @@ python3 skills/semantic-visual-asset-pruning/scripts/prune_visual_assets.py \
 
 默认是预览模式，会输出 JSON 并写入 `evidence/visual-asset-pruning.json`；`--apply` 只改写读者层链接和 section 绑定，不删除来源文件或 manifest 资产。页码只是当前复核结论，跨来源复用时必须重新根据证据决定，不能复制页码白名单。
 
+## Page-hybrid 整页快速判定（仅副本）
+
+独立 LAN page-hybrid 在工程验收后按 3.0.0 规则复核终稿 `index.md` 的每个完整页区段。
+优先复用锁定的 Poppler bbox/原生文字、PDF 线/矩形/曲线对象计数或 Apple Vision OCR。原来无图不等于已验收：
+无图页必须证明原生文字、bbox 与终稿同页字符及顺序一致，且无视觉候选；未证实则阻止 reader 通过，不在本工序重写工程或补渲染。
+有整页图的页再检查文字区外墨迹、颜色、细规则和相交结构。仅当同页正文（含标点和正负号）、阅读顺序及视觉门同时通过，且有独立来源文字证据，
+才能在独立读者副本省略整行图片引用。生成正文的同一份 OCR 不作省图授权。对以 Apple Vision 转写、有扫描底图、没有已证实图形的候选，使用本地 Tesseract（`chi_sim+eng`）比较同页终稿。按 PDF、页码、渲染、原候选和终稿区段 SHA-256 锁定 `evidence/reader-scan-ocr/pNNN.json`。两路像素遮罩分别查验，不取并集；缺模型、哈希漂移、低置信、疑似漏字或布局不明均保留；
+`crop-required` 也先保留，不能把定位候选当成裁图结果。此入口不调用局域网模型，不执行物理删除。
+
+孤立尾数冲突可由 `pdf_scan_digit_recovery.py` 对唯一行生成精确坐标候选，再对同一原图窄框取得独立 Apple Vision 复认。审计只做定位，不补写正文；确认用证据不得来自提出数字的 Tesseract。实际修复仅限新生产终稿前，经页面阶段门与人工查看，并用 `verify_scan_recovery` 重算全页门，不能在已验收包或读者投影中改字。
+
+对已验收旧包，先在工程包外生成报告；允许应用时，另行验证并生成副本（目标父目录须已存在）：
+
+```bash
+python3 adapters/pdf_hybrid_visual_audit.py <run-root> --report <external-audit.json>
+python3 adapters/pdf_hybrid_visual_audit.py <run-root> --report <external-audit.json> \
+  --verify --reader-copy <external-reader-directory> --verification-report <external-validation.json>
+```
+
+源 PDF 可用时可传 `--source <exact-pdf>` 重算 SHA-256；缺失时只可使用与终稿及逐页证据一致的独立全页验收快照。
+此命令只读已有锁定证据，不启动 OCR 或覆盖可靠原生证据的否决。1.0.0 与 2.0.0 仍按原规则只读复核；reader crop 和独立图片语料属于不同判定入口。
+
 ## 失败与保守规则
 
 - 找不到 manifest、来源指纹或页码映射时停止，不猜测路径。

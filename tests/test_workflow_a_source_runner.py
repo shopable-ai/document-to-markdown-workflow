@@ -450,12 +450,31 @@ def test_image_candidate_layers_keep_source_fingerprint_when_ocr_is_unavailable(
 
 
 def test_unsupported_source_suffix_returns_explicit_failed_status(tmp_path: Path):
-    result = _run(tmp_path / "input.docx", tmp_path / "output", "1", "--plan-only")
+    result = _run(tmp_path / "input.rtf", tmp_path / "output", "1", "--plan-only")
     payload = _payload(result)
 
     assert result.returncode == 2
     assert payload["status"] == "failed"
     assert "support source suffix" in payload["error"]
+
+
+def test_docx_plan_is_whole_document_and_does_not_read_source(tmp_path: Path):
+    source, output = tmp_path / "missing.DOCX", tmp_path / "output"
+    result = _run(source, output, "all", "--plan-only")
+    payload = _payload(result)
+    assert result.returncode == 0
+    assert payload["source"]["source_type"] == "docx"
+    assert payload["source"]["sha256"] is None
+    assert payload["scope"]["selected_pages"] is None
+    assert not output.exists()
+    for flags, expected in (
+        (("1", "--execute"), "requires --pages all"),
+        (("all", "--execute", "--engineering-output"), "does not support engineering output"),
+    ):
+        rejected = _run(source, output, *flags)
+        assert rejected.returncode == 2
+        assert expected in _payload(rejected)["error"]
+        assert not output.exists()
 
 
 @pytest.mark.parametrize(

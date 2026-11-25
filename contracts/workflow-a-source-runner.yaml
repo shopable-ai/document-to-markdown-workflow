@@ -1,6 +1,6 @@
 contract: workflow-a-source-runner
 id: workflow-a-source-runner
-version: 0.3.0
+version: 0.4.0
 human_reference: contracts/CONTRACTS.md#contract-workflow-a-source-runner
 lifecycle_status: active
 description: 来源无关的 Workflow A runner 接口；默认返回 reader-only 输出摘要，完整工程证据仅在显式 --engineering-output 时落盘。
@@ -15,12 +15,12 @@ required:
   source:
     path: string
     source_type: string
-    media_type: enum[ppt, pptx, pdf, png, jpg, jpeg]
+    media_type: enum[ppt, pptx, pdf, docx, png, jpg, jpeg]
     sha256: string|null
     source_fingerprint_status: enum[not-run, computed, failed]
   scope:
     pages: string
-    selected_pages: array
+    selected_pages: array|null
     one_source_per_run: boolean
   route:
     preflight: string
@@ -54,11 +54,20 @@ properties:
     route_candidates: [apple-vision-ocr-plus-deterministic-structure, small-vision-model, mac96-30b-vision-model]
     route_selection: real-page-benchmark-and-page-quality-gates
     advertising_default: preserve-only
+  docx_native_route:
+    runtime_dependency: local-pandoc
+    source_scope: whole-document; --pages all only; Word page count is metadata, not a rendered page count
+    output: index.md, optional flat assets/, reports/validation-result.json
+    validator: adapters/validate_docx_markdown.py
+    acceptance: preserves supported body structure and validates body text, table count and ordered asset bytes against OOXML
+    review: source mismatches, unsupported objects, auxiliary parts and image-only body remain visible; no OCR or Word-layout claim
+    exact_run_root: optional; new direct child of output_root
+    excluded: [engineering-output, candidate-comparison, visual-analysis, OCR, page-units]
 invariants:
   - 新 runner 不得包含任何固定文件名、固定页码、固定标题、固定术语或文档专用关键词。
   - plan-only 不读取 source 内容、不计算 source hash、不渲染、不调用 OCR、不调用任何视觉模型。
   - execute 只能从 profile/config 解析来源类型和阶段能力；所有阶段都必须记录当前 source fingerprint。
-  - execute 默认生成 index.md；只有页面存在 Markdown 无法替代的语义视觉时才生成并引用 assets/ 图片，不生成 manifest、reports、evidence、page-units、document-temp.md 或 JSON。
+  - execute 默认生成 index.md 和实际引用的 assets/ 图片，不生成 manifest、evidence、page-units 或 document-temp.md；DOCX 原生路线额外保留独立验收 JSON，其余 reader-only 路线不写 reports/ 或 JSON。
   - 只有显式 --engineering-output 才生成可独立重读的完整工程 package；视觉模型、OCR、语言修复和质量审计未执行时只能返回 needs-review。
   - 每次 execute 的输入集合只能包含一个 source 文件；一次调用不得接收、拼接、合并或互相补正文的多个文件。
   - PPTX、PDF、PNG/JPG/JPEG fixture 只能通过三个相互独立的单 source 调用进行回归；fixture 矩阵不是业务转换输入。

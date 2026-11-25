@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 from pathlib import Path
+import signal
 from types import SimpleNamespace
 
 import pytest
@@ -14,9 +17,152 @@ class _ProcResult:
         self.stdout = stdout
 
 
-@pytest.mark.parametrize("engineering_passed", [True, False])
-def test_hybrid_reader_starts_only_after_final_index_and_engineering_gate(tmp_path, monkeypatch, engineering_passed):
-    source = tmp_path / "book.pdf"
+@pytest.fixture
+def interrupted_hybrid(tmp_path, monkeypatch):
+    source = tmp_path / "fixture.pdf"
+    source.write_bytes(b"synthetic PDF identity; no PDF tool reads it")
+    source_hash = batch.sha256(source)
+    log = tmp_path / "worker-calls"
+    root = tmp_path / "book-package"
+    root.mkdir()
+
+    def pdfinfo(command, **_kwargs):
+        assert command == ["pdfinfo", str(source)]
+        return SimpleNamespace(stdout="Pages: 3\n", returncode=0, stderr="")
+
+    def route(*, page, **_kwargs):
+        return {"page": page, "route": "visual-only" if page == 2 else "native-only", "status": "passed",
+                "reason_codes": [], "signals": {"page_image_required": page == 2}}
+
+    def worker(command, _timeout):
+        adapter = command[1]
+        if adapter == str(batch.LAN_ADAPTER):
+            page = int(command[command.index("--pages") + 1])
+            with log.open("a") as handle:
+                handle.write(f"native:{page}\n")
+            _, summary_path, evidence_path = batch._page_package_paths(root / "pages", page)
+            summary = {"status": "passed", "source_sha256": source_hash, "selected_pages": [page]}
+            batch._write_json_atomic(summary_path, summary)
+            batch._write_json_atomic(evidence_path, {
+                "status": "passed", "page": page, "source_sha256": source_hash,
+                "text": f"Native fixture page {page}.", "nonempty_line_ids": [f"native-{page}"],
+                "table_count_pdfplumber_find_tables": 0,
+            })
+        elif adapter == str(batch.APPLE_OCR_ADAPTER):
+            assert command[command.index("--pages") + 1] == "2"
+            with log.open("a") as handle:
+                handle.write("primary:2\n")
+            visual = Path(command[command.index("--run-root") + 1])
+            unit = visual / "page-units/p002.md"
+            asset = visual / "assets/page-002.png"
+            raw = visual / "evidence/apple-vision-p002.json"
+            batch._write_json_atomic(visual / "summary.json", {"status": "running", "source": {"sha256": source_hash}})
+            batch._write_text_atomic(unit, "<!-- page:2 -->\n\nOCR fixture page 2.\n")
+            asset.parent.mkdir()
+            asset.write_bytes(b"fixture render bytes")
+            batch._write_json_atomic(raw, {"status": "complete", "candidates": [{"text": "OCR fixture page 2."}]})
+            batch._write_json_atomic(visual / "evidence/page-result-p002.json", {
+                "status": "passed", "page": 2, "source_sha256": source_hash, "route": batch.LOCAL_PAGE_OCR_ROUTE,
+                "asset": {"sha256": batch.sha256(asset)}, "ocr_evidence_sha256": batch.sha256(raw),
+                "markdown": {"current_sha256": batch.sha256(unit)},
+            })
+            # The worker committed its page; the book route and next page have not run.
+            assert os.getpid() != parent_pid, "the resumed process must not invoke primary OCR again"
+            os.kill(os.getpid(), signal.SIGKILL)
+        elif adapter == str(batch.HEADING_REPAIR_ADAPTER):
+            index = root / "index.md"
+            index.write_bytes((root / "document-temp.md").read_bytes())
+            summary = {"status": "passed", "index_sha256": batch.sha256(index),
+                       "validation": {"heading_prefix_only": True}, "formatting_validation": {"passed": True}}
+            batch._write_json_atomic(root / "reports/heading-repair.json", summary)
+        else:
+            assert adapter == str(batch.NOISE_CLEANUP_ADAPTER)
+            summary = {"status": "passed"}
+        return {"returncode": 0, "stdout": json.dumps(summary)}
+
+    monkeypatch.setattr(batch.subprocess, "run", pdfinfo)
+    monkeypatch.setattr(batch, "_collect_page_image_stats", lambda *_, **__: ({}, {}))
+    monkeypatch.setattr(batch, "_page_route_decision", route)
+    monkeypatch.setattr(batch, "_background_process_matches", lambda *_: [])
+    monkeypatch.setattr(batch, "_run_command", worker)
+
+    def run():
+        return batch.run_page_batches.__wrapped__(source, tmp_path, resume_package=root, hybrid=True,
+                                                  write_book_markdown=False)
+
+    parent_pid = os.getpid()
+    child = multiprocessing.get_context("fork").Process(target=run)
+    child.start()
+    try:
+        child.join(10)
+        assert child.exitcode == -signal.SIGKILL
+    finally:
+        if child.is_alive():
+            child.kill()
+            child.join(5)
+        child.close()
+
+    assert (root / "evidence/page-routes/p001.json").is_file()
+    assert not (root / "evidence/page-routes/p002.json").exists()
+    assert not (root / "pages/page-003").exists()
+    return source, root, log, run
+
+
+def test_sigkill_resumes_same_package_using_routed_page_and_primary_ocr(interrupted_hybrid, monkeypatch):
+    source, root, log, run = interrupted_hybrid
+    native_unit = root / "page-units/p001.md"
+    visual = root / "pages/page-002/visual"
+    raw = visual / "evidence/apple-vision-p002.json"
+    raster = visual / "assets/page-002.png"
+    stable_hashes = {path: batch.sha256(path) for path in (native_unit, raw, raster)}
+    monkeypatch.setattr(batch, "_finalize_hybrid_reader", lambda *_a, **_k: {"status": "needs-review"})
+
+    code, result = run()
+
+    assert (code, result["status"]) == (1, "needs-review")  # Fixture does not adjudicate reader semantics.
+    assert (result["run_id"], result["output"]) == (root.name, str(root))
+    assert log.read_text().splitlines() == ["native:1", "native:2", "primary:2", "native:3"]
+    assert {path: batch.sha256(path) for path in stable_hashes} == stable_hashes
+    assert batch._read_json(root / "evidence/page-routes/p001.json")["resume_reused"] is True
+    scan_route = batch._read_json(root / "evidence/page-routes/p002.json")
+    assert scan_route["native_resume_reused"] is scan_route["visual_resume_reused"] is True
+    assert scan_route["source_sha256"] == batch.sha256(source)
+    assert batch.sha256(root / "assets/page-002.png") == stable_hashes[raster] == scan_route["visual_asset_sha256"]
+    final = (root / "index.md").read_text()
+    assert batch._page_marker_sequence(final) == [1, 2, 3]
+    assert "Native fixture page 1." in final and "Native fixture page 3." in final
+    assert "OCR fixture page 2." in final and "![第2页原始页面图](assets/page-002.png)" in final
+    assert "Native fixture page 2." not in final
+    assert batch._read_json(root / "reports/validation-result.json")["status"] == "passed"
+
+
+def test_failed_retry_cannot_rehash_stale_passed_route(interrupted_hybrid, monkeypatch):
+    _, root, _, run = interrupted_hybrid
+    route_path = root / "evidence/page-routes/p001.json"
+    old_route = route_path.read_bytes()
+    (root / "page-units/p001.md").write_text("<!-- page:1 -->\n\nUnverified drift.\n")
+    real_route = batch._page_route_decision
+
+    def fail_first(*, page, **kwargs):
+        if page == 1:
+            raise RuntimeError("simulated page retry failure")
+        return real_route(page=page, **kwargs)
+
+    monkeypatch.setattr(batch, "_page_route_decision", fail_first)
+    monkeypatch.setattr(batch, "_finalize_hybrid_reader", lambda *_a, **_k: pytest.fail("engineering must not pass"))
+
+    code, result = run()
+
+    assert code == 1 and result["status"] != "passed"
+    assert batch._read_json(root / "reports/page-completion.json")["failed_pages"] == [1]
+    assert batch._read_json(root / "reports/validation-result.json")["status"] == "failed"
+    assert batch._read_json(route_path)["status"] == "failed"
+    assert any(path.read_bytes() == old_route for path in route_path.parent.glob("_superseded/p001-*.json"))
+
+
+@pytest.mark.parametrize(("engineering_passed", "reader_passed"), [(True, True), (True, False), (False, False)])
+def test_hybrid_reader_starts_only_after_final_index_and_engineering_gate(tmp_path, monkeypatch, engineering_passed, reader_passed):
+    source = tmp_path / "《书名》.pdf"
     source.write_bytes(b"fixture PDF")
     root = tmp_path / "run"
     root.mkdir()
@@ -48,28 +194,44 @@ def test_hybrid_reader_starts_only_after_final_index_and_engineering_gate(tmp_pa
 
     entered = []
 
-    def finalize(package, pdf, selected):
+    def finalize(package, pdf, selected, *, previously_verified=False):
         entered.append(True)
         assert (package, pdf, selected) == (root, source, [1])
         assert batch._read_json(root / "reports/validation-result.json")["status"] == "passed"
         assert batch._read_json(root / "acceptance.json")["status"] == "passed"
-        assert batch._read_json(root / "progress.json")["status"] == "running"
         assert (root / "index.md").is_file()
-        return {"status": "failed", "bytes_verified": False, "error": "fixture reader failure"}
+        if not previously_verified:
+            assert batch._read_json(root / "progress.json")["status"] == "running"
+            assert not (root / "书名.md").exists()
+        return {"status": "passed" if reader_passed else "failed", "bytes_verified": reader_passed}
 
     monkeypatch.setattr(batch, "_run_command", helper)
     monkeypatch.setattr(batch, "_finalize_hybrid_reader", finalize)
     code, result = batch.run_page_batches.__wrapped__(source, tmp_path, resume_package=root, hybrid=True)
-    assert code == 1 and result["status"] == "failed"
+    assert (code, result["status"]) == ((0, "passed") if reader_passed else (1, "failed"))
     assert entered == ([True] if engineering_passed else [])
     acceptance = batch._read_json(root / "acceptance.json")
     assert acceptance["status"] == ("passed" if engineering_passed else "failed")
     if engineering_passed:
         assert acceptance[batch.hybrid_validator.READER_AUDIT_VERSION] == "3.0.0"
         assert result["summary"]["engineering_status"] == "passed"
-        assert result["summary"]["reader_visual"]["status"] == "failed"
+        assert result["summary"]["reader_visual"]["status"] == ("passed" if reader_passed else "failed")
     else:
         assert "reader_visual" not in result["summary"]
+    copy = root / "书名.md"
+    assert copy.is_file() is reader_passed
+    if reader_passed:
+        index = root / "index.md"
+        original = index.read_bytes()
+        assert copy.read_bytes() == original
+        assert result["summary"]["source_named_markdown"] == str(copy)
+        copy.write_text("手工排版", encoding="utf-8")
+
+        code, resumed = batch.run_page_batches.__wrapped__(source, tmp_path, resume_package=root, hybrid=True)
+
+        assert code == 0 and resumed["summary"]["source_named_markdown"] == str(copy)
+        assert copy.read_text(encoding="utf-8") == "手工排版"
+        assert index.read_bytes() == original
 
 
 def test_native_page_command_targets_the_shared_pages_root():
@@ -808,3 +970,118 @@ def test_ollama_healthcheck_fails_within_bounded_probe(monkeypatch):
 
     assert result["status"] == "failed"
     assert "TimeoutError" in result["error"]
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_ollama_healthcheck_requires_the_pinned_model(monkeypatch, installed):
+    from adapters.lan_pdf_vision_to_markdown import EXPECTED_MODEL
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def read(self):
+            models = [{"name": "text-only:latest"}]
+            if installed:
+                models.append({"model": EXPECTED_MODEL})
+            return json.dumps({"models": models}).encode()
+
+    def open_tags(url, timeout):
+        assert url.endswith("/api/tags") and timeout == 5
+        return Response()
+
+    monkeypatch.setattr(batch, "urlopen", open_tags)
+    result = batch._ollama_healthcheck()
+    assert result["model"] == EXPECTED_MODEL
+    assert result["status"] == ("passed" if installed else "failed")
+    assert result.get("reason") == (None if installed else "pinned-model-not-installed")
+
+
+@pytest.mark.parametrize("model_available", [False, True])
+@pytest.mark.parametrize("ocr_verified", [False, True])
+def test_failed_lan_page_uses_verified_ocr_without_overwriting_attempts(
+    tmp_path, monkeypatch, model_available, ocr_verified,
+):
+    source = tmp_path / "fixture.pdf"
+    source.write_bytes(b"synthetic source; workers stubbed")
+    fingerprint = batch.sha256(source)
+    root = tmp_path / "run"
+    package, native_summary, native_evidence = batch._page_package_paths(root / "pages", 1)
+    batch._write_json_atomic(native_summary, {"status": "passed", "source_sha256": fingerprint})
+    batch._write_json_atomic(native_evidence, {
+        "status": "passed", "page": 1, "source_sha256": fingerprint, "text": "",
+        "table_count_pdfplumber_find_tables": 0,
+    })
+    old_visual = package / "visual"
+    old_result = old_visual / "evidence/page-result-p001.json"
+    batch._write_json_atomic(old_visual / "summary.json", {"status": "failed", "source_sha256": fingerprint})
+    batch._write_json_atomic(old_result, {"status": "failed", "error": "Ollama HTTP 404"})
+    old_bytes = old_result.read_bytes()
+    monkeypatch.setattr(batch.subprocess, "run", lambda *_, **__: SimpleNamespace(
+        stdout="Pages: 1\n", returncode=0, stderr="",
+    ))
+    monkeypatch.setattr(batch, "_collect_page_image_stats", lambda *_, **__: ({}, {"status": "passed"}))
+    monkeypatch.setattr(batch, "_page_route_decision", lambda **_: {
+        "page": 1, "route": "visual-only", "status": "passed", "reason_codes": ["rendered-visual-structure-present"],
+        "signals": {}, "rendered_structure": {"visual_structure_present": True},
+    })
+    monkeypatch.setattr(batch, "_ollama_healthcheck", lambda: {"status": "passed"} if model_available else {
+        "status": "failed", "reason": "pinned-model-not-installed",
+    })
+    invoked = []
+
+    def worker(command, _timeout):
+        adapter = command[1]
+        invoked.append(adapter)
+        if adapter == str(batch.NOISE_CLEANUP_ADAPTER):
+            return {"returncode": 1, "stdout": '{"status":"needs-review"}'}
+        visual = Path(command[command.index("--run-root") + 1])
+        if adapter == str(batch.VISUAL_ADAPTER):
+            assert visual == package / "visual-attempt-002" and "--resume" not in command
+            batch._write_json_atomic(visual / "evidence/page-result-p001.json", {
+                "status": "failed", "error": "Ollama HTTP 404",
+            })
+            return {"returncode": 1, "stdout": '{"status":"failed"}'}
+        assert adapter == str(batch.APPLE_OCR_ADAPTER)
+        assert visual == package / ("visual-attempt-003" if model_available else "visual-attempt-002")
+        assert "--resume" not in command
+        markdown = visual / "page-units/p001.md"
+        asset = visual / "assets/page-001.png"
+        ocr = visual / "evidence/apple-vision-p001.json"
+        batch._write_text_atomic(markdown, "<!-- page:1 -->\n\nOCR caption.\n")
+        asset.parent.mkdir()
+        asset.write_bytes(b"synthetic page image")
+        if ocr_verified:
+            batch._write_json_atomic(ocr, {"candidates": [{"text": "OCR caption."}]})
+        batch._write_json_atomic(visual / "summary.json", {"status": "passed", "source_sha256": fingerprint})
+        batch._write_json_atomic(visual / "evidence/page-result-p001.json", {
+            "status": "passed", "page": 1, "source_sha256": fingerprint, "route": batch.LOCAL_PAGE_OCR_ROUTE,
+            "markdown": {"current_sha256": batch.sha256(markdown)}, "asset": {"sha256": batch.sha256(asset)},
+            "ocr_evidence_sha256": batch.sha256(ocr) if ocr_verified else "missing",
+        })
+        return {"returncode": 0, "stdout": '{"status":"passed"}'}
+
+    monkeypatch.setattr(batch, "_run_command", worker)
+    batch.run_page_batches.__wrapped__(source, tmp_path, resume_package=root, hybrid=True)
+    assert old_result.read_bytes() == old_bytes
+    assert invoked == [*([str(batch.VISUAL_ADAPTER)] if model_available else []),
+                       str(batch.APPLE_OCR_ADAPTER), str(batch.NOISE_CLEANUP_ADAPTER)]
+    route_path = root / "evidence/page-routes/p001.json"
+    route = batch._read_json(route_path)
+    assert route["model_called"] is model_available
+    assert route["recognition_route"] == batch.LOCAL_PAGE_OCR_FALLBACK
+    assert route["visual_fallback_reason"] == (
+        "lan-visual-page-conversion-failed" if model_available else "pinned-model-not-installed"
+    )
+    assert route["status"] == ("passed" if ocr_verified else "failed")
+    if model_available:
+        failed = Path(route["failed_visual_run_root"]) / "evidence/page-result-p001.json"
+        assert batch._read_json(failed)["error"] == "Ollama HTTP 404"
+    if ocr_verified:
+        unit = root / "page-units/p001.md"
+        assert "OCR caption." in unit.read_text() and "../assets/page-001.png" in unit.read_text()
+        assert batch._reusable_routed_page(page=1, source_sha256=fingerprint, page_unit_path=unit,
+                                          route_record_path=route_path)["resume_reused"] is True

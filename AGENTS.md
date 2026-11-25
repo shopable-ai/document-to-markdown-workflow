@@ -32,38 +32,41 @@
 
 Agent 读取本文件后，日常关键词直接进入 `contracts/workflow-a-production-runtime-context.yaml`；
 `workflow-registry.yaml` 只在路由核对时按需读取对应条目。常规生产运行不加载完整 Workflow、需求史或实现源码。
-多个来源必须分别执行；除非用户明确声明它们是同一逻辑文档的候选版本，否则不得自动配对。
+多个来源按类型分流，一来源一包。两份及以上 PDF（含混合输入中的 PDF 子集）必须走正式 `pdf-collection` 队列；非 PDF 和单份 PDF 沿用各自原入口。除非用户明确声明同一逻辑文档的候选版本，否则不得自动配对。
 
 ### 生产上下文最小加载边界
 
-- 默认只加载当前 `source`、`output_root`、`pages`、精简生产契约、当前进度摘要和最终验收摘要。
-- 参数不明确时先运行 `python3 adapters/workflow_a_source_runner.py --help`；正常生产执行不得读取 `adapters/*.py`。
+- 默认只加载当前 `source` 或 PDF 来源清单、`output_root`、`pages`、精简生产契约、当前进度摘要和最终验收摘要。
+- 参数不明确时先运行对应入口的 `--help`（通用单来源用 `python3 adapters/workflow_a_source_runner.py --help`，PDF 队列用 `python3 adapters/pdf_background_task.py start --help`）；正常生产执行不得读取 `adapters/*.py`。
 - `prompts/`、`.prompt/`、目标/任务树、设计说明、完整 Workflow、`references/`、测试和历史运行不进入默认生产上下文。
 - 只有用户明确要求改代码、命令失败且错误已定位、或实际行为与契约不一致时，才读取相关 Python 的最小故障范围。
 - 需要改变路线、阶段或验收规则时才加载完整 `workflows/document-to-markdown-assets/workflow.yaml` 和相关 Skill/契约。
 
 ### 长任务静默与对话预算
 
-- 预计超过 30 秒的转换默认通过 `python3 adapters/pdf_background_task.py start --task-type <已选路线> ...` 脱离当前对话；`task-type` 必须根据已批准的 Workflow 路线显式传入，不得由后台管理层静默改线。只发送一次启动摘要，然后结束当前交互。
+- 预计超过 30 秒的转换默认通过 `python3 adapters/pdf_background_task.py start --task-type <已选任务类型> ...` 脱离当前对话；`task-type` 必须根据已批准的 Workflow 路线显式传入，不得由后台管理层静默改线。只发送一次启动摘要，然后结束当前交互。
 - 未经用户明确要求监控，不得重复调用 `write_stdin`、`ps`、读取进度文件或发送“仍在运行”“已完成 N 页”“暂无错误”等周期性 commentary。
-- 详细进度只保留在任务目录的 `progress-current.json`、`progress.jsonl` 和 `run.log`。用户主动查询时只读一次最新 `progress-current.json`，只返回当前快照，不复述历史。
+- 详细进度只保留在任务目录的 `progress-current.json`、`progress.jsonl` 和 `run.log`。用户主动查询时只返回一次当前快照，不复述历史；PDF 队列用 `status <run_id>` 查看 `batch_summary`（文件级计数）、`active_source`、`strict_accepted_count` 和 `halt_reason`。
 - 用户说停止、取消、不用继续或不要再跑时，立即调用 `cancel <run_id>`；只在 PID、进程组和 worker identity 一致时终止整个进程组，确认残留进程并返回一次取消摘要后结束。
 - 消息只允许出现在启动、真实异常、用户主动查询、完成或取消事件；完整规则见 `contracts/long-task-interaction.yaml`。
 
 ### 批量转换固定入口与续跑目录
 
+- 多 PDF 以 `python3 adapters/pdf_background_task.py start --task-type pdf-collection --source-list <list> --output-root <root> --route hybrid --pages all` 静默启动；清单为 UTF-8、每行一个绝对 PDF 路径。默认显式选逐页 `hybrid`，预检批准后才可选 `native-only`；不支持整本视觉集合。不得临时写转换循环、后台脚本，或用单本分页的 `native-pdf-batch`、仍 blocked 的通用批处理替代。
+- 新批次根为 `<output_root>/conversions/<route>`；可用 `--run-root` 采纳已有官方路线批次（传准确根路径）。队列按批次根生成稳定 ID，不支持手工 `--run-id`。同根已活动返回 `already-running`；不同路线持有同集合锁时返回 `collection-busy`；不得为旧的非托管队列伪造 `run_id` 或取消命令。
+- 未活动的已登记任务返回 `already-registered`，附带 `existing_status` 和 `resume_command`。需要继续时用原 ID 续跑，保留路线、清单和包并核验原登记证据；`completed` 的队列也可原地重验，跳过仍严格验收通过的来源。`--min-free-bytes` 默认 `2147483648`，只在启动下一本前检查；低于阈值暂停，释放空间后续跑，不保证单本运行中不会耗尽磁盘。
 - 同一批来源集合只能有一个当前入口目录，用 `<output_root>/conversions/_current/` 记录 `CURRENT_PATHS.md` 和历史目录登记表；后续续接必须先读该入口，再读 `<output_root>/conversions/_consolidated/source-consolidation.json`。
 - `_consolidated/` 只保存来源级 strict acceptance 总账和已选 run root，不保存每本 PDF 的工程包；工程包保留在登记的路线批次根。
 - 路线恢复批次使用稳定名称，例如 `<output_root>/conversions/native-only`、`hybrid`、`vision-only`。恢复时不默认创建带时间戳的批次目录。
 - 新的 PDF 批次将每本书的工程包直接放在固定路线根目录，使用 `conversions/<route>/<package>/`；来源相对路径记录在元数据中，不复制成输出层级。已有批次按登记路径续跑，不自动迁移旧布局。已迁移包保留的旧路径别名只供历史证据解析，不是新的运行目录。
 - 继续未完成集合前，先基于所有既有 run root 刷新来源级去重总账；只对未 strict accepted 的来源续跑。旧 `results.json`、stale `running`、smoke、needs-review、failed 或空 `index.md` 不能作为完成依据。
 - 正在写入的固定批次根不得移动或重排。需要目录收束时，只新增 `_current` 指针和登记表；等运行停止后再刷新 `_consolidated`。
-- 最终读者层目录（如 `Markdown成品`）只能在 `_consolidated` 显示 100% 来源 strict accepted 后创建和导出。
+- 单路线批次完成不等于整集合完成。最终读者层目录（如 `Markdown成品`）只能在 `_consolidated` 显示 100% 来源 strict accepted 后创建和导出。
 
 ## Workflow A 稳定入口
 
-Workflow A 的唯一推荐生产入口是“固定 Workflow 提示词 + 单一 `source` + `output_root`”。
-每次调用只处理一个来源，不把 PPTX 与 PDF 自动配对：
+Workflow A 的单来源入口使用“固定 Workflow 提示词 + 单一 `source` + `output_root`”；多 PDF 使用上节队列。
+单来源调用只处理一个来源，不把 PPTX 与 PDF 自动配对：
 
 ```bash
 python3 adapters/workflow_a_source_runner.py \
@@ -79,7 +82,7 @@ python3 adapters/workflow_a_source_runner.py \
   --plan-only
 ```
 
-`--pages` 支持 `all`、单页、逗号列表和范围（如 `1-3,7`）。以上是当前
+`--pages` 支持 `all`、单页、逗号列表和范围（如 `1-3,7`）；DOCX 原生路线只支持 `all`，不按 Word 元数据分页、不做 OCR。以上是当前
 source-independent 的安全计划入口。旧 document-profile runner 已从本规格包删除并从 active
 Workflow 路由排除；不得通过兼容别名、动态 loader 或批处理入口重新引入。旧的 `--pptx` 或
 `--pdf` 不能同时传入。正式入口、阶段和输出契约

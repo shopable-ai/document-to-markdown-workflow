@@ -105,11 +105,11 @@
 
 ## contract-long-task-interaction
 
-- contract_id: long-task-interaction；contract_version: 1.1.0；lifecycle: active；YAML: [long-task-interaction.yaml](long-task-interaction.yaml)
-- 目的与范围：隔离后台资源消耗和对话消息预算；上游是已选显式路线和长任务阈值。
-- I/O：输入 run/task identity、source、pages；输出 start/status/cancel/resume 摘要和 progress files。
-- 状态/案例：正常 detached-silent；异常才通知；取消需身份匹配；恢复从 checkpoint。
-- 不变量/失效/示例：不静默改路线、不周期刷屏；示例 start 后只返回 run id 和任务目录。
+- contract_id: long-task-interaction；contract_version: 1.3.0；lifecycle: active；YAML: [long-task-interaction.yaml](long-task-interaction.yaml)
+- 目的与范围：隔离后台资源消耗和对话消息预算；支持显式路线的单来源长任务及正式 `pdf-collection`。
+- I/O：输入 source 或 PDF 来源清单、pages；队列按准确批次根生成稳定 ID，不接受手工 `--run-id`。队列 `status` 返回 `batch_summary`（文件级计数）、`active_source`、`strict_accepted_count` 和 `halt_reason`。
+- 状态/案例：正常 detached-silent；同根活动返回 `already-running`，其他路线持同集合锁返回 `collection-busy`，未活动已登记返回 `already-registered` 和 `existing_status`、`resume_command`。启动下一本前空间低于 `--min-free-bytes`（默认 `2147483648`）则暂停，释放空间后续跑。
+- 不变量/失效/示例：不静默改路线、不周期刷屏；取消需身份匹配，不为非托管旧队列伪造 ID 或取消命令。续跑沿用原路线、清单及包并核验登记证据；`completed` 也可原地重验并跳过仍严格验收通过的来源。磁盘检查不保证单本运行中空间充足。
 
 ## contract-markdown-asset-package
 
@@ -323,7 +323,7 @@
 ## contract-workflow-a-batch-run
 
 - contract_id: workflow-a-batch-run；contract_version: 0.1.0；lifecycle: active；YAML: [workflow-a-batch.yaml](workflow-a-batch.yaml)
-- 目的与范围：多来源队列或长 PDF 的 smoke、分批、checkpoint 和单包边界。
+- 目的与范围：旧通用多来源队列或长 PDF 的 smoke、分批、checkpoint 和单包边界；其通用生产入口仍 blocked，不是正式 `pdf-collection`，后者见 [long-task-interaction.yaml](long-task-interaction.yaml)。
 - I/O：输入 sources/pages/concurrency；输出 per-source run refs、attempts、batch summary。
 - 状态/案例：running/succeeded/needs-review/failed；单包失败不能被批次掩盖；恢复从 source checkpoint。
 - 不变量/失效/示例：一来源一 package；source set 变化重算；示例 3 source queue with one needs-review。
@@ -346,18 +346,18 @@
 
 ## contract-workflow-a-production-runtime-context
 
-- contract_id: workflow-a-production-runtime-context；contract_version: 1.1.0；lifecycle: active；YAML: [workflow-a-production-runtime-context.yaml](workflow-a-production-runtime-context.yaml)
+- contract_id: workflow-a-production-runtime-context；contract_version: 1.3.0；lifecycle: active；YAML: [workflow-a-production-runtime-context.yaml](workflow-a-production-runtime-context.yaml)
 - 目的与范围：生产执行最小上下文，避免重读需求史、完整 Workflow 和源码。
-- I/O：输入 source/output/pages 和稳定接口；输出允许加载的精简契约/状态摘要。
-- 状态/案例：正常 production trigger；设计或 debug 不适用；恢复转入对应开发上下文。
-- 不变量/失效/示例：不加载 discovery/.audit/archive；contract version 变化更新 snapshot；示例日常“文档转 Markdown”。
+- I/O：输入 source 或 PDF 来源清单、output/pages 和稳定接口；输出允许加载的精简契约/状态摘要。
+- 状态/案例：两份及以上 PDF（含混合输入的 PDF 子集）使用正式 `pdf-collection`；显式逐页 `hybrid`，只有预检批准才用 `native-only`。设计或 debug 不适用本契约。
+- 不变量/失效/示例：不加载 discovery/.audit/archive；contract version 变化更新 snapshot；混合输入按类型分流，一来源一包；单路线批次完成不替代来源级 strict acceptance 总账。
 
 ## contract-workflow-a-source-runner
 
-- contract_id: workflow-a-source-runner；contract_version: 0.3.0；lifecycle: active；YAML: [workflow-a-source-runner.yaml](workflow-a-source-runner.yaml)
+- contract_id: workflow-a-source-runner；contract_version: 0.4.0；lifecycle: active；YAML: [workflow-a-source-runner.yaml](workflow-a-source-runner.yaml)
 - 目的与范围：单一 source 的稳定 runner 接口和 reader-only/engineering-output 边界。
 - I/O：输入 source/output/pages/mode/profile；输出 summary 和对应 package。
-- 状态/案例：passed/needs-review/failed + exit codes；参数错为 2；恢复修输入或重跑新 attempt。
+- 状态/案例：passed/needs-review/failed + exit codes；参数错为 2；恢复修输入或重跑新 attempt。DOCX 原生路线仅支持全文，逐项核对正文、表格和图片；图片文字不做 OCR。
 - 不变量/失效/示例：不自动配对来源；plan-only 不证明执行；示例 one PDF all pages reader-only。
 
 ## contract-workflow-b-output-layout

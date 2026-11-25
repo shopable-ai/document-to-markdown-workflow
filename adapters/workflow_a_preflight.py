@@ -365,7 +365,7 @@ def run_preflight(
         checks.append(_check("source-readable", "A1", "passed", "source 存在、可读且非空。", "", blocking=False))
 
     if suffix not in SUPPORTED_SUFFIXES:
-        checks.append(_check("source-format-supported", "A1", "failed", f"当前生产 runner 不支持来源格式 {suffix or '<none>'}。", "使用 PPT、PPTX、PDF 或图片；DOCX 等未实现格式不能进入 runner。", severity="P0"))
+        checks.append(_check("source-format-supported", "A1", "failed", f"此分页预检不支持来源格式 {suffix or '<none>'}。", "分页预检使用 PPT、PPTX、PDF 或图片；DOCX 使用单来源 runner 的原生全文路线。", severity="P0"))
     else:
         checks.append(_check("source-format-supported", "A1", "passed", f"来源格式 {suffix} 在当前 runner 支持范围内。", "", blocking=False))
 

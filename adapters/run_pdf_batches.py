@@ -31,12 +31,21 @@ from typing import Any
 import yaml
 
 try:
+    import pdf_disk_guard as disk_guard
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_disk_guard as disk_guard
+
+try:
     from output_naming import (
+        book_markdown_delivery,
+        book_markdown_filename,
         resolve_package_target,
         source_markdown_filename,
     )
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from .output_naming import (
+        book_markdown_delivery,
+        book_markdown_filename,
         resolve_package_target,
         source_markdown_filename,
     )
@@ -78,7 +87,7 @@ NATIVE_TEXT_VISIBILITY_VERSION = 1
 LEGACY_FULL_PAGE_TEXT_REASON = "full-page-background-with-complete-text-layer"
 UNVERIFIED_FULL_PAGE_TEXT_REASON = "full-page-background-text-visibility-unverified"
 LOCAL_PAGE_OCR_ROUTE = "apple-vision-ocr"
-OLLAMA_HEALTH_URL = "http://shopme.local:11434/api/ps"
+LOCAL_PAGE_OCR_FALLBACK = "apple-vision-ocr-fallback"
 FORBIDDEN_CONFIG_KEYS = {"api_key", "authorization", "cookie", "secret", "subscription_url", "token"}
 SUPPORTED_SUFFIXES = {".pptx", ".pdf", ".png", ".jpg", ".jpeg"}
 # These validator findings describe an explicit review boundary (usually OCR,
@@ -404,6 +413,8 @@ def _remove_redundant_page_aliases(pages_root: Path, source: Path) -> list[str]:
     """Remove only generated page aliases that are byte-identical to index.md."""
 
     alias_name = source_markdown_filename(source)
+    if alias_name.casefold() == "index.md":
+        return []  # A source titled "index" has no separate page alias here.
     removed: list[str] = []
     for outer in sorted(pages_root.glob("page-[0-9][0-9][0-9]")):
         roots = [outer]
@@ -644,7 +655,7 @@ def _visual_page_reusable(
         markdown_text = markdown.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return False
-    if require_local_ocr and not (
+    if result.get("route") == LOCAL_PAGE_OCR_ROUTE and not (
         _checked_file(visual_root / "assets" / f"page-{page:03d}.png", (result.get("asset") or {}).get("sha256"))
         and _checked_file(visual_root / "evidence" / f"apple-vision-p{page:03d}.json", result.get("ocr_evidence_sha256"))
     ):
@@ -661,9 +672,14 @@ def _visual_page_reusable(
     )
 
 
-def _visual_root_can_resume(visual_root: Path, source_sha256: str) -> bool:
+def _visual_root_can_resume(visual_root: Path, source_sha256: str, page: int) -> bool:
     summary = _read_json(visual_root / "summary.json")
     if not summary:
+        return False
+    result = _read_json(visual_root / "evidence" / f"page-result-p{page:03d}.json") or {}
+    if (summary.get("status") in {"failed", "needs-review"} or result.get("status") == "failed"
+            or (summary.get("request") or {}).get("route") == LOCAL_PAGE_OCR_ROUTE
+            or result.get("route") == LOCAL_PAGE_OCR_ROUTE):
         return False
     source = summary.get("source") if isinstance(summary.get("source"), dict) else {}
     return bool((summary.get("source_sha256") or source.get("sha256")) == source_sha256)
@@ -685,16 +701,21 @@ def _select_visual_attempt(
             return candidate, True
     if not require_local_ocr:
         for candidate in reversed(candidates):
-            if _visual_root_can_resume(candidate, source_sha256):
+            if _visual_root_can_resume(candidate, source_sha256, page):
                 return candidate, True
+    return _fresh_visual_attempt(package), False
+
+
+def _fresh_visual_attempt(package: Path) -> Path:
+    """Keep previous evidence intact when switching recognition workers."""
     preferred = package / "visual"
     if not preferred.exists() or not any(preferred.iterdir()):
-        return preferred, False
+        return preferred
     ordinal = 2
     while True:
         attempt = package / f"visual-attempt-{ordinal:03d}"
         if not attempt.exists() or not any(attempt.iterdir()):
-            return attempt, False
+            return attempt
         ordinal += 1
 
 
@@ -707,7 +728,16 @@ def _copy_visual_asset(visual_root: Path, assets_root: Path, page: int) -> Path 
         if sha256(target) != sha256(source):
             raise ValueError(f"page {page} visual asset conflicts with existing asset")
         return target
-    shutil.copy2(source, target)
+    disk_guard.check(assets_root, phase="copy-engineering-page-image", page=page,
+                     write_bytes=source.stat().st_size)
+    if disk_guard.configured_floor() is None:
+        shutil.copy2(source, target)
+    else:
+        # A forced interruption must not leave an incomplete final PNG.
+        with tempfile.TemporaryDirectory(dir=assets_root, prefix=".page-copy-") as temp:
+            copied = Path(temp) / target.name
+            shutil.copy2(source, copied)
+            copied.replace(target)
     return target
 
 
@@ -803,6 +833,8 @@ def _run_page_jobs_continue(
             if not isinstance(value, dict):
                 raise TypeError("page worker must return a mapping")
             results.append({"page": page, **value})
+        except disk_guard.DiskFloorReached:
+            raise  # A resumable pause is not a page failure or placeholder.
         except Exception as exc:  # page-level continuation boundary
             results.append(
                 {
@@ -816,25 +848,37 @@ def _run_page_jobs_continue(
 
 
 def _ollama_healthcheck(timeout_seconds: int = 5) -> dict[str, Any]:
-    """Bound model availability before a page can block the serial queue."""
+    """Check that the worker's exact pinned model is installed, not just that Ollama responds."""
+    try:
+        from lan_pdf_vision_to_markdown import DEFAULT_OLLAMA_URL, EXPECTED_MODEL
+    except ImportError:  # pragma: no cover - package-style imports in tests/tools
+        from .lan_pdf_vision_to_markdown import DEFAULT_OLLAMA_URL, EXPECTED_MODEL
+
+    health_url = f"{DEFAULT_OLLAMA_URL}/api/tags"
     started = time.monotonic()
     try:
-        with urlopen(OLLAMA_HEALTH_URL, timeout=timeout_seconds) as response:
+        with urlopen(health_url, timeout=timeout_seconds) as response:
             body = response.read()
         payload = json.loads(body)
         models = payload.get("models") if isinstance(payload, dict) else None
         if not isinstance(models, list):
             raise ValueError("Ollama health response has no models list")
+        installed = [str(item.get("name") or item.get("model") or "")
+                     for item in models if isinstance(item, dict)]
+        available = EXPECTED_MODEL in installed
         return {
-            "status": "passed",
-            "url": OLLAMA_HEALTH_URL,
+            "status": "passed" if available else "failed",
+            "url": health_url,
+            "model": EXPECTED_MODEL,
             "elapsed_seconds": round(time.monotonic() - started, 3),
-            "models": [str(item.get("name")) for item in models if isinstance(item, dict)],
+            "models": [name for name in installed if name],
+            **({"reason": "pinned-model-not-installed"} if not available else {}),
         }
     except (OSError, URLError, ValueError, json.JSONDecodeError) as exc:
         return {
             "status": "failed",
-            "url": OLLAMA_HEALTH_URL,
+            "url": health_url,
+            "model": EXPECTED_MODEL,
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "error": f"{type(exc).__name__}: {exc}",
         }
@@ -895,9 +939,11 @@ def _reusable_routed_page(
             or sha256(visual_page_unit) != visual_page_unit_sha
         ):
             return None
-    if signals.get("page_image_required") is True and not (
+    local_required = signals.get("page_image_required") is True
+    local_fallback = record.get("recognition_route") == LOCAL_PAGE_OCR_FALLBACK
+    if (local_required or local_fallback) and not (
         route in {"visual-only", "native-plus-visual"}
-        and record.get("recognition_route") == LOCAL_PAGE_OCR_ROUTE
+        and (local_fallback or record.get("recognition_route") == LOCAL_PAGE_OCR_ROUTE)
         and _has_page_image_link(page_unit_text, page)
         and _checked_file(page_unit_path.parent.parent / "assets" / f"page-{page:03d}.png", record.get("visual_asset_sha256"))
         and _visual_page_reusable(
@@ -1133,6 +1179,7 @@ def _finalize_hybrid_reader(
     if previously_verified or hybrid_validator.path_present(validation_path):
         return hybrid_validator.validate_reader_stage(root, source, selected)
 
+    disk_guard.check(root, phase="reader-finalization")
     try:
         hybrid_validator.check_reader_paths(root)
         audit_worker, export_worker = hybrid_validator.reader_components()
@@ -1141,16 +1188,21 @@ def _finalize_hybrid_reader(
         if destination.exists() and not audit_path.is_file():
             raise ValueError("reader projection exists without its audit; refusing to replace it")
 
+        new_audit = None
+        if not audit_path.is_file():
+            lock = (_read_json(root / "acceptance.json") or {}).get(hybrid_validator.READER_AUDIT_VERSION)
+            scan_options = {"collect_scan": True} if lock == "3.0.0" else {}
+            # Second OCR commits its own page cache. Do not allocate projection
+            # staging until OCR returns; a hard stop here needs no staging cleanup.
+            new_audit = audit_worker.audit_package(root, source, selected_pages=selected, **scan_options)
+
         # Export into a disjoint directory on the same filesystem. Only the
         # fixed reader/ path is published inside the engineering package.
         with tempfile.TemporaryDirectory(prefix=".reader-visual-", dir=root.parent) as temporary:
             staging = Path(temporary)
-            pending_audit = None if audit_path.is_file() else staging / audit_path.name
+            pending_audit = staging / audit_path.name if new_audit is not None else None
             if pending_audit is not None:
-                lock = (_read_json(root / "acceptance.json") or {}).get(hybrid_validator.READER_AUDIT_VERSION)
-                scan_options = {"collect_scan": True} if lock == "3.0.0" else {}
-                _write_json_atomic(pending_audit, audit_worker.audit_package(
-                    root, source, selected_pages=selected, **scan_options))
+                _write_json_atomic(pending_audit, new_audit)
             audit, audit_sha = hybrid_validator.read_reader_audit(pending_audit or audit_path)
             audit_check = audit_worker.validate_audit(root, source, audit, selected_pages=selected)
             if audit_check.get("status") != "passed":
@@ -1204,8 +1256,15 @@ def _page_batch_result(root: Path, run_id: str, summary: dict[str, Any]) -> tupl
     }
 
 
+def _record_book_copy(summary: dict[str, Any], index: Path, source: Path) -> None:
+    summary.pop("source_named_markdown", None)
+    summary.pop("source_named_markdown_error", None)
+    summary.update(book_markdown_delivery(index, source))
+
+
 def _resume_accepted_hybrid(
     root: Path, run_id: str, source: Path, source_hash: str, selected: list[int],
+    *, write_book_markdown: bool = True,
 ) -> tuple[int, dict[str, Any]] | None:
     acceptance = _read_json(root / "acceptance.json") or {}
     expected = hybrid_validator.reader_stage_expected(root)
@@ -1227,7 +1286,13 @@ def _resume_accepted_hybrid(
     if expected:
         previously_verified = hybrid_validator.reader_stage_committed(summary, progress, evidence)
         reader = _finalize_hybrid_reader(root, source, selected, previously_verified=previously_verified)
+        if reader["status"] == "passed" and write_book_markdown:
+            _record_book_copy(summary, root / "index.md", source)
         _record_hybrid_reader_state(root, summary, progress, evidence, reader)
+    elif summary.get("status") == "passed" and write_book_markdown:
+        _record_book_copy(summary, root / "index.md", source)
+        if _read_json(root / "summary.json") != summary:
+            _write_json_atomic(root / "summary.json", summary)
     return _page_batch_result(root, run_id, summary)
 
 
@@ -1245,6 +1310,8 @@ def run_page_batches(
     resume_package: Path | None = None,
     hybrid: bool = False,
     visual_dpi: int = 220,
+    *,
+    write_book_markdown: bool = True,
 ) -> tuple[int, dict[str, Any]]:
     """Run one long document through smoke + bounded page batches.
 
@@ -1273,7 +1340,9 @@ def run_page_batches(
             raise ValueError(f"resume package does not exist: {batch_root}")
         run_id = batch_root.name
         if hybrid:
-            resumed = _resume_accepted_hybrid(batch_root, run_id, source, source_hash, selected)
+            resumed = _resume_accepted_hybrid(
+                batch_root, run_id, source, source_hash, selected, write_book_markdown=write_book_markdown,
+            )
             if resumed is not None:
                 return resumed
     else:
@@ -1332,7 +1401,7 @@ def run_page_batches(
             "raw_document": "document-temp.raw.md",
             "merged_document": "document-temp.md",
             "final_markdown": "index.md",
-            "source_markdown_alias": None,
+            "source_markdown_alias": book_markdown_filename(source) if write_book_markdown else None,
             "final_summary": "summary.json",
             "final_progress": "progress.json",
             "final_evidence": "evidence.json",
@@ -1387,6 +1456,7 @@ def run_page_batches(
     existing_pages: set[int] = set()
     if hybrid:
         def process_hybrid_page(page: int) -> dict[str, Any]:
+            disk_guard.check(batch_root, phase="page-start", page=page)
             page_unit_path = page_units_root / f"p{page:03d}.md"
             route_path = page_routes_root / f"p{page:03d}.json"
             reusable = _reusable_routed_page(
@@ -1527,23 +1597,63 @@ def run_page_batches(
                 can_resume=visual_can_resume,
                 decision=decision,
             )
+            lan_model_attempted = False
+            fallback_reason = None
+            failed_visual_root = None
             if visual_reused:
                 saved_visual = _read_json(
                     visual_root / "evidence" / f"page-result-p{page:03d}.json"
                 ) or {}
-                recognition_route = (
-                    LOCAL_PAGE_OCR_ROUTE
-                    if saved_visual.get("route") == LOCAL_PAGE_OCR_ROUTE
-                    else "lan-visual-model"
+                if saved_visual.get("route") == LOCAL_PAGE_OCR_ROUTE:
+                    if recognition_route == "lan-visual-model":
+                        recognition_route = LOCAL_PAGE_OCR_FALLBACK
+                        fallback_reason = "reused-verified-apple-ocr-fallback"
+                else:
+                    recognition_route = "lan-visual-model"
+
+            def start_ocr_fallback(reason: str) -> None:
+                nonlocal visual_root, visual_command, recognition_route, fallback_reason
+                # Never run the OCR adapter inside a directory owned by a
+                # failed visual attempt, even on an in-place book resume.
+                visual_root = _fresh_visual_attempt(package)
+                visual_command = _apple_ocr_page_command(
+                    helper_python=helper_python, source=source, visual_root=visual_root,
+                    page=page, visual_dpi=visual_dpi, timeout=timeout,
                 )
+                recognition_route = LOCAL_PAGE_OCR_FALLBACK
+                fallback_reason = reason
+
+            def run_visual_attempt(model_health: dict[str, Any]) -> bool:
+                disk_guard.check(batch_root, phase="page-visual-start", page=page)
+                visual_record = _run_command(visual_command, timeout)
+                floor = disk_guard.configured_floor()
+                if visual_record.get("returncode") == disk_guard.PAUSE_EXIT and floor is not None:
+                    child = _summary_from_stdout(visual_record.get("stdout", "")) or {}
+                    details = child.get("disk_pause")
+                    if (child.get("status") == "paused" and child.get("reason") == disk_guard.PAUSE_REASON
+                            and isinstance(details, dict) and details.get("floor_bytes") == floor):
+                        raise disk_guard.DiskFloorReached(
+                            free_bytes=details["free_bytes"], floor_bytes=details["floor_bytes"],
+                            phase=details["phase"], page=page, write_bytes=details["next_write_bytes"],
+                        )
+                visual_result = _summary_from_stdout(visual_record.get("stdout", ""))
+                visual_record.update({
+                    "page": page, "route": decision["route"], "summary": visual_result,
+                    "recognition_route": recognition_route, "model_health": model_health,
+                })
+                records.append(visual_record)
+                return bool(visual_record.get("returncode") == 0 and visual_result
+                            and visual_result.get("status") == "passed")
 
             def visual_failure(reason: str) -> dict[str, Any]:
                 fallback_text = "" if require_local_ocr and decision["route"] == "visual-only" else native_text
                 _write_text_atomic(page_unit_path, _incomplete_page_unit(page, fallback_text))
                 route_record.update(
                     status="failed",
-                    model_called=not visual_reused and recognition_route == "lan-visual-model",
+                    model_called=lan_model_attempted,
                     recognition_route=recognition_route,
+                    visual_fallback_reason=fallback_reason,
+                    failed_visual_run_root=failed_visual_root,
                     reason_codes=[*decision["reason_codes"], reason],
                     page_unit=str(page_unit_path),
                     page_unit_sha256=sha256(page_unit_path),
@@ -1558,45 +1668,34 @@ def run_page_batches(
                     else {"status": "not-required"}
                 )
                 if model_health.get("status") == "failed":
-                    visual_command = _apple_ocr_page_command(
-                        helper_python=helper_python,
-                        source=source,
-                        visual_root=visual_root,
-                        page=page,
-                        visual_dpi=visual_dpi,
-                        timeout=timeout,
-                    )
-                    recognition_route = "apple-vision-ocr-fallback"
-                visual_record = _run_command(visual_command, timeout)
-                visual_record["model_health"] = model_health
-                visual_result = _summary_from_stdout(visual_record.get("stdout", ""))
-                visual_record.update(
-                    {"page": page, "route": decision["route"], "summary": visual_result}
-                )
-                records.append(visual_record)
-                if (
-                    visual_record.get("returncode") != 0
-                    or not visual_result
-                    or visual_result.get("status") != "passed"
-                ):
+                    start_ocr_fallback(str(model_health.get("reason") or "lan-visual-model-unavailable"))
+                lan_model_attempted = recognition_route == "lan-visual-model"
+                converted = run_visual_attempt(model_health)
+                if lan_model_attempted and not converted:
+                    failed_visual_root = str(visual_root)
+                    start_ocr_fallback("lan-visual-page-conversion-failed")
+                    converted = run_visual_attempt({"status": "not-required", "reason": fallback_reason})
+                if not converted:
                     return visual_failure("visual-page-conversion-failed")
-                if require_local_ocr and not _visual_page_reusable(
-                    visual_root=visual_root, source_sha256=source_hash, page=page, require_local_ocr=True,
-                ):
-                    return visual_failure("required-page-image-or-local-ocr-evidence-unverified")
+
+            retain_source_image = require_local_ocr or recognition_route == LOCAL_PAGE_OCR_FALLBACK
+            if retain_source_image and not _visual_page_reusable(
+                visual_root=visual_root, source_sha256=source_hash, page=page, require_local_ocr=True,
+            ):
+                return visual_failure("required-page-image-or-local-ocr-evidence-unverified")
 
             visual_unit_path = visual_root / "page-units" / f"p{page:03d}.md"
             visual_markdown = visual_unit_path.read_text(encoding="utf-8")
             try:
                 asset = _copy_visual_asset(visual_root, assets_root, page)
             except (OSError, ValueError):
-                if require_local_ocr:
+                if retain_source_image:
                     return visual_failure("required-page-image-copy-failed")
                 raise
             merged_unit = _merge_page_route_unit(
                 page=page, route=decision["route"], native_text=native_text, visual_markdown=visual_markdown,
             )
-            if require_local_ocr:
+            if retain_source_image:
                 if asset is None:
                     return visual_failure("required-page-image-not-materialized")
                 if not _has_page_image_link(merged_unit, page):
@@ -1612,14 +1711,14 @@ def run_page_batches(
                         *route_record["reason_codes"],
                         *(
                             ["lan-visual-model-unavailable-apple-ocr-fallback"]
-                            if recognition_route == "apple-vision-ocr-fallback"
+                            if recognition_route == LOCAL_PAGE_OCR_FALLBACK
                             else []
                         ),
                     ],
-                    "model_called": (
-                        not visual_reused and recognition_route == "lan-visual-model"
-                    ),
+                    "model_called": lan_model_attempted,
                     "recognition_route": recognition_route,
+                    "visual_fallback_reason": fallback_reason,
+                    "failed_visual_run_root": failed_visual_root,
                     "visual_resume_reused": visual_reused,
                     "visual_run_root": str(visual_root),
                     "visual_page_unit": str(visual_unit_path),
@@ -1640,7 +1739,16 @@ def run_page_batches(
             route_path = page_routes_root / f"p{page:03d}.json"
             if not unit.is_file():
                 _write_text_atomic(unit, _incomplete_page_unit(page))
-            if result.get("status") == "failed" and not route_path.is_file():
+            if result.get("status") == "failed" and (result.get("error_type") or not route_path.is_file()):
+                # An exception can leave a previous "passed" route in place.
+                # Retain its exact bytes as history, never as the active verdict.
+                if route_path.is_file():
+                    archived = route_path.parent / "_superseded" / f"{route_path.stem}-{sha256(route_path)}.json"
+                    archived.parent.mkdir(exist_ok=True)
+                    try:
+                        os.link(route_path, archived)
+                    except FileExistsError:
+                        pass
                 _write_json_atomic(
                     route_path,
                     {
@@ -1756,6 +1864,7 @@ def run_page_batches(
         except (TypeError, ValueError):
             pass
 
+    disk_guard.check(batch_root, phase="book-merge")
     raw_document_path = batch_root / "document-temp.raw.md"
     raw_document_text = _merge_page_units(page_units_root, selected)
     _write_text_atomic(raw_document_path, raw_document_text)
@@ -1823,7 +1932,7 @@ def run_page_batches(
             route_path = page_routes_root / f"p{page:03d}.json"
             route_record = _read_json(route_path)
             page_unit_path = page_units_root / f"p{page:03d}.md"
-            if not route_record or not page_unit_path.is_file():
+            if not route_record or route_record.get("status") != "passed" or not page_unit_path.is_file():
                 continue
             route_record["page_unit_sha256"] = sha256(page_unit_path)
             route_record["postprocess"] = {
@@ -2018,7 +2127,6 @@ def run_page_batches(
         "rendering": "candidate-pages-only" if hybrid else "not-run",
         "markdown": str(final_index),
         "index_markdown": str(final_index),
-        "source_named_markdown": None,
         "document_temp": str(merged_document_path),
         "document_temp_raw": str(raw_document_path),
         "page_units": str(page_units_root),
@@ -2093,7 +2201,6 @@ def run_page_batches(
             "run_root": str(batch_root),
             "markdown": str(final_index),
             "index_markdown": str(final_index),
-            "source_named_markdown": None,
             "document_temp": str(merged_document_path),
             "document_temp_raw": str(raw_document_path),
             "page_units": str(page_units_root),
@@ -2154,8 +2261,12 @@ def run_page_batches(
         _record_hybrid_reader_state(batch_root, summary, progress, evidence, {"status": "running"})
         _write_json_atomic(batch_root / "acceptance.json", acceptance)
         reader = _finalize_hybrid_reader(batch_root, source, selected)
+        if reader["status"] == "passed" and write_book_markdown:
+            _record_book_copy(summary, final_index, source)
         _record_hybrid_reader_state(batch_root, summary, progress, evidence, reader)
     else:
+        if summary_status == "passed" and write_book_markdown:
+            _record_book_copy(summary, final_index, source)
         _write_json_atomic(batch_root / "progress.json", progress)
         _write_json_atomic(batch_root / "summary.json", summary)
         _write_json_atomic(batch_root / "evidence.json", evidence)
@@ -2441,6 +2552,7 @@ def main() -> int:
     parser.add_argument("--smoke-pages", help="explicit smoke page selector for page-batch mode")
     parser.add_argument("--resume-pages", type=Path, help="resume a page-batch checkpoint.json without creating a new run")
     parser.add_argument("--resume-package", type=Path, help="reuse this existing page-batch directory and skip passed page outputs")
+    parser.add_argument("--no-book-markdown", action="store_true", help="internal page stage: do not publish an editable book copy")
     parser.add_argument(
         "--hybrid",
         action="store_true",
@@ -2506,6 +2618,7 @@ def main() -> int:
                     args.resume_package,
                     args.hybrid,
                     args.visual_dpi,
+                    write_book_markdown=not args.no_book_markdown,
                 )
             print(json.dumps({"status": state.get("status"), "run_id": state.get("run_id"), "output": str(Path(str(state.get("checkpoint", args.output_root)))), "summary": state.get("summary", {}), "checkpoint": str((Path(str(state.get("checkpoint"))) if state.get("checkpoint") else args.output_root))}, ensure_ascii=False))
             return code

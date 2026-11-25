@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import csv
+import fcntl
 import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +18,13 @@ def _write_pdf(path: Path, text: bytes = b"%PDF-1.7\n") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(text)
     return path
+
+
+BATCH_CONFIG = {"pages": "all", "evidence_level": "compact", "batch_size": 1, "timeout_seconds": 30}
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_document_routes_map_to_explicit_graph_modes():
@@ -217,13 +229,28 @@ def _write_complete_run(
 ) -> None:
     source_hash = batch.sha256(source)
     run_root.mkdir(parents=True, exist_ok=True)
-    (run_root / "index.md").write_text(
-        "".join(
-            f"<!-- page: {page} -->\n\n## 第 {page} 页\n\n第 {page} 页正文内容。\n\n"
-            for page in selected_pages
-        ),
-        encoding="utf-8",
-    )
+    units = run_root / "page-units"
+    units.mkdir(exist_ok=True)
+    backups = run_root / "backups" / "page-units-pre-cleanup"
+    backups.mkdir(parents=True, exist_ok=True)
+    page_texts = []
+    for page in selected_pages:
+        raw_text = f"第 {page} 页正文内容。"
+        text = f"<!-- page: {page} -->\n\n## 第 {page} 页\n\n{raw_text}"
+        for directory in (units, backups):
+            (directory / f"p{page:03d}.md").write_text(text + "\n", encoding="utf-8")
+        name = f"page-{page:03d}"
+        extraction = run_root / "pages" / name / "evidence" / f"{name}.json"
+        extraction.parent.mkdir(parents=True, exist_ok=True)
+        extraction.write_text(json.dumps({
+            "page": page, "status": "passed", "source_sha256": source_hash, "text": raw_text + "\n",
+            "line_count": 1, "nonempty_line_ids": [f"p{page}-native-l0001"], "model_calls": [],
+        }), encoding="utf-8")
+        page_texts.append(text)
+    merged = run_root / "document-temp.md"
+    index = run_root / "index.md"
+    for path in (merged, index):
+        path.write_text("\n\n".join(page_texts) + "\n", encoding="utf-8")
     common = {
         "status": "passed",
         "source": str(source.resolve()),
@@ -231,21 +258,55 @@ def _write_complete_run(
         "selected_pages": selected_pages,
         "total_pages": total_pages,
     }
-    (run_root / "summary.json").write_text(json.dumps(common), encoding="utf-8")
+    (run_root / "summary.json").write_text(json.dumps({
+        **common, "run_root": str(run_root), "batch_size": 1, "old_summary_reused": False,
+        "model_calls": [], "visual_model": "not-run", "rendering": "not-run",
+    }), encoding="utf-8")
     reports = run_root / "reports"
     reports.mkdir(exist_ok=True)
+    (reports / "heading-repair.json").write_text(json.dumps({
+        "format_version": "0.6.0-pure-native-langgraph", "status": "passed",
+        "source_sha256": batch.sha256(merged), "index_sha256": batch.sha256(index),
+        "validation": {"heading_prefix_only": True, "page_markers_preserved": True, "visible_body_preserved": True},
+    }), encoding="utf-8")
+    coverage = {
+        "format_version": "0.6.0-pure-native-langgraph", "status": "passed",
+        "expected_page_sequence": selected_pages, "actual_page_sequence": selected_pages,
+        "checks": {"page_unit_set_matches": True, "page_unit_markers_match": True, "merged_page_sequence_matches": True},
+    }
+    for name in ("merge-coverage.json", "final-coverage.json"):
+        (reports / name).write_text(json.dumps(coverage), encoding="utf-8")
+    (reports / "page-completion.json").write_text(json.dumps({
+        "status": "passed", "expected_pages": selected_pages, "completed_pages": selected_pages,
+        **{key: [] for key in batch.hybrid_validator.COVERAGE_EXCEPTIONS},
+    }), encoding="utf-8")
+    (reports / "page-cleanup.json").write_text(json.dumps({
+        "status": "passed", "selected_pages": selected_pages,
+        "checks": {"pre_cleanup_backup_exists": True, "all_page_units_nonempty": True,
+                   "only_complete_lines_deleted": True, "body_rewrite": False},
+    }), encoding="utf-8")
+    (reports / "native-table-font-validation.json").write_text(json.dumps({
+        "status": "passed", "detected_table_count": 0, "rendered_table_count": 0,
+        "table_failures": [], "font_usage": {}, "font_size_usage": {},
+    }), encoding="utf-8")
     (reports / "validation-result.json").write_text(
         json.dumps(
             {
                 **common,
                 "actual_full_pdf_coverage": selected_pages == list(range(1, total_pages + 1)),
                 "checks": {"full_pdf_coverage_required_and_met": True},
+                "native_text_physical_lines": len(selected_pages), "native_text_nonempty_line_ids": len(selected_pages),
+                "table_count_pdfplumber_find_tables": 0, "rendered_table_count": 0,
+                "font_usage": {}, "font_size_usage": {},
             }
         ),
         encoding="utf-8",
     )
     evidence = run_root / "evidence"
     evidence.mkdir(exist_ok=True)
+    (evidence / "batch-command.json").write_text(json.dumps({
+        "parsed_result": {"summary": {"run_root": str(run_root)}},
+    }), encoding="utf-8")
     (evidence / "progress-current.json").write_text(
         json.dumps(
             {
@@ -259,6 +320,12 @@ def _write_complete_run(
         ),
         encoding="utf-8",
     )
+
+
+def _write_native_replay_run(run_root: Path, **kwargs) -> None:
+    # Export fixtures also use _write_complete_run and own their assets layout.
+    _write_complete_run(run_root, **kwargs)
+    (run_root / "assets").mkdir(exist_ok=True)
 
 
 def _write_complete_hybrid_run(
@@ -295,16 +362,34 @@ def _write_complete_hybrid_run(
         ),
         encoding="utf-8",
     )
+    reports = run_root / "reports"
+    reports.mkdir(exist_ok=True)
+    (reports / "validation-result.json").write_text(json.dumps({
+        **common,
+        "validator": "pdf-hybrid-output-validator",
+        "actual_full_pdf_coverage": selected_pages == list(range(1, total_pages + 1)),
+        "index_sha256": batch.sha256(run_root / "index.md"),
+        "checks": {"page_completion_passed": True, "index_full_page_sequence": True},
+    }), encoding="utf-8")
     (run_root / "progress.json").write_text(
         json.dumps({**common, "stages": [{"stage": "independent_acceptance", "status": "passed"}]}),
         encoding="utf-8",
     )
 
 
-def test_final_completion_accepts_hybrid_contract(tmp_path: Path):
+@pytest.mark.parametrize("reader_required", [False, True])
+def test_final_completion_accepts_hybrid_contract(tmp_path: Path, reader_required):
     source = _write_pdf(tmp_path / "hybrid.pdf", b"hybrid")
     run_root = tmp_path / "hybrid-run"
     _write_complete_hybrid_run(run_root, source=source, selected_pages=[1, 2], total_pages=2)
+    if reader_required:
+        acceptance = run_root / "acceptance.json"
+        acceptance.write_text(json.dumps({
+            **_read_json(acceptance), "reader_visual_projection_required": True,
+        }), encoding="utf-8")
+        (run_root / "reports" / "reader-visual-validation.json").write_text(
+            json.dumps({"status": "passed", "bytes_verified": True}), encoding="utf-8",
+        )
 
     result = batch._inspect_final_completion(
         run_root,
@@ -315,8 +400,181 @@ def test_final_completion_accepts_hybrid_contract(tmp_path: Path):
 
     assert result["accepted"] is True
     assert result["completion_kind"] == "validated-final"
-    assert result["validation_report"] == str(run_root / "acceptance.json")
+    assert result["validation_report"] == str(run_root / "reports" / "validation-result.json")
     assert result["progress_path"] == str(run_root / "progress.json")
+
+
+def test_native_resume_uses_native_validator_and_progress_over_compatibility_files(tmp_path: Path, monkeypatch):
+    source = _write_pdf(tmp_path / "native.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="native-only")
+    package = batch.run_root_for_entry(root, entries[0])
+    _write_native_replay_run(package, source=source, selected_pages=[1], total_pages=1)
+    native_progress = package / "evidence" / "progress-current.json"
+    validator = package / "reports" / "validation-result.json"
+    for path in (validator, native_progress, package / "summary.json"):
+        path.write_text(json.dumps({
+            **_read_json(path), "format_version": "0.6.0-pure-native-langgraph",
+        }), encoding="utf-8")
+    compat = {
+        "format_version": "0.6.0-pure-native-run-root-acceptance",
+        "status": "passed", "source": str(source), "source_sha256": batch.sha256(source),
+        "selected_pages": [1], "total_pages": 1,
+    }
+    (package / "acceptance.json").write_text(json.dumps(compat), encoding="utf-8")
+    (package / "progress.json").write_text(json.dumps({
+        **compat, "stages": [{"stage": "independent_acceptance", "status": "passed"}],
+    }), encoding="utf-8")
+    (root / "results.json").write_text(json.dumps({"items": [{
+        "source_path": str(source), "run_root": str(package), "source_sha256": batch.sha256(source),
+        "status": "failed", "error": "incomplete-final-evidence: smoke-only at independent_acceptance",
+        "returncode": 0,
+    }]}), encoding="utf-8")
+
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: pytest.fail("the package should be reused"))
+    code, payload = batch.run_batch(
+        entries, batch_root=root, origin={}, config={**BATCH_CONFIG, "min_free_bytes": 1},
+        executor=lambda *_args, **_kwargs: pytest.fail("the package should be reused"),
+    )
+    assert code == 0
+    assert payload["summary"]["skipped_existing"] == payload["strict_accepted_count"] == 1
+    row, = _read_json(root / "results.json")["items"]
+    assert row["progress_path"] == str(native_progress)
+    assert row["validation_report"] == str(validator)
+    assert row["status"] == "passed"
+
+
+@pytest.mark.parametrize("damage", [
+    "deleted-unit", "empty-unit", "unexpected-unit", "wrong-unit-marker", "changed-unit-body", "changed-index-body",
+    "missing-heading-report", "missing-coverage", "failed-coverage",
+    "missing-raw-merge", "changed-raw-merge", "missing-backups", "missing-backup-page", "missing-extraction",
+    "wrong-extraction-hash", "missing-merge-coverage", "missing-cleanup-report", "missing-table-report",
+    "missing-page-completion", "missing-assets-dir",
+])
+def test_native_resume_rejects_changed_current_evidence_despite_saved_pass(tmp_path: Path, monkeypatch, damage):
+    source = _write_pdf(tmp_path / "native.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="native-only")
+    package = batch.run_root_for_entry(root, entries[0])
+    _write_native_replay_run(package, source=source, selected_pages=[1, 2], total_pages=2)
+    unit = package / "page-units" / "p001.md"
+    index = package / "index.md"
+    reports = package / "reports"
+    if damage == "deleted-unit":
+        unit.unlink()
+    elif damage == "empty-unit":
+        unit.write_text(" \n", encoding="utf-8")
+    elif damage == "unexpected-unit":
+        unit.with_name("p003.md").write_text("<!-- page: 3 -->\nExtra text.\n", encoding="utf-8")
+    elif damage == "wrong-unit-marker":
+        unit.write_text(unit.read_text(encoding="utf-8").replace("<!-- page: 1 -->", "<!-- page: 2 -->"), encoding="utf-8")
+    elif damage in {"changed-unit-body", "changed-index-body"}:
+        path = unit if damage == "changed-unit-body" else index
+        path.write_text(path.read_text(encoding="utf-8").replace("第 1 页正文内容。", "Changed body text."), encoding="utf-8")
+    elif damage == "missing-heading-report":
+        (reports / "heading-repair.json").unlink()
+    elif damage == "missing-coverage":
+        (reports / "final-coverage.json").unlink()
+    elif damage == "failed-coverage":
+        coverage = reports / "final-coverage.json"
+        coverage.write_text(json.dumps({**_read_json(coverage), "status": "failed"}), encoding="utf-8")
+    elif damage == "changed-raw-merge":
+        merge = package / "document-temp.md"
+        merge.write_text(merge.read_text(encoding="utf-8") + "Edited.\n", encoding="utf-8")
+    elif damage == "wrong-extraction-hash":
+        evidence = package / "pages/page-001/evidence/page-001.json"
+        evidence.write_text(json.dumps({**_read_json(evidence), "source_sha256": "0" * 64}), encoding="utf-8")
+    else:
+        removed = package / {
+            "missing-raw-merge": "document-temp.md",
+            "missing-backups": "backups/page-units-pre-cleanup",
+            "missing-backup-page": "backups/page-units-pre-cleanup/p001.md",
+            "missing-extraction": "pages/page-001/evidence/page-001.json",
+            "missing-merge-coverage": "reports/merge-coverage.json",
+            "missing-cleanup-report": "reports/page-cleanup.json",
+            "missing-table-report": "reports/native-table-font-validation.json",
+            "missing-page-completion": "reports/page-completion.json",
+            "missing-assets-dir": "assets",
+        }[damage]
+        shutil.rmtree(removed) if removed.is_dir() else removed.unlink()
+    row = {
+        "source_path": str(source), "run_root": str(package), "source_sha256": batch.sha256(source), "status": "passed",
+    }
+    (root / "results.json").write_text(json.dumps({"items": [row]}), encoding="utf-8")
+    canonical = reports / "validation-result.json"
+    saved_pass = canonical.read_bytes()
+    assert _read_json(canonical)["status"] == "passed"
+    assert "<!-- page: 1 -->" in index.read_text(encoding="utf-8")
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+
+    code, payload = batch.run_batch(
+        entries, batch_root=root, origin={}, config={**BATCH_CONFIG, "min_free_bytes": 1},
+        executor=lambda *_args, **_kwargs: pytest.fail("disk guard must block retry after evidence rejection"),
+    )
+    assert code == 75
+    assert payload["summary"]["skipped_existing"] == payload["strict_accepted_count"] == 0
+    assert _read_json(root / "results.json")["items"][0]["status"] == "pending"
+    assert canonical.read_bytes() == saved_pass
+
+
+@pytest.mark.parametrize("damage", [
+    "page-units/p001.md", "document-temp.md", "backups/page-units-pre-cleanup/p001.md",
+    "pages/page-001/evidence/page-001.json", "changed-index-body",
+])
+def test_native_batch_rechecks_evidence_after_graph_resume_returns_zero(tmp_path: Path, monkeypatch, damage):
+    source = _write_pdf(tmp_path / "native.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="native-only")
+    package = batch.run_root_for_entry(root, entries[0])
+    _write_native_replay_run(package, source=source, selected_pages=[1], total_pages=1)
+    if damage == "changed-index-body":
+        index = package / "index.md"
+        index.write_text(index.read_text(encoding="utf-8") + "Changed body text.\n", encoding="utf-8")
+    else:
+        (package / damage).unlink()
+    commands = []
+
+    def stale_graph(command, **kwargs):
+        assert "--resume" in command and "--no-model" in command
+        commands.append(command)
+        kwargs["stdout"].write('{"final_status":"passed"}\n')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(batch.subprocess, "run", stale_graph)
+    monkeypatch.setattr(batch, "_active_conversion_processes", lambda *_: [])
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=BATCH_CONFIG)
+    assert len(commands) == 1
+    assert code == 1 and payload["status"] == "failed"
+    assert payload["strict_accepted_count"] == payload["summary"]["skipped_existing"] == 0
+    row, = _read_json(root / "results.json")["items"]
+    assert row["status"] == "failed" and row["returncode"] == 0 and row["resume_used"] is True
+
+
+@pytest.mark.parametrize("legacy_root,recorded", [(".stages/native-pages/inner", True), ("batch-run", False)])
+def test_native_replay_supports_legacy_extraction_and_nested_page_package(tmp_path: Path, legacy_root, recorded):
+    source = _write_pdf(tmp_path / "native.pdf")
+    package = tmp_path / "package"
+    _write_native_replay_run(package, source=source, selected_pages=[1], total_pages=1)
+    extraction = package / legacy_root
+    (extraction / "reports").mkdir(parents=True)
+    (package / "pages").rename(extraction / "pages")
+    (package / "reports/page-completion.json").rename(extraction / "reports/page-completion.json")
+    shutil.copyfile(package / "summary.json", extraction / "summary.json")
+    page_package = extraction / "pages/page-001"
+    (page_package / page_package.name).mkdir()
+    (page_package / "evidence").rename(page_package / page_package.name / "evidence")
+    command = package / "evidence/batch-command.json"
+    if recorded:
+        command.write_text(json.dumps({
+            "parsed_result": {"summary": {"run_root": str(extraction)}},
+        }), encoding="utf-8")
+    else:
+        command.unlink()
+    relocated = package.with_name("relocated")
+    package.rename(relocated)
+    assert batch._reusable_completion({
+        "run_root": str(relocated), "source_path": str(source), "source_sha256": batch.sha256(source),
+    }, requested_pages="all") is not None
 
 
 def test_entries_from_route_report_prefers_route_list_order(tmp_path: Path):
@@ -566,6 +824,51 @@ def test_paused_collection_blocks_before_invoking_any_book(tmp_path: Path):
     assert not (collection_root / "batch-root").exists()
 
 
+def test_cli_inherits_collection_lock_without_releasing_parent_ownership(tmp_path: Path):
+    source = _write_pdf(tmp_path / "book.pdf")
+    root = tmp_path / "batch"
+    lock_path = tmp_path / ".pdf-collection-queue.lock"
+    with lock_path.open("a+") as parent, lock_path.open("a+") as competitor:
+        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed = subprocess.run([
+            sys.executable, batch.__file__, "--source", str(source), "--batch-root", str(root),
+            "--min-free-bytes", str(1 << 80), "--collection-lock-fd", str(parent.fileno()),
+        ], pass_fds=(parent.fileno(),), capture_output=True, text=True, timeout=15)
+        assert completed.returncode == 75, completed.stderr
+        assert json.loads(completed.stdout)["status"] == "paused"
+        assert _read_json(lock_path)["batch_root"] == str(root)
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with lock_path.open("a+") as successor:
+        fcntl.flock(successor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_inherited_lock_rejects_invalid_wrong_file_and_separately_opened_fds(tmp_path: Path):
+    lock_path = tmp_path / ".pdf-collection-queue.lock"
+    other_path = tmp_path / "other"
+    options = {"lock_root": tmp_path, "batch_root": tmp_path / "batch", "entries": []}
+    with lock_path.open("a+") as parent, lock_path.open("a+") as competitor, other_path.open("a+") as other:
+        parent.write("parent owner\n")
+        parent.flush()
+        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for fd in (-1, other.fileno()):
+            with pytest.raises(batch.BatchLockError, match="invalid inherited collection lock fd"):
+                with batch.acquire_collection_lock(**options, inherited_fd=fd):
+                    pytest.fail("invalid fd acquired the lock")
+        with pytest.raises(batch.BatchLockError, match="active PDF collection queue"):
+            with batch.acquire_collection_lock(**options, inherited_fd=competitor.fileno()):
+                pytest.fail("a competing open file description acquired the lock")
+
+        (tmp_path / ".pdf-collection-paused.json").write_text("{}", encoding="utf-8")
+        with pytest.raises(batch.BatchLockError, match="PDF collection is paused"):
+            with batch.acquire_collection_lock(**options, inherited_fd=parent.fileno()):
+                pytest.fail("inherited fd bypassed the manual pause")
+        assert lock_path.read_text(encoding="utf-8") == "parent owner\n"
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert "--collection-lock-fd" not in batch.build_parser().format_help()
+
+
 def test_run_batch_stops_before_next_book_when_previous_left_a_live_worker(
     tmp_path: Path, monkeypatch
 ):
@@ -615,6 +918,71 @@ def test_run_batch_stops_before_next_book_when_previous_left_a_live_worker(
     assert payload["summary"]["halted"] is True
 
 
+@pytest.mark.parametrize("blocked_index,prior_status,probe_error", [
+    (0, "failed", False), (2, "passed", False), (2, "running", False), (2, "failed", True),
+])
+def test_resume_checks_prior_residuals_before_any_book(tmp_path: Path, monkeypatch, blocked_index, prior_status, probe_error):
+    sources = [_write_pdf(tmp_path / f"book-{i}.pdf") for i in range(3)]
+    entries = batch.entries_from_paths(sources, source_root=tmp_path, route="native-only")
+    root = tmp_path / "batch"
+    blocked_source = sources[blocked_index]
+    # A registered non-default run root must be probed even if already passed
+    # or scheduled after the book we would otherwise start next.
+    package = root / "registered"
+    _write_native_replay_run(package, source=blocked_source, selected_pages=[1], total_pages=1)
+    worker = f"999 lan_pdf_markdown_graph.py --run-root {package}"
+    previous = {
+        "source_path": str(blocked_source), "run_root": str(package), "source_sha256": batch.sha256(blocked_source),
+        "status": prior_status, "stdout_log": "prior.log",
+    }
+    if prior_status == "failed":
+        previous.update(queue_halted=True, halt_reason="residual-conversion-processes", residual_processes=[worker])
+    elif prior_status == "passed":
+        previous["residual_processes"] = [worker]
+    (root / "results.json").write_text(json.dumps({"items": [previous]}), encoding="utf-8")
+    cleared = False
+    events = []
+
+    def probe(entry, run_root):
+        events.append(("probe", entry.source, run_root))
+        if cleared:
+            return []
+        if probe_error:
+            raise subprocess.TimeoutExpired("ps", 10)
+        return [worker]
+
+    def executor(entry, *, run_root, **kwargs):
+        events.append(("invoke", entry.source, run_root))
+        _write_native_replay_run(run_root, source=entry.source, selected_pages=[1], total_pages=1)
+        return {"status": "passed", "execution": "completed"}
+
+    monkeypatch.setattr(batch, "_active_conversion_processes", probe)
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=BATCH_CONFIG, executor=executor)
+    assert code == 1
+    assert events == [("probe", blocked_source, package)]
+    assert payload["halt_reason"] == "residual-conversion-processes"
+    assert payload["strict_accepted_count"] == 0
+    snapshot = _read_json(root / "progress-current.json")
+    assert snapshot["active_source"] is None and snapshot["summary"]["halted"] is True
+    row, = _read_json(root / "results.json")["items"]
+    assert row["queue_halted"] is True and row["residual_processes"] == [worker]
+    assert row["stdout_log"] == "prior.log"
+    if probe_error:
+        assert "TimeoutExpired" in row["residual_check_error"]
+
+    cleared = True
+    events.clear()
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=BATCH_CONFIG, executor=executor)
+    assert code == 0
+    assert events[0] == ("probe", blocked_source, package)
+    assert [source for action, source, _ in events if action == "invoke"] == [s for s in sources if s != blocked_source]
+    assert payload["summary"]["skipped_existing"] == 1
+    assert payload["strict_accepted_count"] == 3
+    row = _read_json(root / "results.json")["items"][blocked_index]
+    assert row["execution"] == "skipped-existing" and not row.get("queue_halted")
+    assert row["residual_cleared_at"] and row["residual_processes"] == [worker]
+
+
 @pytest.mark.parametrize("layout", [batch.FLAT_LAYOUT, batch.LEGACY_LAYOUT])
 def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path, layout: str):
     source_root = tmp_path / "books"
@@ -642,7 +1010,7 @@ def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path, layout: st
         resume: bool,
     ) -> dict:
         calls.append(str(entry.source))
-        _write_complete_run(
+        _write_native_replay_run(
             run_root,
             source=entry.source,
             selected_pages=[1, 2],
@@ -706,6 +1074,359 @@ def test_run_batch_resumes_and_skips_existing_success(tmp_path: Path, layout: st
     ]
 
 
+def test_disk_pause_uses_headroom_only_before_new_books(tmp_path: Path, monkeypatch):
+    sources = [_write_pdf(tmp_path / f"book-{i}.pdf") for i in range(3)]
+    entries = batch.entries_from_paths(sources, source_root=tmp_path, route="native-only")
+    root = tmp_path / "batch"
+    progress_path = root / "progress-current.json"
+    free = 100
+    disk_checks = []
+    calls = []
+
+    def disk_usage(destination):
+        disk_checks.append((destination, free))
+        return SimpleNamespace(free=free)
+
+    def executor(entry, *, run_root, **kwargs):
+        nonlocal free
+        progress = _read_json(progress_path)
+        assert progress["status"] == "running"
+        assert progress["active_source"] == str(entry.source)
+        assert progress["summary"]["running"] == 1
+        assert progress["strict_accepted_count"] == len(calls)
+        calls.append(entry.source)
+        if entry.source == sources[0]:
+            free = 99  # The active book still gets to finish.
+        _write_native_replay_run(run_root, source=entry.source, selected_pages=[1], total_pages=1)
+        return {"status": "passed", "execution": "completed"}
+
+    monkeypatch.setattr(batch.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(batch, "_active_conversion_processes", lambda *_: [])
+    config = {**BATCH_CONFIG, "min_free_bytes": 100}
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=config, executor=executor)
+
+    assert code == 75
+    assert calls == sources[:1]
+    assert disk_checks == [(root, 100), (root, 99)]
+    assert payload["status"] == "paused"
+    assert payload["reason"] == payload["halt_reason"] == "insufficient-disk-headroom"
+    progress = _read_json(progress_path)
+    assert progress == {
+        "status": "paused",
+        "active_source": None,
+        "summary": payload["summary"],
+        "updated_at": _read_json(root / "manifest.json")["updated_at"],
+        "pages": "all",
+        "strict_accepted_count": 1,
+        "halt_reason": "insufficient-disk-headroom",
+    }
+    assert progress["summary"]["completed_total"] == 1
+    assert progress["summary"]["pending_total"] == 2
+    assert progress["summary"]["planned_total"] == 3
+    assert len(_read_json(root / "manifest.json")["run_roots"]) == 3
+    assert [item["status"] for item in _read_json(root / "results.json")["items"]] == ["passed"]
+    assert not batch.run_root_for_entry(root, entries[1]).exists()
+
+    free = 100
+    disk_checks.clear()
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=config, executor=executor)
+    assert code == 0
+    assert calls == sources
+    assert disk_checks == [(root, 100), (root, 100)]
+    assert payload["summary"]["skipped_existing"] == 1
+    assert _read_json(progress_path)["strict_accepted_count"] == 3
+    assert _read_json(progress_path)["active_source"] is None
+    assert _read_json(progress_path)["halt_reason"] is None
+
+    free = 0
+    disk_checks.clear()
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=config, executor=executor)
+    assert code == 0
+    assert calls == sources
+    assert disk_checks == []
+    assert payload["summary"]["skipped_existing"] == 3
+
+
+def test_interrupted_resume_keeps_later_rows_and_recovers_registered_packages(tmp_path: Path, monkeypatch):
+    sources = [_write_pdf(tmp_path / f"book-{i}.pdf", str(i).encode()) for i in range(6)]
+    entries = batch.entries_from_paths(sources, source_root=tmp_path, route="hybrid")
+    root = tmp_path / "batch"
+    root.mkdir()
+    roots = {
+        str(source): {"path": str(root / f"registered-{i}"), "source_sha256": batch.sha256(source)}
+        for i, source in enumerate(sources)
+    }
+    packages = [Path(roots[str(source)]["path"]) for source in sources]
+    (root / "manifest.json").write_text(json.dumps({
+        "package_layout": batch.FLAT_LAYOUT,
+        "inputs": [batch._serialise_entry(entry) for entry in entries],
+        "run_roots": roots,
+    }), encoding="utf-8")
+    (root / "results.json").write_text(json.dumps({"items": [
+        {"source_path": str(sources[i]), "run_root": str(packages[i]),
+         "source_sha256": roots[str(sources[i])]["source_sha256"],
+         "status": status, "stdout_log": f"prior-log-{i}"}
+        for i, status in enumerate(["running", "passed", "running", "needs-review"])
+    ]}), encoding="utf-8")
+    for i in (1, 2, 4):  # Item 2 never recorded passed; item 4 has no row at all.
+        _write_complete_hybrid_run(packages[i], source=sources[i], selected_pages=[1], total_pages=1)
+    packages[3].mkdir()
+    (packages[3] / "index.md").write_text("partial", encoding="utf-8")
+    monkeypatch.setattr(batch, "_active_conversion_processes", lambda *_: [])
+    # This queue test supplies the separate validator's verdict; the page-unit
+    # replay itself is exercised with engineering evidence in another fixture.
+    monkeypatch.setattr(batch.hybrid_validator, "validate_package", lambda package, _: _read_json(
+        package / "reports" / "validation-result.json"
+    ))
+
+    def interrupt(entry, *, run_root, **kwargs):
+        assert entry.source == sources[0]
+        run_root.mkdir()
+        (run_root / "index.md").write_text("interrupted", encoding="utf-8")
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        batch.run_batch(entries, batch_root=root, origin={}, config=BATCH_CONFIG, executor=interrupt)
+
+    snapshot = _read_json(root / "progress-current.json")
+    assert snapshot["active_source"] == str(sources[0])
+    assert snapshot["summary"]["running"] == 1
+    assert snapshot["strict_accepted_count"] == 3
+    items = _read_json(root / "results.json")["items"]
+    assert [item["status"] for item in items] == ["running", "passed", "passed", "needs-review", "passed"]
+    assert [item["stdout_log"] for item in items[1:4]] == ["prior-log-1", "prior-log-2", "prior-log-3"]
+    assert _read_json(root / "manifest.json")["run_roots"] == roots
+
+    calls = []
+
+    def executor(entry, *, run_root, resume, **kwargs):
+        calls.append((entry.source, run_root, resume))
+        _write_complete_hybrid_run(run_root, source=entry.source, selected_pages=[1], total_pages=1)
+        return {"status": "passed", "execution": "completed"}
+
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=BATCH_CONFIG, executor=executor)
+    assert code == 0
+    assert calls == [(sources[i], packages[i], i != 5) for i in (0, 3, 5)]
+    assert payload["summary"]["skipped_existing"] == 3
+    assert payload["strict_accepted_count"] == 6
+    assert [item["run_root"] for item in _read_json(root / "results.json")["items"]] == list(map(str, packages))
+
+
+def test_cli_disk_pause_before_first_book_and_rejects_negative_threshold(tmp_path: Path, monkeypatch, capsys):
+    source = _write_pdf(tmp_path / "book.pdf")
+    root = tmp_path / "batch"
+    argv = ["--source", str(source), "--batch-root", str(root)]
+    assert batch.build_parser().parse_args(argv).min_free_bytes == 0
+    with pytest.raises(SystemExit) as invalid:
+        batch.main([*argv, "--min-free-bytes", "-1"])
+    assert invalid.value.code == 2
+    assert not root.exists()
+    capsys.readouterr()
+
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+    assert batch.main([*argv, "--min-free-bytes", "1"]) == 75
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "paused"
+    assert payload["strict_accepted_count"] == 0
+    assert payload["summary"]["pending_total"] == 1
+    assert _read_json(root / "results.json")["items"] == []
+    assert _read_json(root / "progress-current.json")["active_source"] is None
+
+
+def test_manifest_only_resume_pins_selector_and_does_not_count_partial_package(tmp_path: Path, monkeypatch, capsys):
+    source = _write_pdf(tmp_path / "book.pdf")
+    root = tmp_path / "batch"
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+    resume_argv = ["--batch-root", str(root), "--min-free-bytes", "1"]
+    assert batch.main(["--source", str(source), *resume_argv, "--pages", "2"]) == 75
+    capsys.readouterr()
+    package = Path(_read_json(root / "manifest.json")["run_roots"][str(source)]["path"])
+    _write_native_replay_run(package, source=source, selected_pages=[2], total_pages=3)
+    assert batch.main(resume_argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["skipped_existing"] == 1
+    assert payload["strict_accepted_count"] == 0
+    assert _read_json(root / "progress-current.json")["pages"] == "2"
+
+    paths = [root / name for name in ("manifest.json", "results.json", "progress-current.json")]
+    original = [path.read_bytes() for path in paths]
+    assert batch.main([*resume_argv, "--pages", "1"]) == 2
+    assert "existing batch page selector is '2', not '1'" in capsys.readouterr().err
+    assert [path.read_bytes() for path in paths] == original
+
+
+@pytest.mark.parametrize("mismatch", ["sha256", "validator-status", "selected-pages"])
+def test_resume_does_not_reuse_stale_passed_row_with_mismatched_package(tmp_path: Path, monkeypatch, mismatch):
+    source = _write_pdf(tmp_path / "book.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="native-only")
+    package = batch.run_root_for_entry(root, entries[0])
+    selected = [1] if mismatch == "selected-pages" else [2]
+    _write_native_replay_run(package, source=source, selected_pages=selected, total_pages=3)
+    report_path = package / "reports" / "validation-result.json"
+    report = _read_json(report_path)
+    if mismatch == "sha256":
+        report["source_sha256"] = "0" * 64
+    elif mismatch == "validator-status":
+        report["status"] = "needs-review"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    (root / "results.json").write_text(json.dumps({"items": [{
+        "source_path": str(source), "run_root": str(package), "source_sha256": batch.sha256(source),
+        "status": "passed", "accepted": True, "full_pdf_coverage": True,
+    }]}), encoding="utf-8")
+
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+    code, payload = batch.run_batch(
+        entries, batch_root=root, origin={}, config={**BATCH_CONFIG, "pages": "2", "min_free_bytes": 1},
+        executor=lambda *_args, **_kwargs: pytest.fail("low space must prevent launching a retry"),
+    )
+    assert code == 75
+    assert payload["strict_accepted_count"] == 0
+    assert payload["summary"]["skipped_existing"] == 0
+    assert payload["summary"]["pending_total"] == 1
+    assert _read_json(root / "results.json")["items"][0]["status"] == "pending"
+
+
+def test_passing_executor_result_without_package_evidence_is_not_counted(tmp_path: Path, monkeypatch):
+    source = _write_pdf(tmp_path / "book.pdf")
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="native-only")
+    root = tmp_path / "batch"
+    monkeypatch.setattr(batch, "_active_conversion_processes", lambda *_: [])
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: pytest.fail("default must disable disk checks"))
+    code, payload = batch.run_batch(
+        entries, batch_root=root, origin={}, config=BATCH_CONFIG,
+        executor=lambda *_args, **_kwargs: {"status": "passed", "accepted": True, "full_pdf_coverage": True},
+    )
+    assert code == 1
+    assert payload["strict_accepted_count"] == 0
+    assert payload["summary"]["failed"] == 1
+
+
+@pytest.mark.parametrize("problem", ["missing", "corrupt", "failed", "needs-review", "index-sha256", "reader"])
+def test_hybrid_resume_never_recovers_from_internal_acceptance_alone(tmp_path: Path, monkeypatch, problem):
+    source = _write_pdf(tmp_path / "hybrid.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    package = root / "registered-hybrid"
+    _write_complete_hybrid_run(package, source=source, selected_pages=[1], total_pages=1)
+    report_path = package / "reports" / "validation-result.json"
+    if problem == "missing":
+        report_path.unlink()
+    elif problem == "corrupt":
+        report_path.write_bytes(b"\xff not json")
+    elif problem == "reader":
+        acceptance_path = package / "acceptance.json"
+        acceptance_path.write_text(json.dumps({
+            **_read_json(acceptance_path), "reader_visual_projection_required": True,
+        }), encoding="utf-8")
+    elif problem == "index-sha256":
+        index_path = package / "index.md"
+        index_path.write_text(index_path.read_text(encoding="utf-8") + "Changed text\n", encoding="utf-8")
+    else:
+        report_path.write_text(json.dumps({**_read_json(report_path), "status": problem}), encoding="utf-8")
+    (root / "results.json").write_text(json.dumps({"items": [{
+        "source_path": str(source), "run_root": str(package), "source_sha256": batch.sha256(source),
+        "status": "running",
+    }]}), encoding="utf-8")
+
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+    code, payload = batch.run_batch(
+        entries, batch_root=root, origin={}, config={**BATCH_CONFIG, "min_free_bytes": 1},
+        executor=lambda *_args, **_kwargs: pytest.fail("low space must prevent launching a retry"),
+    )
+    assert code == 75
+    assert payload["strict_accepted_count"] == 0
+    assert payload["summary"]["running"] == payload["summary"]["skipped_existing"] == 0
+    assert _read_json(root / "results.json")["items"][0]["status"] == "interrupted"
+    assert _read_json(root / "progress-current.json")["active_source"] is None
+
+
+@pytest.mark.parametrize("missing_unit", [False, True])
+def test_hybrid_reuse_replays_page_evidence_even_with_saved_pass(tmp_path: Path, monkeypatch, missing_unit):
+    source = _write_pdf(tmp_path / "book.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route="hybrid")
+    package = batch.run_root_for_entry(root, entries[0])
+    _write_complete_hybrid_run(package, source=source, selected_pages=[1], total_pages=1)
+    reports = package / "reports"
+    unit = package / "page-units" / "p001.md"
+    unit.parent.mkdir()
+    unit.write_text("Page 1 text.\n", encoding="utf-8")
+    route = package / "evidence" / "page-routes" / "p001.json"
+    route.parent.mkdir(parents=True)
+    route.write_text(json.dumps({
+        "page": 1, "status": "passed", "source_sha256": batch.sha256(source),
+        "page_unit_sha256": batch.sha256(unit),
+    }), encoding="utf-8")
+    (reports / "page-completion.json").write_text(json.dumps({
+        "status": "passed", "expected_pages": [1], "completed_pages": [1],
+        **{key: [] for key in batch.hybrid_validator.COVERAGE_EXCEPTIONS},
+    }), encoding="utf-8")
+    (reports / "heading-repair.json").write_text(json.dumps({
+        "status": "passed", "index_sha256": batch.sha256(package / "index.md"),
+        "validation": {"heading_prefix_only": True}, "formatting_validation": {"passed": True},
+    }), encoding="utf-8")
+    probes = []
+
+    def pdfinfo(command, **kwargs):
+        assert command == ["pdfinfo", str(source)]
+        probes.append(command)
+        return SimpleNamespace(stdout="Pages: 1\n")
+
+    monkeypatch.setattr(batch.hybrid_validator.subprocess, "run", pdfinfo)
+    canonical = reports / "validation-result.json"
+    verified = batch.hybrid_validator.validate_package(package, source)
+    assert verified["status"] == "passed"
+    canonical.write_text(json.dumps(verified), encoding="utf-8")
+    saved_pass = canonical.read_bytes()
+    probes.clear()
+    if missing_unit:
+        unit.unlink()
+    (root / "results.json").write_text(json.dumps({"items": [{
+        "source_path": str(source), "run_root": str(package), "source_sha256": batch.sha256(source),
+        "status": "passed",
+    }]}), encoding="utf-8")
+    monkeypatch.setattr(batch.shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
+
+    code, payload = batch.run_batch(
+        entries, batch_root=root, origin={}, config={**BATCH_CONFIG, "min_free_bytes": 1},
+        executor=lambda *_args, **_kwargs: pytest.fail("only replay or pause was expected"),
+    )
+    assert len(probes) == 1
+    assert canonical.read_bytes() == saved_pass
+    assert code == (75 if missing_unit else 0)
+    assert payload["summary"]["skipped_existing"] == (0 if missing_unit else 1)
+    assert payload["strict_accepted_count"] == (0 if missing_unit else 1)
+
+
+@pytest.mark.parametrize("route", ["native-only", "hybrid"])
+def test_default_executor_inspects_new_package_once(tmp_path: Path, monkeypatch, route):
+    source = _write_pdf(tmp_path / "book.pdf")
+    root = tmp_path / "batch"
+    entries = batch.entries_from_paths([source], source_root=tmp_path, route=route)
+    run_root = batch.run_root_for_entry(root, entries[0])
+    inspections = []
+    inspect = batch._inspect_final_completion
+
+    def inspect_once(path, **kwargs):
+        inspections.append((path, kwargs["source_sha256"]))
+        return inspect(path, **kwargs)
+
+    def fake_run(_command, **_kwargs):
+        fixture_writer = _write_complete_hybrid_run if route == "hybrid" else _write_native_replay_run
+        fixture_writer(run_root, source=source, selected_pages=[1], total_pages=1)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(batch.subprocess, "run", fake_run)
+    monkeypatch.setattr(batch, "_active_conversion_processes", lambda *_: [])
+    monkeypatch.setattr(batch, "_inspect_final_completion", inspect_once)
+    monkeypatch.setattr(batch.hybrid_validator, "validate_package", lambda *_: pytest.fail("fresh outputs must not replay"))
+    code, payload = batch.run_batch(entries, batch_root=root, origin={}, config=BATCH_CONFIG)
+    assert code == 0
+    assert payload["strict_accepted_count"] == 1
+    assert inspections == [(run_root, batch.sha256(source))]
+
+
 def test_smoke_only_run_is_not_existing_success(tmp_path: Path):
     source = _write_pdf(tmp_path / "book.pdf", b"smoke-only")
     run_root = tmp_path / "run"
@@ -724,7 +1445,7 @@ def test_smoke_only_run_is_not_existing_success(tmp_path: Path):
         "validation_report": str(smoke_root / "reports" / "validation-result.json"),
     }
 
-    assert batch._existing_success(item, requested_pages="all") is False
+    assert batch._reusable_completion(item, requested_pages="all") is None
 
 
 def test_full_coverage_mismatch_is_not_existing_success(tmp_path: Path):
@@ -744,7 +1465,7 @@ def test_full_coverage_mismatch_is_not_existing_success(tmp_path: Path):
         "validation_report": str(run_root / "reports" / "validation-result.json"),
     }
 
-    assert batch._existing_success(item, requested_pages="all") is False
+    assert batch._reusable_completion(item, requested_pages="all") is None
 
 
 def test_final_progress_must_be_passed_before_existing_run_is_skipped(tmp_path: Path):
@@ -765,7 +1486,7 @@ def test_final_progress_must_be_passed_before_existing_run_is_skipped(tmp_path: 
         "validation_report": str(run_root / "reports" / "validation-result.json"),
     }
 
-    assert batch._existing_success(item, requested_pages="all") is False
+    assert batch._reusable_completion(item, requested_pages="all") is None
 
 
 def test_final_completion_records_markdown_and_package_content_sizes(tmp_path: Path):
@@ -792,7 +1513,32 @@ def test_final_completion_records_markdown_and_package_content_sizes(tmp_path: P
     assert result["page_marker_count"] == 2
     assert result["package_file_count"] >= 4
     assert result["package_total_bytes"] >= result["markdown_total_bytes"] > 0
-    assert result["markdown_file_count"] == 1
+    markdown_files = [run_root / "index.md", run_root / "document-temp.md"] + [
+        run_root / directory / f"p{page:03d}.md"
+        for directory in ("page-units", "backups/page-units-pre-cleanup") for page in (1, 2)
+    ]
+    assert result["markdown_file_count"] == len(markdown_files)
+    assert result["markdown_total_bytes"] == sum(path.stat().st_size for path in markdown_files)
+
+
+def test_book_working_copy_neither_changes_nor_substitutes_for_acceptance(tmp_path: Path):
+    source = _write_pdf(tmp_path / "《书名》.pdf")
+    run_root = tmp_path / "run"
+    _write_complete_run(run_root, source=source, selected_pages=[1], total_pages=1)
+    index = run_root / "index.md"
+    original = index.read_bytes()
+    copy = run_root / "书名.md"
+    copy.write_text("手工排版的工作稿", encoding="utf-8")
+
+    def accepted():
+        return batch._inspect_final_completion(
+            run_root, source_path=str(source), source_sha256=batch.sha256(source), requested_pages="all",
+        )["accepted"]
+
+    assert accepted() is True
+    copy.write_bytes(original)
+    index.write_text("失去页标记的正式稿", encoding="utf-8")
+    assert accepted() is False
 
 
 def test_heading_only_markdown_is_not_accepted_as_completed_content(tmp_path: Path):
@@ -867,7 +1613,7 @@ def test_image_only_page_is_accepted_when_relative_asset_exists(tmp_path: Path):
     run_root = tmp_path / "run"
     _write_complete_run(run_root, source=source, selected_pages=[1], total_pages=1)
     assets = run_root / "assets"
-    assets.mkdir()
+    assets.mkdir(exist_ok=True)
     (assets / "page-001.png").write_bytes(b"png")
     (run_root / "index.md").write_text(
         "<!-- page:1 -->\n\n## 第 1 页\n\n![页面](assets/page-001.png)\n",
@@ -902,7 +1648,7 @@ def test_invoke_single_conversion_does_not_apply_stage_timeout_to_whole_book(
         assert not run_root.exists()
         kwargs["stdout"].write('{"final_status":"passed"}\n')
         kwargs["stdout"].flush()
-        _write_complete_run(
+        _write_native_replay_run(
             run_root,
             source=source,
             selected_pages=[1],
@@ -953,7 +1699,7 @@ def test_invoke_single_conversion_returns_only_bounded_log_tails(
         )
         kwargs["stdout"].flush()
         kwargs["stderr"].flush()
-        _write_complete_run(
+        _write_native_replay_run(
             run_root,
             source=source,
             selected_pages=[1],

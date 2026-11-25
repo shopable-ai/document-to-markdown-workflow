@@ -16,11 +16,13 @@ import gzip
 import hashlib
 import http.client
 import importlib
+import io
 import json
 import logging
 import math
 import os
 import re
+import selectors
 import shutil
 import statistics
 import struct
@@ -352,13 +354,79 @@ def discover_page_units(run_root: Path) -> list[int]:
 
 
 def png_dimensions(path: Path) -> tuple[int, int]:
-    header = path.read_bytes()[:24]
+    with path.open("rb") as stream:
+        header = stream.read(24)
     if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
         raise RunFailure(f"不是有效 PNG：{path}")
     return struct.unpack(">II", header[16:24])
 
 
-def render_or_reuse_page(source: Path, page: int, dpi: int, target: Path) -> dict[str, Any]:
+_FAST_PPM_LIMIT = 64 * 1024 * 1024
+_FAST_PPM_TIMEOUT = 30
+_POPPLER_PPM_HEADER = re.compile(rb"P6\n([0-9]{1,8}) ([0-9]{1,8})\n255\n")
+
+
+def _bounded_poppler_ppm(command: list[str]) -> io.BytesIO | None:
+    """Capture one raw frame with bounded memory and no intermediate disk write."""
+    buffer = io.BytesIO()
+    deadline = time.monotonic() + _FAST_PPM_TIMEOUT
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+        assert process.stdout is not None
+        try:
+            with selectors.DefaultSelector() as ready:
+                ready.register(process.stdout, selectors.EVENT_READ)
+                while ready.select(max(0, deadline - time.monotonic())):
+                    block = os.read(process.stdout.fileno(), 256 * 1024)
+                    if not block:
+                        if process.wait(timeout=max(0, deadline - time.monotonic())) == 0:
+                            buffer.seek(0)
+                            return buffer
+                        break
+                    if buffer.tell() + len(block) > _FAST_PPM_LIMIT or time.monotonic() >= deadline:
+                        break
+                    buffer.write(block)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            if process.poll() is None:
+                process.kill()
+    return None
+
+
+def _render_fast_png(command: list[str], dpi: int, rendered: Path) -> dict[str, float] | None:
+    started = time.monotonic()
+    try:
+        raw = _bounded_poppler_ppm(command)
+    except OSError:
+        return None  # The legacy command will report the Poppler error.
+    if raw is None:
+        return None
+    with raw:
+        with raw.getbuffer() as data:
+            header = _POPPLER_PPM_HEADER.match(data)
+            if not header:
+                return None
+            width, height = (int(value) for value in header.groups())
+            if not width or not height or len(data) != header.end() + 3 * width * height:
+                return None
+        try:
+            with Image.open(raw, formats=["PPM"]) as frame:
+                if frame.mode != "RGB" or frame.size != (width, height):
+                    return None
+                frame.load()
+                raster_seconds = time.monotonic() - started
+                frame.save(rendered, format="PNG", dpi=(dpi, dpi), compress_level=6)
+        except (Image.UnidentifiedImageError, ValueError):
+            return None
+    return {
+        "raster_wall_seconds": raster_seconds,
+        "png_encode_wall_seconds": time.monotonic() - started - raster_seconds,
+    }
+
+
+def render_or_reuse_page(
+    source: Path, page: int, dpi: int, target: Path, *, fast_png: bool = False,
+) -> dict[str, Any]:
     if target.exists():
         if not target.is_file() or target.stat().st_size == 0:
             raise RunFailure(f"已有页面图无效，拒绝覆盖：{target}")
@@ -379,32 +447,23 @@ def render_or_reuse_page(source: Path, page: int, dpi: int, target: Path) -> dic
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"render-p{page:03d}-", dir=target.parent) as raw:
         prefix = Path(raw) / f"page-{page:03d}"
-        started = time.monotonic()
-        completed = subprocess.run(
-            [
-                executable,
-                "-f",
-                str(page),
-                "-l",
-                str(page),
-                "-r",
-                str(dpi),
-                "-png",
-                "-singlefile",
-                str(source),
-                str(prefix),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        wall_seconds = time.monotonic() - started
         rendered = prefix.with_suffix(".png")
-        if completed.returncode != 0 or not rendered.is_file() or rendered.stat().st_size == 0:
-            raise RunFailure(
-                f"第 {page} 页渲染失败：exit={completed.returncode} "
-                f"{completed.stderr.strip()}"
+        command = [executable, "-f", str(page), "-l", str(page), "-r", str(dpi)]
+        started = time.monotonic()
+        timings = _render_fast_png([*command, "-singlefile", str(source)], dpi, rendered) if fast_png else None
+        if timings is None:
+            completed = subprocess.run(
+                [*command, "-png", "-singlefile", str(source), str(prefix)],
+                capture_output=True,
+                text=True,
+                check=False,
             )
+            if completed.returncode != 0 or not rendered.is_file() or rendered.stat().st_size == 0:
+                raise RunFailure(
+                    f"第 {page} 页渲染失败：exit={completed.returncode} "
+                    f"{completed.stderr.strip()}"
+                )
+        wall_seconds = time.monotonic() - started
         png_dimensions(rendered)
         if target.exists():
             raise RunFailure(f"页面图在渲染期间出现，拒绝覆盖：{target}")
@@ -419,6 +478,8 @@ def render_or_reuse_page(source: Path, page: int, dpi: int, target: Path) -> dic
         "dpi": dpi,
         "reused": False,
         "wall_seconds": wall_seconds,
+        **({"renderer": "poppler-rgb-pillow-png", **timings} if timings is not None else
+           {"renderer": "poppler-png-fallback"} if fast_png else {}),
     }
 
 

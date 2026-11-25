@@ -1,4 +1,4 @@
-# 局域网原生 PDF 批量转换说明
+# 局域网 PDF 批量转换说明
 
 ## 这份说明为什么放在这里
 
@@ -14,26 +14,45 @@
 适用于以下情况：
 
 - 已经做过 PDF 路线检测，手里有 `report.json`、`PDF转换路线总览.md` 或 `原生文本路线.txt`。
-- 想按既有路线报告分别执行 `native-only`、`hybrid` 或 `vision-only` 队列。
-- 想沿用现有单文件入口 `adapters/lan_pdf_markdown_graph.py --no-model`，但不想手工一个个敲命令。
+- 想通过正式队列将两份及以上 PDF 转成独立工程包（混合输入只把 PDF 子集交给该队列）。
+- 想用逐页 `hybrid`，或按预检结论处理获准走 `native-only` 的文件。
 - 想保留批次台账、逐文件输出映射和续跑能力。
 
 不适用于以下情况：
 
 - 把多个来源拼成一个伪文档。
-- 把 `adapters/workflow_a_batch.py` 当作当前生产入口。
+- 把仍 blocked 的通用 `adapters/workflow_a_batch.py` 或单本分页的 `native-pdf-batch` 当作正式多 PDF 入口。
 
-## 推荐入口
+## 正式多 PDF 入口
 
-当前批量入口是：
+将要处理的 PDF 写入 UTF-8 清单，每行一个绝对路径；不把目录、旧路线标签、非 PDF 或相对路径写入该清单。
+若有路线检测报告，可先从批准的分流结果选出对应文件，再写入清单。转换交给正式后台队列，不临时写循环或后台脚本：
 
 ```bash
-python3 adapters/lan_pdf_markdown_batch.py --help
+python3 adapters/pdf_background_task.py start \
+  --task-type pdf-collection \
+  --source-list "/absolute/path/to/pdfs.txt" \
+  --output-root "/absolute/path/to/output-root" \
+  --route hybrid \
+  --pages all
 ```
 
-它会逐个调用现有单文件入口，不改写单文件脚本的行为边界。
+`hybrid` 按原有逐页规则选择 `native-only`、`native-plus-visual` 或 `visual-only`；只有经预检批准，才把
+批次路线改为 `--route native-only`。正式队列不接受整本 `vision-only` 路线。单份 PDF 和非 PDF
+继续使用原单来源入口，不自动配对；每本仍按自己的阶段门和独立验收处理。
 
-日常直接转换一个来源目录时，使用：
+新批次根为 `<output-root>/conversions/<route>`；已有官方批次可在启动命令中加
+`--run-root <existing-exact-route-batch-root>` 采纳原地运行。后台状态根默认是
+`~/.codex/background-tasks`，不是路线批次根。管理器按准确批次根生成稳定 ID，不支持手工 `--run-id`。
+同根已有活动队列返回 `already-running`；另一条路线持有同集合锁返回 `collection-busy`，均不得另开。
+旧的非托管队列不会收到伪造的 `run_id` 或取消命令。托管任务用 `status <run_id>` 查询一次
+`batch_summary`（文件级计数）、`active_source`、`strict_accepted_count` 和 `halt_reason`，用
+`cancel <run_id>` 取消。启动只返回一次摘要，详见 [后台管理器](pdf-background-task.zh.md)。
+
+## 底层批次适配器与旧批次用法
+
+下面的 `adapters/lan_pdf_markdown_batch.py` 示例保留供底层适配器、既有批次和诊断参考；
+常规多 PDF 生产请求从上面的托管入口进入。底层直接发现来源目录的参数示例：
 
 ```bash
 python3 adapters/lan_pdf_markdown_batch.py \
@@ -64,11 +83,17 @@ python3 adapters/lan_pdf_markdown_batch.py \
 `machine_resource_policy`。锁文件默认位于 `~/.codex/resource-slots/pdf-markdown/`；进程异常退出
 时由操作系统释放，同一转换的子进程继承父槽，避免内部阶段重复申请而自锁。
 
-## 最快用法
+逐页混合路线先核对局域网 Ollama 是否安装了配置的确切视觉模型。服务在线但模型缺失，或视觉页请求失败时，
+改用同一本书内的 Apple Vision OCR 候选。保留原失败记录；回退仅在来源、OCR、Markdown 与原始页图的证据
+核对后进入工程包。保留原图，不推断图示关系，不跳过独立读者验收。原地续跑仍优先复用已通过的书或页。
+单本读者副本初次采集第二路 OCR 时，最多四个页级本机任务并发；保留页顺序和逐页缓存。独立验收仍离线按序重读，
+这不增加整书或远程视觉模型并发。
+
+## 底层路线报告与清单参数示例
 
 ### 方式一：直接读取路线检测报告
 
-这是首选方式。它能直接读取 `report.json`，按 `route` 选出待转换文件，并保留来源相对路径信息。
+底层适配器能直接读取 `report.json`，按 `route` 选出待转换文件，并保留来源相对路径信息。
 
 ```bash
 python3 adapters/lan_pdf_markdown_batch.py \
@@ -98,7 +123,7 @@ python3 adapters/lan_pdf_markdown_batch.py \
 
 ### 方式三：先小批量试跑
 
-第一次建议先限制数量：
+底层诊断时可限制数量：
 
 ```bash
 python3 adapters/lan_pdf_markdown_batch.py \
@@ -110,14 +135,26 @@ python3 adapters/lan_pdf_markdown_batch.py \
 
 ## 续跑方式
 
-第一次运行后，会生成一个批次目录。后续要续跑同一批时，优先复用同一个 `--batch-root`：
+已有未活动的托管任务时，`start` 返回 `already-registered`，附 `existing_status` 和 `resume_command`。
+需要继续时先按下节核对跨路线总账，再按原 ID 运行 `python3 adapters/pdf_background_task.py resume <run_id>`。
+保持原路线、来源清单、批次根及逐书包，继续前核验原批次登记证据。即使任务为 `completed`，也可原地重验，
+跳过仍严格验收通过的来源。不要重新建队。`--min-free-bytes` 托管默认是
+`2147483648` 字节，仅在启动下一本前检查。空间不足时返回 `paused`，释放空间后按同一 run ID
+续跑并沿用原设置；不保证单本执行中不会耗尽磁盘。
+
+续跑先核对是否有上一轮残留转换进程，再复验包。原生包核对原始分页证据、清洗前备份、合并稿、
+当前页单元及最终 `index.md`；混合包重新运行现有独立验收器。旧结果行的 `passed`、内部接受记录
+或单独存在的索引都不能替代复验。
+
+以下旧的底层调用示例仅用于识别原批次布局或适配器诊断；接管未托管的官方批次用上节 `--run-root`，
+已有 run ID 则使用 `resume`。旧适配器的 `--batch-root` 形式为：
 
 ```bash
 python3 adapters/lan_pdf_markdown_batch.py \
   --batch-root "/absolute/path/to/existing-batch-root"
 ```
 
-如果你更想显式重复原始选择条件，也可以：
+旧适配器显式携带原始选择条件的形式为：
 
 ```bash
 python3 adapters/lan_pdf_markdown_batch.py \
@@ -141,7 +178,7 @@ python3 adapters/lan_pdf_markdown_batch.py \
 ├── _consolidated/     # 来源级 strict acceptance 总账，不放每本书工程包
 ├── native-only/       # 固定路线批次根，含 manifest/results 和每本工程包
 ├── hybrid/
-└── vision-only/
+└── vision-only/      # 已登记路线证据；不是 pdf-collection 的可选路线
 ```
 
 - `_current/CURRENT_PATHS.md` 是给人和下次会话看的固定入口；后续续接先读它。
@@ -154,7 +191,7 @@ python3 adapters/lan_pdf_markdown_batch.py \
 - 旧时间戳目录不删除、不覆盖；只登记到 `_current/directory-registry.json/csv`，作为历史证据
   或被 `_consolidated` 选择的候选 run root。
 - 如果固定路线目录正在运行，只能更新 `_current` 指针或登记表，不移动其包。迁移已停批次时，必须核对包内文件哈希及验收结果，更新活动索引；若历史证据仍引用原绝对路径，可保留定向的兼容别名，索引始终使用真实包路径。
-- 只有 `_consolidated` 证明 expected sources 全部 strict accepted 后，才允许创建最终读者层目录
+- 单路线批次 `completed` 不等于集合通过；只有 `_consolidated` 证明 expected sources 全部 strict accepted 后，才允许创建最终读者层目录
   并运行集合导出脚本。
 
 如果旧目录只完成 smoke 或 full extraction 中途失败，续跑会保留旧证据，并在同一个
@@ -216,16 +253,15 @@ python3 adapters/lan_pdf_markdown_graph.py \
 
 ## 当前边界
 
-- 文档级 `native-only` 会显式使用无模型路线；文档级 `hybrid` 和 `vision-only` 都进入
-  逐页混合路由，由页面证据决定 `native-only`、`native-plus-visual` 或 `visual-only`，
-  不会把整本书强制一次性送入视觉模型。
+- 正式队列中，文档级 `native-only` 显式使用无模型路线，`hybrid` 按页面证据决定
+  `native-only`、`native-plus-visual` 或 `visual-only`。旧底层批次可带有 `vision-only` 标签，不是正式队列可选路线。
 - 新的全页 page-hybrid 工程包验收后生成内部 `reader/index.md`、`reports/reader-visual-audit.json` 和
   `reports/reader-visual-validation.json`。只在副本跳过已通过整页字符、阅读顺序和非文字结构门的图片；
   低置信与待裁页仍保留。工程验收、读者副本字节验收与语义待复核分别记录；内部副本不是批量成品目录。
 - 3.0.0 只对有扫描底图且无已证实图形的 Apple Vision 候选采集本地 Tesseract `chi_sim+eng`；未安装或冲突时保留页图。`evidence/reader-scan-ocr/` 保存逐页引擎/模型、耗时与绑定；独立验收重放不再启动 OCR。已锁定的旧包不升级或改写。
 - 同一个 `batch-root` 续跑时只跳过已有独立验收为 `passed` 的书；失败、半成品和
   `needs-review` 继续使用原 source run root 的恢复证据，不另建替代成品目录。
-- 真实路线清单里如果有某些 PDF 已经不存在，批量入口会跳过这些失效路径，并把它们记录在 `manifest.json -> origin -> missing_sources`，不会因为单个失效条目让整批中断。
+- 旧底层适配器读取路线清单时，会跳过已不存在的 PDF 并记录在 `manifest.json -> origin -> missing_sources`；不要把这个行为当作托管 `--source-list` 的输入规则。
 
 ## 什么时候需要 `.prompt/`
 

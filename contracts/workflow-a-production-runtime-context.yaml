@@ -1,6 +1,6 @@
 contract: workflow-a-production-runtime-context
 id: workflow-a-production-runtime-context
-version: 1.1.0
+version: 1.3.0
 human_reference: contracts/CONTRACTS.md#contract-workflow-a-production-runtime-context
 lifecycle_status: active
 status: active
@@ -13,10 +13,10 @@ applies_when:
 
 default_context:
   load:
-    - 当前用户输入中的 source、output_root、pages
+    - 当前用户输入中的 source 或 PDF 来源清单、output_root、pages
     - 本契约
   load_when_needed:
-    - workflow-registry.yaml 中 document-to-markdown-assets 的 execution_entrypoint、default_pages、production_runtime_contract
+    - workflow-registry.yaml 中 document-to-markdown-assets 的 execution_entrypoint、pdf_collection_entrypoint、default_pages、production_runtime_contract
     - contracts/workflow-a-source-runner.yaml
     - contracts/workflow-a-output-layout.yaml
     - 当前运行的 progress-current.json
@@ -47,17 +47,73 @@ execution:
       entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <pdf> --run-root <exact-run-root> --pages <selector>
       default_mode: page-hybrid
       page_routes: [native-only, native-plus-visual, visual-only]
+      visual_worker_recovery: probe-exact-installed-LAN-model; on-unavailable-or-failed-request-use-local-OCR-in-a-separate-attempt; verify-and-retain-source-render-and-raw-OCR; keep-reader-gate
+      local_ocr_render_opt_in:
+        environment: WORKFLOW_APPLE_VISION_FAST_PNG=1
+        activation: inherited-at-safe-worker-start-or-resume; leave-already-running-worker-alone
+        raster: same Poppler RGB pixels and DPI; bounded in-memory frame, lossless PNG, legacy-render fallback
+        evidence: reuse-existing-assets-without-reencoding; hash-and-validate-new-bytes-in-their-own-package
+        applies_to: newly-rendered Apple Vision pages only; no changes to route, OCR, or acceptance
       reader_visual_gate: verify-final-page-text-and-order-including-unrendered-pages; lock-v3-local-second-ocr-for-eligible-scans; preserve-scan-fallback-without-independent-transcription
+      reader_scan_collection_concurrency: up-to-four-local-pages-within-one-book; independent-validation-replays-offline
       explicit_full_visual: --visual-only
       existing_run_resume: pass-the-exact-run-root-and---resume
       no_prompt_rule_repetition: true
+      editable_book_markdown:
+        scope: accepted-full-pdf-native-or-page-hybrid
+        canonical: index.md
+        location: <package>/<source-title>.md
+        policy: byte-for-byte-copy-after-acceptance; strip-outer-book-title-marks; create-once; preserve-manual-edits
+        purpose: per-book-formatting-and-web-import; not-acceptance-evidence-or-collection-export
       batch_packages:
         new_batch_run_root: <output-root>/conversions/<route>/<package>
         copy_source_ancestry_into_output: false
         resume: use-registered-exact-run-root
         relocate_active_packages: false
+    docx:
+      entrypoint: python3 adapters/workflow_a_source_runner.py --source <docx> --output-root <dir> --pages all --execute
+      default_mode: local-pandoc-whole-document-native
+      background_task_type: workflow-a
+      validator: adapters/validate_docx_markdown.py
+      outputs: [index.md, optional-flat-assets, reports/validation-result.json]
+      pagination: Word metadata is a hint; no partial selector or page-render claim
+      image_only: keep native image order and bytes; needs-review; no OCR by this route
+      engineering_output_supported: false
     non_pdf:
       entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --pages <selector> --execute
+  pdf_collection:
+    applies_to: at-least-two-pdfs-including-the-pdf-subset-of-mixed-input
+    entrypoint: python3 adapters/pdf_background_task.py start --task-type pdf-collection --source-list <list> --output-root <root> --route <hybrid|native-only> --pages all
+    parameter_discovery: python3 adapters/pdf_background_task.py start --help
+    source_list: UTF-8; one absolute PDF path per line
+    routes: [hybrid, native-only]
+    recommended_explicit_route: hybrid
+    hybrid_mode: existing-page-hybrid
+    native_only_requires: route-preflight-approval
+    full_visual_supported: false
+    queue: serial; one-independent-package-per-source
+    pages: all by default; explicit selectors allowed but do not imply full-source acceptance
+    mixed_inputs: 按类型分流；单份 PDF 与非 PDF 继续使用对应单来源入口，不自动配对。
+    forbidden_substitutes: [ad-hoc-conversion-loop, ad-hoc-background-script, native-pdf-batch, blocked-generic-workflow-a-batch]
+    new_batch_root: <output-root>/conversions/<route>
+    adopt_existing_batch: --run-root <existing-exact-registered-official-route-batch-root>
+    lifecycle:
+      identity: stable-run-id-derived-from-exact-batch-root; manual --run-id unsupported
+      admission: hold-official-collection-lock-before-started; transfer-lock-to-detached-worker
+      start_without_launch:
+        active_same_root: already-running
+        active_other_route_holding_collection_lock: collection-busy
+        unmanaged_queue: report existing lock owner without fabricating run_id or cancel_command
+        inactive_registered: already-registered; return existing_status and resume_command
+      resume: retain route, source list and packages; revalidate original batch registration evidence; completed queues may also resume in place and skip strictly accepted sources
+      missing_registration: once-registered-refuse-resume-without-manifest
+      disk_precheck: --min-free-bytes defaults to 2147483648; check only before starting the next PDF; pause if below threshold and resume with the same setting after freeing space; no in-book guarantee
+      status_command: status <run_id>
+      status_fields: [batch_summary, active_source, strict_accepted_count, halt_reason, current_phase, phase_source, current_page, progress_checkpoint]
+      mode: detached-silent
+    acceptance:
+      before_cross_route_continuation: read _current, refresh _consolidated/source-consolidation.json from all registered run roots, and continue only sources not strict accepted
+      reader_collection_export: requires 100-percent source-level strict acceptance; one route batch completing is not collection acceptance
   parameter_discovery: python3 adapters/workflow_a_source_runner.py --help
   default_pages: all
   source_isolation: one-source-per-run
@@ -74,8 +130,9 @@ execution:
     interaction_contract: contracts/long-task-interaction.yaml
     manager: python3 adapters/pdf_background_task.py start --task-type <native-pdf|native-pdf-batch|local-ocr-pdf|hybrid-pdf|visual-pdf|workflow-a>
     pdf_default_task_type: hybrid-pdf
+    pdf_collection_task_type: pdf-collection
     default_mode: detached-silent
-    after_start: 返回一次 started 摘要后立即结束当前交互，不持续 write_stdin、ps 或进度文件轮询。
+    after_start: 返回一次启动结果摘要后立即结束当前交互，不持续 write_stdin、ps 或进度文件轮询。
 
 observability:
   before_run: [source_path, media_type, sha256, total_pages, selected_pages]

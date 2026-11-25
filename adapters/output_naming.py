@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import os
 import re
+import shutil
+import tempfile
 import unicodedata
 
 
@@ -82,6 +85,48 @@ def source_markdown_filename(source: Path | str, *, fallback: str = "document", 
 
     value = source.stem if isinstance(source, Path) else str(source)
     return f"{readable_markdown_stem(value, fallback=fallback, max_chars=max_chars)}.md"
+
+
+def book_markdown_filename(source: Path) -> str:
+    """Name an editable PDF copy without colliding with package Markdown."""
+
+    title = unicodedata.normalize("NFKC", source.stem).strip()
+    wrapped = re.fullmatch(r"《([^《》]+)》", title)
+    stem = readable_markdown_stem(wrapped[1] if wrapped else title)
+    # Filesystems can limit component length in bytes rather than characters.
+    stem = stem.encode("utf-8")[:250].decode("utf-8", errors="ignore").rstrip(" .")
+    if stem.casefold() in {"index", "document-temp", "document-temp.raw", "document-temp.pre-heading"}:
+        stem += "-书稿"
+    return f"{stem}.md"
+
+
+def write_book_markdown_copy(index: Path, source: Path) -> Path:
+    """Publish an independent copy once, keeping any later manual edits."""
+
+    target = index.with_name(book_markdown_filename(source))
+    if not target.is_file() or target.is_symlink():
+        with tempfile.TemporaryDirectory(prefix=".book-markdown-", dir=index.parent) as directory:
+            temporary = Path(directory) / "copy.md"
+            shutil.copyfile(index, temporary)
+            try:
+                # Link the completed temporary copy, not index.md itself. A
+                # same-named file appearing meanwhile must not be replaced.
+                os.link(temporary, target)
+            except FileExistsError:
+                if not target.is_file() or target.is_symlink():
+                    raise
+    if target.samefile(index):
+        raise FileExistsError(f"Editable Markdown must not share a file with index.md: {target}")
+    return target
+
+
+def book_markdown_delivery(index: Path, source: Path) -> dict[str, str]:
+    """Report working-copy delivery separately from canonical acceptance."""
+
+    try:
+        return {"source_named_markdown": str(write_book_markdown_copy(index, source))}
+    except OSError as exc:
+        return {"source_named_markdown_error": str(exc)}
 
 
 def resolve_source_markdown_target(

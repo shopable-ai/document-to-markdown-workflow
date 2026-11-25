@@ -1,6 +1,6 @@
 contract: long-task-interaction
 id: long-task-interaction
-version: 1.1.0
+version: 1.3.0
 human_reference: contracts/CONTRACTS.md#contract-long-task-interaction
 lifecycle_status: active
 status: active
@@ -16,6 +16,7 @@ scope:
     user_query_consumption: 用户主动查询时读取一次最新快照并返回一次摘要的消耗。
 
 task_state:
+  default_state_root: ~/.codex/background-tasks
   latest_snapshot: progress-current.json
   lifecycle_ledger: progress.jsonl
   process_output: run.log
@@ -45,6 +46,7 @@ task_state:
 dialogue_policy:
   start:
     max_messages: 1
+    fields_scope: successful-managed-launch
     fields: [status, run_id, pid, task_type, run_root, task_root, log_path, status_command, cancel_command]
   periodic_progress:
     max_messages: 0
@@ -63,10 +65,11 @@ dialogue_policy:
       local-ocr-pdf: outer lifecycle plus local OCR page snapshot
       hybrid-pdf: outer lifecycle plus page route and completion snapshots
       visual-pdf: outer lifecycle plus the runner current page snapshot
-      workflow-a: outer lifecycle while running; terminal page count comes from the runner final JSON already stored in run.log
+      workflow-a: outer lifecycle while running; terminal scope comes from final runner JSON; DOCX reports the exact package, independent validator status and document count, not rendered pages
+      pdf-collection: outer lifecycle and read-only current source, phase, checkpoint freshness, file counts and halt reason; no page history
   terminal:
     max_messages: 1
-    allowed_when: [completed, cancelled, failed, budget-exhausted]
+    allowed_when: [completed, needs-review, cancelled, failed, budget-exhausted]
     rule: 终态摘要不得复述逐页历史。
   allowed_agent_events: [start, exception, explicit-user-query, completed, cancelled]
 
@@ -85,7 +88,7 @@ agent_orchestration:
 
 commands:
   entrypoint: python3 adapters/pdf_background_task.py
-  start: start --task-type <approved-route> --source <pdf> --output-root <dir> --pages <selector>
+  start: start --task-type <approved-route> --source <file> --output-root <dir> --pages <selector>
   status: status <run_id>
   cancel: cancel <run_id>
   resume: resume <run_id>
@@ -96,9 +99,55 @@ commands:
     hybrid-pdf: supported-reuse-existing-run-root-with-page-route-validation
     visual-pdf: supported-reuse-existing-run-root
     workflow-a: unsupported-until-source-runner-has-a-verified-in-place-resume-contract
-  task_type_rule: start 必须显式传入 native-pdf、native-pdf-batch、local-ocr-pdf、hybrid-pdf、visual-pdf 或 workflow-a；后台管理层不得替调用方静默改变已选执行路线。
+  task_type_rule: start 必须显式传入已批准的任务类型；单来源沿用以上类型，多 PDF 用 pdf-collection，后台管理层不得替调用方静默改路线。
   stdout_rule: 每次显式命令只输出一个紧凑 JSON；后台 worker 的 stdout 和 stderr 只写 run.log。
   cancel_rule: 只在 PID identity 匹配时终止整个进程组，确认无残留后写 cancelled。
+
+pdf_collection:
+  start: start --task-type pdf-collection --source-list <list> --output-root <root> --route <hybrid|native-only> --pages all
+  source_list: UTF-8; one absolute PDF path per line; at least two PDF sources
+  route_policy: 显式 hybrid 为推荐的逐页混合路线；native-only 需预检批准；不支持整本视觉集合。
+  run_root:
+    new: <output-root>/conversions/<route>
+    existing: --run-root <existing-exact-registered-official-route-batch-root>
+  identity:
+    run_id: stable-derived-from-exact-batch-root
+    manual_run_id_supported: false
+  admission: acquire-and-inherit-official-collection-lock-before-started
+  pages: all by default; explicit selection is not proof of whole-PDF acceptance
+  start_without_launch:
+    # These outcomes do not change the existing queue's lifecycle status.
+    active_same_root: already-running
+    active_other_route_holding_collection_lock: collection-busy
+    unmanaged_queue: managed=false; do not fabricate run_id or cancel_command
+    inactive_registered:
+      status: already-registered
+      fields: [existing_status, resume_command]
+  resume:
+    command: resume <run_id>
+    retain: [route, source_list, run_root, source_packages, min_free_bytes]
+    verify_before_continuing: original-batch-registration-evidence
+    refuse_if_registered_manifest_missing: true
+    completed_supported: true
+    completed_behavior: revalidate-in-place-and-skip-still-strict-accepted-sources
+  snapshot_fields: [batch_summary, active_source, strict_accepted_count, halt_reason, current_phase, phase_source, current_page, progress_checkpoint]
+  snapshot_freshness: suppress-old-inner-snapshot-counts-and-reasons-until-this-attempt-writes-one
+  snapshot_observation:
+    current_page: only-from-a-matching-live-child; null-when-not-observable
+    progress_checkpoint: latest-observed-page-scan-ocr-book-or-batch checkpoint; not-acceptance-evidence
+    no_recent_checkpoint_seconds: 300
+    no_recent_checkpoint_is_not_a_hang_verdict: true
+    recentness_sources: current dispatch and checkpoints; no historical log replay
+  cancellation_without_verified_identity: do-not-signal; report unverified group members or unknown, never claim zero residuals
+  disk_precheck:
+    flag: --min-free-bytes
+    default_bytes: 2147483648
+    check_when: before-starting-next-pdf-only
+    below_threshold_status: paused
+    recovery: free-space-then-resume-with-original-setting
+    guarantees_space_during_single_pdf: false
+  completed_scope: one-route-batch-only; does-not-imply-cross-route-strict-acceptance
+  interaction_mode: detached-silent; reuse status/cancel/resume
 
 invariants:
   - 后台任务不能依赖当前对话、前台工具会话或 Agent 持续轮询。

@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
+import stat
 import subprocess
 import sys
 from typing import Any, Iterator
@@ -22,9 +24,13 @@ from urllib.parse import unquote, urlparse
 
 try:
     from output_naming import package_timestamp, readable_package_stem
+    import pdf_disk_guard as disk_guard
+    import pdf_hybrid_output_validator as hybrid_validator
     import pdf_resource_slots as resource_slots
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from .output_naming import package_timestamp, readable_package_stem
+    from . import pdf_disk_guard as disk_guard
+    from . import pdf_hybrid_output_validator as hybrid_validator
     from . import pdf_resource_slots as resource_slots
 
 
@@ -37,6 +43,10 @@ LEGACY_LAYOUT = "nested-runs-v1"
 STATUS_VALUES = {"passed", "failed", "needs-review"}
 ROUTE_VALUES = {"native-only", "hybrid", "vision-only"}
 FINAL_STAGE = "heading-audit-repair-validation"
+FINAL_VALIDATION_REPORT = Path("reports/validation-result.json")
+DISK_HEADROOM_REASON = disk_guard.PAUSE_REASON
+RESIDUAL_PROCESSES_REASON = "residual-conversion-processes"
+PAUSED_EXIT_CODE = disk_guard.PAUSE_EXIT
 CONVERSION_PROCESS_NAMES = (
     "lan_pdf_markdown_batch.py",
     "lan_pdf_markdown_graph.py",
@@ -89,6 +99,7 @@ def acquire_collection_lock(
     lock_root: Path,
     batch_root: Path,
     entries: list[SourceEntry],
+    inherited_fd: int | None = None,
 ) -> Iterator[Path]:
     """Allow only one top-level queue beneath the same collection root."""
 
@@ -103,7 +114,19 @@ def acquire_collection_lock(
             f"resume only after clearing the recorded safety condition"
         )
     lock_path = lock_root / ".pdf-collection-queue.lock"
-    with lock_path.open("a+", encoding="utf-8") as handle:
+    if inherited_fd is None:
+        lock_handle = lock_path.open("a+", encoding="utf-8")
+    else:
+        try:
+            fd_record = os.fstat(inherited_fd)
+            if not stat.S_ISREG(fd_record.st_mode) or not os.path.samestat(fd_record, lock_path.stat()):
+                raise ValueError("descriptor does not refer to the collection lock's regular file")
+            if fcntl.fcntl(inherited_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDWR:
+                raise ValueError("descriptor must be readable and writable")
+            lock_handle = os.fdopen(os.dup(inherited_fd), "r+", encoding="utf-8")
+        except (OSError, ValueError, OverflowError) as exc:
+            raise BatchLockError(f"invalid inherited collection lock fd {inherited_fd}: {exc}") from exc
+    with lock_handle as handle:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -127,7 +150,8 @@ def acquire_collection_lock(
         try:
             yield lock_path
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            if inherited_fd is None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _source_preflight_error(entry: SourceEntry) -> str | None:
@@ -227,7 +251,7 @@ def _write_csv_atomic(path: Path, fieldnames: list[str], rows: list[dict[str, An
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -607,6 +631,12 @@ def _load_manifest(batch_root: Path) -> dict[str, Any] | None:
     return _read_json(batch_root / "manifest.json")
 
 
+def _manifest_pages(manifest: dict[str, Any] | None) -> str | None:
+    config = (manifest or {}).get("config")
+    pages = config.get("pages") if isinstance(config, dict) else None
+    return pages if isinstance(pages, str) else None
+
+
 def _load_results(batch_root: Path) -> list[dict[str, Any]]:
     payload = _read_json(batch_root / "results.json") or {}
     items = payload.get("items")
@@ -731,29 +761,236 @@ def _registered_run_roots(
     return roots
 
 
+def _matches_requested_pages(selector: str, selected: list[int], total: int) -> bool:
+    if selector.strip().lower() == "all":
+        return len(selected) == total and all(page == i for i, page in enumerate(selected, 1))
+    requested: set[int] = set()
+    try:
+        for token in selector.split(","):
+            if not token.strip():
+                continue
+            first, separator, last = token.strip().partition("-")
+            start = int(first)
+            end = int(last) if separator else start
+            if not 1 <= start <= end <= total:
+                return False
+            requested.update(range(start, end + 1))
+    except ValueError:
+        return False
+    return bool(requested) and selected == sorted(requested)
+
+
+def _native_extraction_root(run_root: Path, summary: dict[str, Any]) -> Path | None:
+    legacy_roots = (Path(".stages/native-pages"), Path("batch-run"))
+    command = _read_json(run_root / "evidence" / "batch-command.json") or {}
+    result = command.get("parsed_result")
+    extracted = result.get("summary") if isinstance(result, dict) else None
+    recorded = extracted.get("run_root") if isinstance(extracted, dict) else None
+    if isinstance(recorded, str) and Path(recorded).is_absolute():
+        origin = summary.get("run_root")
+        for anchor in (run_root, Path(origin) if isinstance(origin, str) else run_root):
+            if not Path(recorded).is_relative_to(anchor):
+                continue
+            relative = Path(recorded).relative_to(anchor)
+            if relative == Path(".") or any(
+                relative.is_relative_to(legacy) and len(relative.parts) <= len(legacy.parts) + 1
+                for legacy in legacy_roots
+            ):
+                # Use the recorded layout even if its evidence was deleted.
+                # A relocated package still uses the same package-local slot.
+                candidate = run_root / relative
+                return candidate if candidate.resolve() == candidate else None
+    if (run_root / "pages").exists() or (run_root / "reports/page-completion.json").exists():
+        return run_root
+    legacy_candidates = []
+    for relative in legacy_roots:
+        candidate = run_root / relative
+        if (candidate / "summary.json").is_file():
+            legacy_candidates.append(candidate)
+        else:
+            legacy_candidates.extend(path.parent for path in candidate.glob("*/summary.json"))
+    if len(legacy_candidates) == 1 and legacy_candidates[0].resolve() == legacy_candidates[0]:
+        return legacy_candidates[0]
+    return None
+
+
+def _native_coverage_passed(report: dict[str, Any], selected: list[int]) -> bool:
+    checks = report.get("checks")
+    return (
+        report.get("status") == "passed"
+        and report.get("expected_page_sequence") == report.get("actual_page_sequence") == selected
+        and isinstance(checks, dict)
+        and all(checks.get(key) is True for key in (
+            "page_unit_set_matches", "page_unit_markers_match", "merged_page_sequence_matches",
+        ))
+        and all(value is True for value in checks.values())
+    )
+
+
+def _native_original_page(
+    extraction_root: Path, backup: Path, page: int, source_sha256: str
+) -> tuple[int, int] | None:
+    name = f"page-{page:03d}"
+    package = extraction_root / "pages" / name
+    # Match Graph._native_page_evidence: prefer the direct JSON; the nested
+    # legacy page package is an alternative layout, not a second attempt.
+    evidence_path = package / "evidence" / f"{name}.json"
+    if not evidence_path.is_file():
+        evidence_path = package / name / "evidence" / f"{name}.json"
+    if evidence_path.resolve() != evidence_path or backup.resolve() != backup or not backup.is_file():
+        return None
+    evidence = _read_json(evidence_path) or {}
+    text = evidence.get("text")
+    if not (
+        evidence.get("page") == page and evidence.get("status") == "passed"
+        and evidence.get("source_sha256") == source_sha256 and evidence.get("model_calls") == []
+        and isinstance(text, str) and text.strip()
+    ):
+        return None
+    lines = text.splitlines()
+    line_ids = [f"p{page}-native-l{index:04d}" for index, line in enumerate(lines, 1) if line.strip()]
+    if evidence.get("line_count") != len(lines) or evidence.get("nonempty_line_ids") != line_ids:
+        return None
+    expected_backup = f"<!-- page: {page} -->\n\n## 第 {page} 页\n\n" + text.rstrip("\n") + "\n"
+    if backup.read_bytes() != expected_backup.encode("utf-8"):
+        return None
+    return len(lines), len(line_ids)
+
+
+def _replay_native_completion(
+    run_root: Path, selected: list[int], index_bytes: bytes,
+    *, summary: dict[str, Any], validation: dict[str, Any], source_sha256: str,
+) -> bool:
+    reports = run_root / "reports"
+    heading = _read_json(reports / "heading-repair.json") or {}
+    heading_checks = heading.get("validation")
+    if not (
+        heading.get("status") == "passed"
+        and isinstance(heading_checks, dict)
+        and heading_checks.get("heading_prefix_only") is True
+        and heading_checks.get("page_markers_preserved") is True
+        and heading.get("index_sha256") == hashlib.sha256(index_bytes).hexdigest()
+    ):
+        return False
+
+    if not all(_native_coverage_passed(_read_json(reports / name) or {}, selected)
+               for name in ("merge-coverage.json", "final-coverage.json")):
+        return False
+    cleanup = _read_json(reports / "page-cleanup.json") or {}
+    cleanup_checks = cleanup.get("checks")
+    if not (cleanup.get("status") == "passed" and cleanup.get("selected_pages") == selected
+            and isinstance(cleanup_checks, dict) and cleanup_checks.get("body_rewrite") is False
+            and all(cleanup_checks.get(key) is True for key in (
+                "pre_cleanup_backup_exists", "all_page_units_nonempty", "only_complete_lines_deleted",
+            ))):
+        return False
+    table = _read_json(reports / "native-table-font-validation.json") or {}
+    detected = table.get("detected_table_count")
+    if not (table.get("status") == "passed" and table.get("table_failures") == []
+            and type(detected) is int and detected >= 0
+            and detected == table.get("rendered_table_count")
+            == validation.get("table_count_pdfplumber_find_tables") == validation.get("rendered_table_count")
+            and all(isinstance(table.get(key), dict) and table[key] == validation.get(key)
+                    for key in ("font_usage", "font_size_usage"))):
+        return False
+
+    units = run_root / "page-units"
+    backups = run_root / "backups" / "page-units-pre-cleanup"
+    raw_merge = run_root / "document-temp.md"
+    expected_names = [f"p{page:03d}.md" for page in selected]
+    merged_digest = hashlib.sha256()
+    physical_lines = nonempty_lines = 0
+    try:
+        extraction_root = _native_extraction_root(run_root, summary)
+        if extraction_root is None:
+            return False
+        extraction = _read_json(extraction_root / "summary.json") or {}
+        completion = _read_json(extraction_root / "reports/page-completion.json") or {}
+        assets = run_root / "assets"
+        if not (
+            extraction.get("status") == "passed" and extraction.get("source_sha256") == source_sha256
+            and extraction.get("selected_pages") == selected and extraction.get("batch_size") == 1
+            and extraction.get("model_calls") == [] and extraction.get("visual_model") == "not-run"
+            and extraction.get("rendering") == "not-run" and extraction.get("old_summary_reused") is False
+            and completion.get("status") == "passed"
+            and completion.get("expected_pages") == completion.get("completed_pages") == selected
+            and all(completion.get(key) == [] for key in hybrid_validator.COVERAGE_EXCEPTIONS)
+            and assets.resolve() == assets and not any(assets.iterdir())
+            and raw_merge.resolve() == raw_merge and raw_merge.is_file()
+            and sha256(raw_merge) == heading.get("source_sha256")
+        ):
+            return False
+        for directory in (units, backups):
+            if directory.resolve() != directory or {
+                path.name for path in directory.iterdir() if re.fullmatch(r"p\d+\.md", path.name)
+            } != set(expected_names):
+                return False
+        for index, (page, name) in enumerate(zip(selected, expected_names)):
+            original = _native_original_page(extraction_root, backups / name, page, source_sha256)
+            if original is None:
+                return False
+            physical_lines += original[0]
+            nonempty_lines += original[1]
+            unit = units / name
+            if unit.is_symlink() or not unit.is_file():
+                return False
+            text = unit.read_text(encoding="utf-8").rstrip()
+            markers = re.findall(r"<!--\s*page\s*:\s*(\d+)\s*-->", text)
+            if not text or [int(value) for value in markers] != [page]:
+                return False
+            if index:
+                merged_digest.update(b"\n\n")
+            merged_digest.update(text.encode("utf-8"))
+    except (OSError, ValueError, RuntimeError):
+        return False
+    merged_digest.update(b"\n")
+    return (
+        # The heading source is document-temp.md, not the PDF.
+        merged_digest.hexdigest() == heading.get("source_sha256")
+        and physical_lines == validation.get("native_text_physical_lines")
+        and nonempty_lines == validation.get("native_text_nonempty_line_ids")
+    )
+
+
 def _inspect_final_completion(
     run_root: Path,
     *,
     source_path: str | None,
     source_sha256: str | None,
     requested_pages: str,
+    replay_native: bool = False,
+    replay_hybrid: bool = False,
 ) -> dict[str, Any]:
     run_root = run_root.expanduser().resolve()
     index_path = run_root / "index.md"
     summary_path = run_root / "summary.json"
     hybrid_acceptance_path = run_root / "acceptance.json"
     hybrid_progress_path = run_root / "progress.json"
-    hybrid_contract = hybrid_acceptance_path.is_file() and hybrid_progress_path.is_file()
-    validation_path = hybrid_acceptance_path if hybrid_contract else run_root / "reports" / "validation-result.json"
-    progress_path = hybrid_progress_path if hybrid_contract else run_root / "evidence" / "progress-current.json"
-    summary = _read_json(summary_path)
+    native_progress_path = run_root / "evidence" / "progress-current.json"
+    validation_path = run_root / FINAL_VALIDATION_REPORT
     validation = _read_json(validation_path)
-    progress = _read_json(progress_path)
+    native_progress = _read_json(native_progress_path)
+    # Native graph also publishes root-level acceptance/progress compatibility
+    # files. The canonical validator and native stage checkpoint take priority.
+    native_validator = str((validation or {}).get("format_version", "")).endswith("-pure-native-langgraph")
+    native_final_stage = (native_progress or {}).get("current_stage") == FINAL_STAGE
+    hybrid_contract = (
+        (validation or {}).get("validator") == hybrid_validator.VALIDATOR
+        or (not native_validator and not native_final_stage
+            and hybrid_acceptance_path.is_file() and hybrid_progress_path.is_file())
+    )
+    progress_path = hybrid_progress_path if hybrid_contract else native_progress_path
+    summary = _read_json(summary_path)
+    progress = _read_json(hybrid_progress_path) if hybrid_contract else native_progress
+    acceptance = _read_json(hybrid_acceptance_path) if hybrid_contract else None
+    records = (summary, validation, progress, acceptance) if hybrid_contract else (summary, validation, progress)
+    index_bytes = b""
     index_text = ""
     if index_path.is_file():
         try:
-            index_text = index_path.read_text(encoding="utf-8")
-        except OSError:
+            index_bytes = index_path.read_bytes()
+            index_text = index_bytes.decode("utf-8")
+        except (OSError, UnicodeError):
             index_text = ""
     page_marker_sequence = [
         int(value)
@@ -814,59 +1051,80 @@ def _inspect_final_completion(
         if payload:
             current_stage = payload.get("current_stage") or payload.get("stage") or current_stage
     progress_stages = progress.get("stages") if progress else None
-    if hybrid_contract and isinstance(progress_stages, list) and progress_stages:
+    if (hybrid_contract and isinstance(progress_stages, list) and progress_stages
+            and isinstance(progress_stages[-1], dict)):
         current_stage = str(progress_stages[-1].get("stage") or current_stage)
     selected_values = [
         payload.get("selected_pages")
-        for payload in (summary, validation, progress)
+        for payload in records
         if payload and isinstance(payload.get("selected_pages"), list)
     ]
     total_values = [
         payload.get("total_pages")
-        for payload in (summary, validation, progress)
-        if payload and isinstance(payload.get("total_pages"), int)
+        for payload in records
+        if payload and type(payload.get("total_pages")) is int and payload["total_pages"] > 0
     ]
     selected = selected_values[0] if selected_values else []
     total_pages = total_values[0] if total_values else None
     page_facts_agree = (
-        len(selected_values) == 3
+        len(selected_values) == len(records)
+        and all(type(page) is int for value in selected_values for page in value)
         and all(value == selected for value in selected_values)
-        and len(total_values) == 3
+        and len(total_values) == len(records)
         and all(value == total_pages for value in total_values)
     )
     full_page_sequence = bool(
-        total_pages and selected == list(range(1, total_pages + 1))
+        total_pages and _matches_requested_pages("all", selected, total_pages)
     )
-    validation_checks = validation.get("checks") if validation else None
+    acceptance_checks = (acceptance or {}).get("checks")
+    hybrid_full_coverage = (
+        isinstance(acceptance_checks, dict)
+        and acceptance_checks.get("selected_pages_cover_full_pdf") is True
+        and acceptance_checks.get("page_completion_passed") is True
+    )
     full_coverage = bool(
         full_page_sequence
         and validation
-        and (
-            validation.get("actual_full_pdf_coverage") is True
-            or (
-                hybrid_contract
-                and isinstance(validation_checks, dict)
-                and validation_checks.get("selected_pages_cover_full_pdf") is True
-                and validation_checks.get("page_completion_passed") is True
-            )
-        )
+        and validation.get("actual_full_pdf_coverage") is True
+        and (not hybrid_contract or hybrid_full_coverage)
     )
     hashes_match = bool(source_sha256) and all(
         payload and payload.get("source_sha256") == source_sha256
-        for payload in (summary, validation, progress)
+        for payload in records
     )
     paths_match = all(
         not payload.get("source") or str(Path(str(payload["source"])).expanduser().resolve()) == source_path
-        for payload in (summary, validation, progress)
+        for payload in records
         if payload
     ) if source_path else True
-    checks = validation_checks
-    ignored_policy_checks = {"no_model_calls_required"} if hybrid_contract else set()
-    validation_checks_pass = isinstance(checks, dict) and bool(checks) and all(
-        value is True
-        for name, value in checks.items()
-        if name not in ignored_policy_checks
+    checks = (validation or {}).get("checks")
+    validation_checks_pass = (
+        isinstance(checks, dict) and bool(checks) and all(value is True for value in checks.values())
     )
+    hybrid_checks_pass = True
+    if hybrid_contract:
+        hybrid_checks_pass = (
+            bool(validation)
+            and validation.get("validator") == hybrid_validator.VALIDATOR
+            and validation.get("index_sha256") == hashlib.sha256(index_bytes).hexdigest()
+            and isinstance(acceptance_checks, dict)
+            and hybrid_full_coverage
+            and all(
+                value is True for name, value in acceptance_checks.items() if name != "no_model_calls_required"
+            )
+        )
+        reader_expected = (
+            hybrid_validator.READER_REQUIRED in (acceptance or {})
+            or hybrid_validator.reader_stage_committed(summary or {}, progress or {})
+            or any(hybrid_validator.path_present(run_root / path) for path in (
+                hybrid_validator.READER_AUDIT, hybrid_validator.READER_VALIDATION, hybrid_validator.READER_PROJECTION,
+            ))
+        )
+        if reader_expected:
+            reader = _read_json(run_root / hybrid_validator.READER_VALIDATION) or {}
+            hybrid_checks_pass = (
+                hybrid_checks_pass and reader.get("status") == "passed" and reader.get("bytes_verified") is True
+            )
     completed_stages = progress.get("completed_stages") if progress else None
     if hybrid_contract:
         final_stage_recorded = bool(
@@ -895,18 +1153,38 @@ def _inspect_final_completion(
             not incomplete_placeholder_present,
             bool(selected) and page_marker_sequence == selected,
             not missing_image_references,
-            summary is not None and summary.get("status") == "passed",
-            validation is not None and validation.get("status") == "passed",
-            progress is not None and progress.get("status") == "passed",
+            all(payload is not None and payload.get("status") == "passed" for payload in records),
             current_stage == ("independent_acceptance" if hybrid_contract else FINAL_STAGE),
             final_stage_recorded,
             page_facts_agree,
+            total_pages is not None and _matches_requested_pages(requested_pages, selected, total_pages),
             hashes_match,
             paths_match,
             validation_checks_pass,
-            full_coverage if requested_pages.strip().lower() == "all" else True,
+            hybrid_checks_pass,
+            full_coverage if hybrid_contract or requested_pages.strip().lower() == "all" else True,
         ]
     )
+    if accepted and hybrid_contract and replay_hybrid:
+        # The saved verdict can outlive page units, route evidence, or a
+        # reader projection. Only reusing a package needs this live replay.
+        try:
+            replay = hybrid_validator.validate_package(run_root, Path(source_path)) if source_path else {}
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            replay = {}
+        accepted = (
+            replay.get("status") == "passed"
+            and replay.get("actual_full_pdf_coverage") is True
+            and replay.get("source_sha256") == source_sha256
+            and replay.get("selected_pages") == selected
+            and replay.get("total_pages") == total_pages
+            and replay.get("index_sha256") == (validation or {}).get("index_sha256")
+        )
+    elif accepted and not hybrid_contract and replay_native:
+        accepted = _replay_native_completion(
+            run_root, selected, index_bytes, summary=summary or {}, validation=validation or {},
+            source_sha256=source_sha256 or "",
+        )
     if accepted:
         completion_kind = "validated-final"
         current_stage = "full-accepted"
@@ -937,19 +1215,21 @@ def _inspect_final_completion(
     }
 
 
-def _existing_success(item: dict[str, Any], *, requested_pages: str) -> bool:
-    if item.get("status") != "passed":
-        return False
-    run_root_raw = item.get("run_root")
-    if not run_root_raw:
-        return False
+def _reusable_completion(
+    item: dict[str, Any], *, requested_pages: str, replay_hybrid: bool = True
+) -> dict[str, Any] | None:
+    run_root = Path(item["run_root"])
+    if not ((run_root / "index.md").is_file() and (run_root / FINAL_VALIDATION_REPORT).is_file()):
+        return None
     completion = _inspect_final_completion(
-        Path(str(run_root_raw)),
-        source_path=str(item.get("source_path")) if item.get("source_path") else None,
-        source_sha256=str(item.get("source_sha256")) if item.get("source_sha256") else None,
+        run_root,
+        source_path=item["source_path"],
+        source_sha256=item["source_sha256"],
         requested_pages=requested_pages,
+        replay_native=True,
+        replay_hybrid=replay_hybrid,
     )
-    return bool(completion["accepted"])
+    return completion if completion["accepted"] else None
 
 
 def _parse_child_result(stdout: str) -> dict[str, Any] | None:
@@ -975,7 +1255,9 @@ def _read_status(path: Path) -> str | None:
     return str(status) if isinstance(status, str) else None
 
 
-def _summarise_results(items: list[dict[str, Any]], *, planned_total: int | None = None) -> dict[str, Any]:
+def _summarise_results(
+    items: list[dict[str, Any]], *, planned_total: int, halt_reason: str | None = None
+) -> dict[str, Any]:
     statuses = [str(item.get("status")) for item in items]
     executions = [str(item.get("execution")) for item in items]
     failed = statuses.count("failed")
@@ -983,12 +1265,12 @@ def _summarise_results(items: list[dict[str, Any]], *, planned_total: int | None
     passed = statuses.count("passed")
     skipped = executions.count("skipped-existing")
     running = statuses.count("running")
-    planned = len(items) if planned_total is None else planned_total
     terminal = passed + failed + needs_review
-    pending = max(0, planned - terminal)
-    halted_items = [item for item in items if item.get("queue_halted") is True]
+    pending = max(0, planned_total - terminal)
     status = "passed"
-    if halted_items:
+    if halt_reason == DISK_HEADROOM_REASON:
+        status = "paused"
+    elif halt_reason:
         status = "failed"
     elif running or pending:
         status = "running"
@@ -1004,11 +1286,11 @@ def _summarise_results(items: list[dict[str, Any]], *, planned_total: int | None
         "failed": failed,
         "skipped_existing": skipped,
         "running": running,
-        "planned_total": planned,
+        "planned_total": planned_total,
         "completed_total": terminal,
         "pending_total": pending,
-        "halted": bool(halted_items),
-        "halt_reason": halted_items[-1].get("halt_reason") if halted_items else None,
+        "halted": halt_reason is not None,
+        "halt_reason": halt_reason,
     }
 
 
@@ -1068,12 +1350,13 @@ def persist_batch_state(
     origin: dict[str, Any],
     config: dict[str, Any],
     results: list[dict[str, Any]],
+    progress: dict[str, Any],
 ) -> tuple[Path, Path, Path]:
     manifest_path = batch_root / "manifest.json"
     results_path = batch_root / "results.json"
     mapping_path = batch_root / "source-output-map.csv"
     source_list_path = batch_root / "selected-sources.txt"
-    summary = _summarise_results(results, planned_total=len(entries))
+    progress_path = batch_root / "progress-current.json"
     manifest = {
         "format_version": FORMAT_VERSION,
         "batch_id": batch_id,
@@ -1081,7 +1364,7 @@ def persist_batch_state(
         "package_layout": package_layout,
         "run_roots": run_roots,
         "created_at": created_at,
-        "updated_at": now_iso(),
+        "updated_at": progress["updated_at"],
         "origin": origin,
         "config": config,
         "paths": {
@@ -1089,9 +1372,10 @@ def persist_batch_state(
             "results": str(results_path),
             "mapping_csv": str(mapping_path),
             "selected_sources": str(source_list_path),
+            "progress_current": str(progress_path),
         },
         "inputs": [_serialise_entry(entry) for entry in entries],
-        "summary": summary,
+        "summary": progress["summary"],
     }
     _write_json_atomic(manifest_path, manifest)
     _write_json_atomic(results_path, {"batch_id": batch_id, "updated_at": manifest["updated_at"], "items": results})
@@ -1137,6 +1421,7 @@ def persist_batch_state(
         ],
         _map_rows(results),
     )
+    _write_json_atomic(progress_path, progress)
     return manifest_path, results_path, mapping_path
 
 
@@ -1166,16 +1451,13 @@ def _child_log_root(run_root: Path) -> Path:
 def _active_conversion_processes(entry: SourceEntry, run_root: Path) -> list[str]:
     """Return live conversion workers still anchored to the completed book."""
 
-    try:
-        completed = subprocess.run(
-            ["ps", "-axo", "pid=,command="],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
     anchors = (str(entry.source), str(run_root.expanduser().resolve()))
     matches: list[str] = []
     for raw in completed.stdout.splitlines():
@@ -1196,6 +1478,31 @@ def _active_conversion_processes(entry: SourceEntry, run_root: Path) -> list[str
     return matches
 
 
+def _residual_halt_evidence(entry: SourceEntry, run_root: Path, item: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        processes = _active_conversion_processes(entry, run_root)
+    except (OSError, subprocess.SubprocessError) as exc:
+        # A failed probe is not confirmation that a previous worker is gone.
+        detail = f"could not verify conversion workers cleared: {type(exc).__name__}: {exc}"
+        evidence = {"residual_check_error": detail}
+    else:
+        if not processes:
+            return None
+        detail = "conversion workers are still active; queue stopped before starting the next book"
+        evidence = {"residual_processes": processes, "residual_check_error": None}
+    error = str(item.get("error") or "").strip()
+    if detail not in error:
+        error = f"{error}; {detail}" if error else detail
+    return {
+        **evidence,
+        "status": "failed",
+        "accepted": False,
+        "queue_halted": True,
+        "halt_reason": RESIDUAL_PROCESSES_REASON,
+        "error": error,
+    }
+
+
 def invoke_single_conversion(
     entry: SourceEntry,
     *,
@@ -1205,6 +1512,7 @@ def invoke_single_conversion(
     batch_size: int,
     timeout_seconds: int,
     resume: bool,
+    disk_floor_bytes: int | None = None,
 ) -> dict[str, Any]:
     command = [
         sys.executable,
@@ -1244,6 +1552,8 @@ def invoke_single_conversion(
                 stdout=stdout_handle,
                 stderr=stderr_handle,
                 text=True,
+                **({"env": {**os.environ, disk_guard.ENV: str(disk_floor_bytes)}}
+                   if disk_floor_bytes is not None else {}),
             )
         stdout = _read_log_tail(stdout_log)
         stderr = _read_log_tail(stderr_log)
@@ -1256,8 +1566,20 @@ def invoke_single_conversion(
         error = f"subprocess-error: {type(exc).__name__}: {exc}"
     finished_at = now_iso()
     child = _parse_child_result(stdout)
+    if (disk_floor_bytes is not None and returncode == PAUSED_EXIT_CODE and child
+            and child.get("status") == "paused" and child.get("reason") == DISK_HEADROOM_REASON
+            and isinstance(child.get("disk_pause"), dict)
+            and child["disk_pause"].get("floor_bytes") == disk_floor_bytes):
+        return {
+            "status": "interrupted", "execution": "paused-for-disk", "accepted": False,
+            "disk_pause": child["disk_pause"], "resume_used": resume, "run_root": str(run_root),
+            "final_stage": child["disk_pause"].get("phase", "invocation"),
+            "completion_kind": "incomplete", "returncode": returncode,
+            "stdout_log": str(stdout_log), "stderr_log": str(stderr_log),
+            "started_at": started_at, "finished_at": finished_at,
+        }
     summary_path = run_root / "summary.json"
-    validation_report = run_root / "reports" / "validation-result.json"
+    validation_report = run_root / FINAL_VALIDATION_REPORT
     summary_status = _read_status(summary_path)
     validation_status = _read_status(validation_report)
     completion = _inspect_final_completion(
@@ -1265,6 +1587,7 @@ def invoke_single_conversion(
         source_path=str(entry.source),
         source_sha256=entry.source_sha256 or sha256(entry.source),
         requested_pages=pages,
+        replay_native=True,
     )
     status = "passed" if returncode == 0 and completion["accepted"] else "failed"
     child_status = None
@@ -1310,12 +1633,27 @@ def _validate_batch_config(config: dict[str, Any]) -> dict[str, Any]:
     timeout_seconds = int(config.get("timeout_seconds", 0))
     if timeout_seconds < 1:
         raise ValueError("timeout_seconds must be a positive integer")
+    min_free_bytes = config.get("min_free_bytes", 0)
+    if type(min_free_bytes) is not int or min_free_bytes < 0:
+        raise ValueError("min_free_bytes must be a nonnegative integer")
+    disk_floor_bytes = config.get("disk_floor_bytes")
+    if disk_floor_bytes is not None and (type(disk_floor_bytes) is not int
+                                       or disk_floor_bytes < disk_guard.MINIMUM_FLOOR_BYTES):
+        raise ValueError(f"disk_floor_bytes must be at least {disk_guard.MINIMUM_FLOOR_BYTES}")
     return {
         **config,
         "batch_size": 1,
+        "min_free_bytes": min_free_bytes if disk_floor_bytes is None else disk_floor_bytes,
         "book_concurrency": 1,
         "machine_resource_policy": resource_slots.resource_policy_summary(),
     }
+
+
+def _free_bytes_for_run_root(run_root: Path) -> int:
+    destination = run_root
+    while not destination.exists():
+        destination = destination.parent
+    return shutil.disk_usage(destination).free
 
 
 def run_batch(
@@ -1324,7 +1662,8 @@ def run_batch(
     batch_root: Path,
     origin: dict[str, Any],
     config: dict[str, Any],
-    executor: Any = invoke_single_conversion,
+    executor: Any = None,
+    inherited_fd: int | None = None,
 ) -> tuple[int, dict[str, Any]]:
     batch_root = batch_root.expanduser().resolve()
     _preflight_entries(entries)
@@ -1333,6 +1672,7 @@ def run_batch(
         lock_root=batch_root.parent,
         batch_root=batch_root,
         entries=entries,
+        inherited_fd=inherited_fd,
     ):
         return _run_batch_unlocked(
             entries,
@@ -1355,6 +1695,13 @@ def _run_batch_unlocked(
     batch_root.mkdir(parents=True, exist_ok=True)
     manifest = _load_manifest(batch_root)
     layout = _package_layout(batch_root, manifest, entries)
+    pages = str(config["pages"])
+    previous_pages = _manifest_pages(manifest)
+    if previous_pages is not None and pages != previous_pages:
+        raise ValueError(
+            f"existing batch page selector is {previous_pages!r}, not {pages!r}; "
+            "use the original --pages or choose a new --batch-root"
+        )
     if manifest:
         _ensure_input_match(entries, manifest)
         batch_id = str(manifest.get("batch_id") or batch_root.name)
@@ -1369,13 +1716,24 @@ def _run_batch_unlocked(
         if item.get("source_path")
     }
     run_roots = _registered_run_roots(batch_root, entries, layout, manifest, result_by_source)
-    results: list[dict[str, Any]] = []
+    min_free_bytes = config["min_free_bytes"]
+    disk_floor_bytes = config.get("disk_floor_bytes")
+    if disk_floor_bytes is not None and any(entry.route not in {"hybrid", "vision-only"} for entry in entries):
+        raise ValueError("--disk-floor-bytes requires the page-hybrid graph for all sources")
+    bases: dict[str, dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    halt_reason = None
+    disk_pause = None
+    # Reconcile the entire queue before replacing any checkpoint. A killed
+    # resume must not erase later rows, and final package evidence can have
+    # reached disk before its result row did.
     for index, entry in enumerate(entries, 1):
-        previous = result_by_source.get(str(entry.source))
-        registration = run_roots[str(entry.source)]
+        source = str(entry.source)
+        previous = result_by_source.get(source)
+        registration = run_roots[source]
         base = {
             "index": index,
-            "source_path": str(entry.source),
+            "source_path": source,
             "relative_path": entry.relative_path,
             "route": entry.route or "native-only",
             "route_confidence": entry.route_confidence,
@@ -1383,28 +1741,98 @@ def _run_batch_unlocked(
             "source_sha256": registration["source_sha256"],
             "file_size": entry.file_size,
             "modified_at": entry.modified_at,
+            "run_root": registration["path"],
         }
-        run_root = Path(registration["path"])
-        if previous and _existing_success(previous, requested_pages=str(config["pages"])):
-            item = {**previous, **base, "run_root": str(run_root), "execution": "skipped-existing", "resume_used": bool(previous.get("resume_used"))}
-            results.append(item)
-            persist_batch_state(
-                batch_root=batch_root,
-                batch_id=batch_id,
-                created_at=created_at,
-                package_layout=layout,
-                run_roots=run_roots,
-                entries=entries,
-                origin=origin,
-                config=config,
-                results=results,
-            )
+        bases[source] = base
+        if previous and (
+            previous.get("status") == "running"
+            or previous.get("queue_halted") is True
+            or previous.get("halt_reason")
+            or (not previous.get("residual_cleared_at")
+                and (previous.get("residual_processes") or previous.get("residual_check_error")))
+        ):
+            residual = _residual_halt_evidence(entry, Path(base["run_root"]), previous)
+            if residual is not None:
+                halt_reason = RESIDUAL_PROCESSES_REASON
+                results[source] = {**previous, **base, **residual, "execution": "blocked-residual"}
+                continue
+            previous = dict(previous)
+            previous.pop("queue_halted", None)
+            previous.pop("halt_reason", None)
+            previous["residual_cleared_at"] = now_iso()
+        completion = _reusable_completion(base, requested_pages=pages)
+        if completion is not None:
+            item = {
+                **(previous or {}), **base, **completion,
+                "status": "passed", "execution": "skipped-existing",
+                "resume_used": bool((previous or {}).get("resume_used")),
+                "error": None,
+            }
+            results[source] = item
+        elif previous is not None:
+            item = {**previous, **base}
+            if item.get("status") in {"running", "passed"}:
+                status = "interrupted" if item["status"] == "running" else "pending"
+                item.update(status=status, execution=status, accepted=False)
+            results[source] = item
+
+    def checkpoint(
+        *, active_source: str | None = None, halt_reason: str | None = None
+    ) -> tuple[tuple[Path, Path, Path], dict[str, Any]]:
+        rows = [results[source] for source in bases if source in results]
+        summary = _summarise_results(rows, planned_total=len(entries), halt_reason=halt_reason)
+        progress = {
+            "status": summary["status"],
+            "active_source": active_source,
+            "summary": summary,
+            "updated_at": now_iso(),
+            "pages": pages,
+            "strict_accepted_count": sum(
+                item.get("status") == "passed"
+                and item.get("accepted") is True
+                and item.get("full_pdf_coverage") is True
+                for item in rows
+            ),
+            "halt_reason": halt_reason,
+            **({"disk_floor_bytes": disk_floor_bytes} if disk_floor_bytes is not None else {}),
+            **({"disk_pause": disk_pause} if halt_reason == DISK_HEADROOM_REASON and disk_pause else {}),
+        }
+        paths = persist_batch_state(
+            batch_root=batch_root,
+            batch_id=batch_id,
+            created_at=created_at,
+            package_layout=layout,
+            run_roots=run_roots,
+            entries=entries,
+            origin=origin,
+            config=config,
+            results=rows,
+            progress=progress,
+        )
+        return paths, progress
+
+    invoke = invoke_single_conversion if executor is None else executor
+    for index, entry in enumerate(entries, 1):
+        if halt_reason is not None:
+            break
+        source = str(entry.source)
+        base = bases[source]
+        if results.get(source, {}).get("status") == "passed":
             print(
                 f"BATCH_SKIP index={index}/{len(entries)} source={entry.source}",
                 file=sys.stderr,
                 flush=True,
             )
             continue
+        run_root = Path(base["run_root"])
+        if min_free_bytes:
+            free = _free_bytes_for_run_root(run_root)
+            if free < min_free_bytes or (disk_floor_bytes is not None and free == min_free_bytes):
+                halt_reason = DISK_HEADROOM_REASON
+                if disk_floor_bytes is not None:
+                    disk_pause = {"free_bytes": free, "floor_bytes": disk_floor_bytes,
+                                  "phase": "before-book", "page": None, "next_write_bytes": 0}
+                break
         resume = run_root.exists() and any(run_root.iterdir())
         print(
             f"BATCH_RUN index={index}/{len(entries)} resume={str(resume).lower()} source={entry.source}",
@@ -1416,39 +1844,37 @@ def _run_batch_unlocked(
             "status": "running",
             "execution": "running",
             "resume_used": resume,
-            "run_root": str(run_root),
             "final_stage": "invocation",
             "completion_kind": "incomplete",
             "started_at": now_iso(),
         }
-        results.append(running_item)
-        persist_batch_state(
-            batch_root=batch_root,
-            batch_id=batch_id,
-            created_at=created_at,
-            package_layout=layout,
-            run_roots=run_roots,
-            entries=entries,
-            origin=origin,
-            config=config,
-            results=results,
-        )
+        results[source] = running_item
+        checkpoint(active_source=source)
         try:
-            item = executor(
-                entry,
+            item = invoke(
+                replace(entry, source_sha256=base["source_sha256"]) if executor is None else entry,
                 run_root=run_root,
-                pages=str(config["pages"]),
+                pages=pages,
                 evidence_level=str(config["evidence_level"]),
                 batch_size=int(config["batch_size"]),
                 timeout_seconds=int(config["timeout_seconds"]),
                 resume=resume,
+                **({"disk_floor_bytes": disk_floor_bytes}
+                   if executor is None and disk_floor_bytes is not None else {}),
             )
+            # The production invocation already inspected this exact package.
+            # An injected executor's status alone is not independent evidence.
+            if executor is not None and item.get("status") == "passed":
+                completion = _reusable_completion(base, requested_pages=pages, replay_hybrid=False)
+                if completion is None:
+                    item = {**item, "status": "failed", "accepted": False, "error": "incomplete-final-evidence"}
+                else:
+                    item = {**item, **completion}
         except Exception as exc:
             item = {
                 "status": "failed",
                 "execution": "failed-invocation",
                 "resume_used": resume,
-                "run_root": str(run_root),
                 "final_stage": "invocation",
                 "completion_kind": "incomplete",
                 "returncode": None,
@@ -1456,57 +1882,36 @@ def _run_batch_unlocked(
                 "started_at": running_item["started_at"],
                 "finished_at": now_iso(),
             }
-        residual_processes = _active_conversion_processes(entry, run_root)
-        if residual_processes:
-            previous_error = str(item.get("error") or "").strip()
-            residual_error = (
-                "book process exited while conversion workers were still active; "
-                "queue stopped before starting the next book"
-            )
-            item = {
-                **item,
-                "status": "failed",
-                "queue_halted": True,
-                "halt_reason": "residual-conversion-processes",
-                "residual_processes": residual_processes,
-                "error": f"{previous_error}; {residual_error}" if previous_error else residual_error,
-            }
-        results[-1] = {**base, **item}
-        persist_batch_state(
-            batch_root=batch_root,
-            batch_id=batch_id,
-            created_at=created_at,
-            package_layout=layout,
-            run_roots=run_roots,
-            entries=entries,
-            origin=origin,
-            config=config,
-            results=results,
-        )
-        if residual_processes:
+        residual = _residual_halt_evidence(entry, run_root, item)
+        results[source] = {**item, **base, **(residual or {})}
+        if residual is not None:
+            halt_reason = RESIDUAL_PROCESSES_REASON
             break
-    summary = _summarise_results(results, planned_total=len(entries))
-    manifest_path, results_path, mapping_path = persist_batch_state(
-        batch_root=batch_root,
-        batch_id=batch_id,
-        created_at=created_at,
-        package_layout=layout,
-        run_roots=run_roots,
-        entries=entries,
-        origin=origin,
-        config=config,
-        results=results,
-    )
+        if (disk_floor_bytes is not None and item.get("execution") == "paused-for-disk"
+                and item.get("returncode") == PAUSED_EXIT_CODE):
+            disk_pause = item["disk_pause"]
+            halt_reason = DISK_HEADROOM_REASON
+            break
+        checkpoint()
+    (manifest_path, results_path, mapping_path), progress = checkpoint(halt_reason=halt_reason)
     payload = {
-        "status": summary["status"],
+        "status": progress["status"],
         "batch_id": batch_id,
         "batch_root": str(batch_root),
         "manifest": str(manifest_path),
         "results": str(results_path),
         "mapping_csv": str(mapping_path),
-        "summary": summary,
+        "progress_current": str(batch_root / "progress-current.json"),
+        "summary": progress["summary"],
+        "strict_accepted_count": progress["strict_accepted_count"],
+        "halt_reason": halt_reason,
     }
-    return (0 if summary["status"] == "passed" else 1), payload
+    if halt_reason == DISK_HEADROOM_REASON:
+        payload["reason"] = halt_reason
+        if disk_pause is not None:
+            payload["disk_pause"] = disk_pause
+        return PAUSED_EXIT_CODE, payload
+    return (0 if progress["status"] == "passed" else 1), payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1533,10 +1938,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="route to load from --route-report or annotate sources; source directories default to hybrid",
     )
     parser.add_argument("--source-root", type=Path, help="record source paths relative to this root in batch metadata")
-    parser.add_argument("--pages", default="all")
+    parser.add_argument("--pages", help="page selector; defaults to the resumed selection or all")
     parser.add_argument("--evidence-level", default="compact")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
+    parser.add_argument(
+        "--min-free-bytes", type=int, default=0,
+        help="pause before a new book if the destination has fewer free bytes (default: 0)",
+    )
+    parser.add_argument("--disk-floor-bytes", type=int,
+                        help="explicit page-hybrid disk floor checked before books and at in-book write boundaries")
     parser.add_argument("--max-files", type=int, help="cap how many selected sources to process")
     parser.add_argument(
         "--order",
@@ -1546,14 +1957,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_BATCHES_PARENT)
     parser.add_argument("--batch-root", type=Path, help="exact batch root to create or resume")
+    parser.add_argument("--collection-lock-fd", type=int, help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.min_free_bytes < 0:
+        parser.error("--min-free-bytes must be a nonnegative integer")
     try:
         manifest = _load_manifest(args.batch_root.expanduser().resolve()) if args.batch_root else None
+        previous_pages = _manifest_pages(manifest)
         entries, origin = discover_source_entries(
             sources=args.source,
             source_directory=args.source_dir,
@@ -1599,11 +2014,14 @@ def main(argv: list[str] | None = None) -> int:
             entries,
             batch_root=batch_root,
             origin=origin,
+            inherited_fd=args.collection_lock_fd,
             config={
-                "pages": args.pages,
+                "pages": args.pages if args.pages is not None else previous_pages or "all",
                 "evidence_level": args.evidence_level,
                 "batch_size": args.batch_size,
                 "timeout_seconds": args.timeout_seconds,
+                "min_free_bytes": args.min_free_bytes,
+                **({"disk_floor_bytes": args.disk_floor_bytes} if args.disk_floor_bytes is not None else {}),
                 "order": args.order,
             },
         )

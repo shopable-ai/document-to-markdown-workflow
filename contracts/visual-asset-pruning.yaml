@@ -43,12 +43,14 @@ page_hybrid_reader_projection:
     version: 1.0.0
     evidence: evidence/reader-scan-ocr/pNNN.json
     engine: local-tesseract-chi_sim+eng
+    collection_concurrency: up-to-four-page-local-workers-per-book; single-threaded-tesseract; preserve-page-order
     only_for: rendered-apple-vision-full-background-or-scan-fallback-without-confirmed-visual-structure
     cache_binding: [source_sha256, page, asset_sha256, primary_sha256, final_sha256]
     provenance: [engine_sha256, engine_version, model_sha256, recognition_profile, payload_sha256, elapsed_ms]
     verifier: reread-and-recompute-without-running-ocr
     omission_requires: both-ocr-orders-and-exact-characters-match-final-body-and-both-visual-masks-clear
     unavailable_or_conflicting: retain-with-page-reason
+    no_usable_primary_ocr: retain-hash-verified-source-render-and-record-unverified-text-without-aborting-other-pages
   invariants:
     - 审计复用 hash 锁定的 Poppler bbox/plain text、pdfplumber 向量对象计数或 Apple Vision OCR 坐标；扫描底图不是插图。向量计数只覆盖 line/rect/curve，不宣称识别全部 PDF 绘制语义或证明文字可见性。
     - 无图页也要重读；只有原生正文、来源 bbox 和终稿同页文字顺序一致，且无图像或向量等视觉候选时，才记录已验证 omit。原来无图但缺证的页不得作为读者验收 passed；本版本不会自动补渲染或重写该工程页。

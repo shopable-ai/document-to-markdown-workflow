@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,47 @@ def test_source_markdown_filename_preserves_readable_chinese_title():
     source = Path("第009部《绝秘人性天书》.pdf")
 
     assert naming.source_markdown_filename(source) == "第009部《绝秘人性天书》.md"
+
+
+def test_book_markdown_name_strips_only_one_complete_title_wrapper():
+    assert naming.book_markdown_filename(Path("《驭心高手》.pdf")) == "驭心高手.md"
+    assert naming.book_markdown_filename(Path("《甲》《乙》.pdf")) == "《甲》《乙》.md"
+    assert naming.book_markdown_filename(Path("《INDEX》.pdf")) == "INDEX-书稿.md"
+    assert naming.book_markdown_filename(Path("document-temp.raw.pdf")) == "document-temp.raw-书稿.md"
+    assert len(naming.book_markdown_filename(Path("书" * 120 + ".pdf")).encode()) <= 255
+
+
+def test_book_markdown_copy_preserves_relative_links_and_manual_edits(tmp_path: Path):
+    index = tmp_path / "index.md"
+    original = "# 驭心高手\n\n![插图](assets/page-001.png)\n".encode()
+    index.write_bytes(original)
+    source = Path("《驭心高手》.pdf")
+
+    copy = naming.write_book_markdown_copy(index, source)
+
+    assert copy == tmp_path / "驭心高手.md"
+    assert copy.read_bytes() == original
+    copy.write_text("手工修复\n", encoding="utf-8")
+    assert naming.book_markdown_delivery(index, source) == {"source_named_markdown": str(copy)}
+    assert copy.read_text(encoding="utf-8") == "手工修复\n"
+    assert index.read_bytes() == original
+
+
+@pytest.mark.parametrize("symlink", [True, False])
+def test_book_copy_conflict_is_reported_without_touching_index(tmp_path: Path, symlink):
+    index = tmp_path / "index.md"
+    index.write_bytes(b"canonical")
+    link = tmp_path / "book.md"
+    if symlink:
+        link.symlink_to(index)
+    else:
+        os.link(index, link)
+
+    result = naming.book_markdown_delivery(index, Path("book.pdf"))
+
+    assert set(result) == {"source_named_markdown_error"}
+    assert link.samefile(index)
+    assert index.read_bytes() == b"canonical"
 
 
 def test_resolve_source_markdown_target_avoids_index_collision(tmp_path: Path):

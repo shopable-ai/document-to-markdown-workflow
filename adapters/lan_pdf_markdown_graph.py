@@ -25,12 +25,16 @@ except ImportError:  # pragma: no cover - package-style imports in tests/tools
 
 try:
     from output_naming import (
+        book_markdown_delivery,
+        book_markdown_filename,
         package_timestamp,
         readable_package_stem,
         resolve_package_target,
     )
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from .output_naming import (
+        book_markdown_delivery,
+        book_markdown_filename,
         package_timestamp,
         readable_package_stem,
         resolve_package_target,
@@ -45,6 +49,11 @@ try:
     import pdf_resource_slots as resource_slots
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import pdf_resource_slots as resource_slots
+
+try:
+    import pdf_disk_guard as disk_guard
+except ImportError:  # pragma: no cover - package-style imports in tests/tools
+    from . import pdf_disk_guard as disk_guard
 
 try:
     import pdf_route_detection as page_router
@@ -2185,6 +2194,7 @@ def build_native_graph(settings: NativeGraphSettings):
                     "page_units": "page-units/pNNN.md",
                     "raw_merge": "document-temp.md",
                     "final": "index.md",
+                    "source_named_markdown": book_markdown_filename(settings.source),
                 },
                 "old_summary_reused": False,
             }
@@ -2210,6 +2220,7 @@ def build_native_graph(settings: NativeGraphSettings):
                 "1",
                 "--context-mode",
                 "independent",
+                "--no-book-markdown",
             ]
             record = _native_command(command, settings.timeout_seconds)
             result = _native_last_json(record["stdout"])
@@ -2403,6 +2414,11 @@ def build_native_graph(settings: NativeGraphSettings):
             validation = _native_validate(state=state, settings=settings, heading_report=repair)
             if validation["summary"]["status"] != "passed":
                 raise ValueError(f"independent validation failed: {validation['summary']['checks']}")
+            index_path = settings.run_root / "index.md"
+            book_delivery = (
+                book_markdown_delivery(index_path, settings.source)
+                if validation["summary"]["actual_full_pdf_coverage"] else {}
+            )
             facts = _native_pdf_facts(settings.source)
             progress = _native_progress(
                 settings.run_root,
@@ -2423,12 +2439,15 @@ def build_native_graph(settings: NativeGraphSettings):
             summary_path = settings.run_root / "summary.json"
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["progress"] = str(progress)
+            summary.update(book_delivery)
             _native_write_json(summary_path, summary)
             return {
                 "current_phase": "heading-audit-repair-validation",
                 "file_paths": {
                     **state["file_paths"],
-                    "index": str(settings.run_root / "index.md"),
+                    "index": str(index_path),
+                    **({"source_named_markdown": book_delivery["source_named_markdown"]}
+                       if "source_named_markdown" in book_delivery else {}),
                     "heading_report": repair["path"],
                     "final_coverage_report": str(final_coverage_path),
                     "validation_report": validation["validation_path"],
@@ -2437,7 +2456,7 @@ def build_native_graph(settings: NativeGraphSettings):
                 },
                 "file_hashes": {
                     **state["file_hashes"],
-                    "index": _native_sha256(settings.run_root / "index.md"),
+                    "index": _native_sha256(index_path),
                     "final_coverage_report": _native_sha256(final_coverage_path),
                     "summary": _native_sha256(summary_path),
                     "progress": _native_sha256(progress),
@@ -2604,6 +2623,8 @@ def run_page_hybrid_graph(
             "summary": str(run_root / "summary.json"),
             "progress": str(run_root / "progress.json"),
             "validation_report": str(run_root / "reports" / "validation-result.json"),
+            **({"source_named_markdown": summary["source_named_markdown"]}
+               if summary.get("source_named_markdown") else {}),
             **reader_paths,
         },
         "file_hashes": {},
@@ -2749,6 +2770,10 @@ def main(argv: list[str] | None = None) -> int:
                     dpi=args.dpi,
                     resume=args.resume,
                 )
+    except disk_guard.DiskFloorReached as exc:
+        print(json.dumps({"status": "paused", "reason": disk_guard.PAUSE_REASON,
+                          "disk_pause": exc.details}, ensure_ascii=False))
+        return disk_guard.PAUSE_EXIT
     except Exception as exc:
         print(f"ERROR handled=true {exc}", file=sys.stderr)
         return 2

@@ -23,10 +23,12 @@ from typing import Any
 try:
     import lan_pdf_vision_to_markdown as package
     import ocr_markdown_structure as structure
+    import pdf_disk_guard as disk_guard
     import pdf_resource_slots as resource_slots
 except ImportError:  # pragma: no cover - package-style imports in tests/tools
     from . import lan_pdf_vision_to_markdown as package
     from . import ocr_markdown_structure as structure
+    from . import pdf_disk_guard as disk_guard
     from . import pdf_resource_slots as resource_slots
 
 
@@ -35,6 +37,7 @@ APPLE_VISION_SCRIPT = ROOT / "adapters" / "apple_vision_ocr.swift"
 INDEPENDENT_VALIDATOR = ROOT / "adapters" / "lan_pdf_vision_to_markdown.py"
 ROUTE = package.APPLE_VISION_ROUTE
 DEFAULT_MAX_JOBS = 4
+FAST_PNG_ENV = "WORKFLOW_APPLE_VISION_FAST_PNG"
 
 
 class OcrRunFailure(RuntimeError):
@@ -128,7 +131,9 @@ def _convert_page(
 ) -> dict[str, Any]:
     page_started = time.monotonic()
     paths = package.page_paths(run_root, page)
-    render = package.render_or_reuse_page(source, page, dpi, paths["asset"])
+    render = package.render_or_reuse_page(
+        source, page, dpi, paths["asset"], fast_png=os.environ.get(FAST_PNG_ENV) == "1",
+    )
     raw_path = run_root / "evidence" / f"apple-vision-p{page:03d}.json"
     structure_path = run_root / "evidence" / f"ocr-markdown-structure-p{page:03d}.json"
     try:
@@ -195,6 +200,11 @@ def _convert_page(
                 6,
             ),
         }
+        if "renderer" in render:
+            metrics["renderer"] = render["renderer"]
+            for key in ("raster_wall_seconds", "png_encode_wall_seconds"):
+                if key in render:
+                    metrics[key] = round(render[key], 3)
         package.write_json(paths["metrics"], metrics)
         result = {
             "page": page,
@@ -233,6 +243,8 @@ def _convert_page(
         }
         package.write_json(paths["result"], result)
         return result
+    except disk_guard.DiskFloorReached:
+        raise
     except Exception as exc:
         result = {
             "page": page,
@@ -433,6 +445,8 @@ def run(
                 page = pending.pop(future)
                 try:
                     _, result = future.result()
+                except disk_guard.DiskFloorReached:
+                    raise
                 except Exception as exc:
                     result = {"status": "failed", "error": str(exc)}
                 completed_count += 1
@@ -541,6 +555,10 @@ def main(argv: list[str] | None = None) -> int:
             progress_every=args.progress_every,
             jobs=args.jobs,
         )
+    except disk_guard.DiskFloorReached as exc:
+        print(json.dumps({"status": "paused", "reason": disk_guard.PAUSE_REASON,
+                          "disk_pause": exc.details}, ensure_ascii=False))
+        return disk_guard.PAUSE_EXIT
     except Exception as exc:
         result = {"status": "failed", "error": str(exc)}
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))

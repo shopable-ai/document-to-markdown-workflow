@@ -6,7 +6,7 @@ lifecycle_status: active
 description: 规格包根目录的 Workflow 入口索引；详细阶段仍以各 Workflow 目录中的 workflow.yaml 为准。
 schema:
   required_entry_fields: [id, title, path, readme, acceptance, independent]
-  optional_entry_fields: [aliases, trigger_keywords, daily_trigger, execution_entrypoint, pdf_execution_entrypoint, pdf_visual_only_entrypoint, plan_entrypoint, default_pages, production_runtime_contract, background_task_entrypoint, background_task_contract, execution_observability, page_vision_pdf_entrypoint, page_vision_resume_entrypoint, recognition_benchmark_entrypoint, recognition_benchmark_contract, recognition_quality_entrypoint, recognition_quality_contract, ocr_structure_entrypoint, ocr_structure_contract, advertising_policy_contract, page_noise_cleanup_scan_entrypoint, page_noise_cleanup_apply_entrypoint, page_noise_cleanup_contract, page_noise_cleanup_default_profile, reader_collection_entrypoint, reader_collection_contract, reader_collection_scope, knowledge_base_page_pruning_preview_entrypoint, knowledge_base_page_pruning_apply_entrypoint, knowledge_base_page_pruning_contract, knowledge_base_page_pruning_scope]
+  optional_entry_fields: [aliases, trigger_keywords, daily_trigger, execution_entrypoint, pdf_execution_entrypoint, pdf_visual_only_entrypoint, pdf_collection_entrypoint, pdf_collection_scope, plan_entrypoint, default_pages, production_runtime_contract, background_task_entrypoint, background_task_contract, execution_observability, page_vision_pdf_entrypoint, page_vision_resume_entrypoint, recognition_benchmark_entrypoint, recognition_benchmark_contract, recognition_quality_entrypoint, recognition_quality_contract, ocr_structure_entrypoint, ocr_structure_contract, advertising_policy_contract, page_noise_cleanup_scan_entrypoint, page_noise_cleanup_apply_entrypoint, page_noise_cleanup_contract, page_noise_cleanup_default_profile, reader_collection_entrypoint, reader_collection_contract, reader_collection_scope, knowledge_base_page_pruning_preview_entrypoint, knowledge_base_page_pruning_apply_entrypoint, knowledge_base_page_pruning_contract, knowledge_base_page_pruning_scope]
   path_must_exist: true
   exactly_one_root_entry_per_workflow: true
 workflows:
@@ -21,12 +21,15 @@ workflows:
     execution_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --execute
     pdf_execution_entrypoint: python3 adapters/lan_pdf_markdown_graph.py --source <pdf> --run-root <exact-run-root> --pages <selector>
     pdf_visual_only_entrypoint: python3 adapters/lan_pdf_markdown_graph.py --visual-only --source <pdf> --run-root <exact-run-root> --pages <selector>
+    pdf_collection_entrypoint: python3 adapters/pdf_background_task.py start --task-type pdf-collection --source-list <list> --output-root <root> --route <hybrid|native-only> --pages all
+    pdf_collection_scope: production; at-least-two-pdfs-including-the-pdf-subset-of-mixed-input
     engineering_output_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --execute --engineering-output
     plan_entrypoint: python3 adapters/workflow_a_source_runner.py --source <file> --output-root <dir> --plan-only
     default_pages: all
     production_runtime_contract: contracts/workflow-a-production-runtime-context.yaml
-    background_task_entrypoint: python3 adapters/pdf_background_task.py start --task-type <workflow-a|native-pdf|native-pdf-batch|local-ocr-pdf|hybrid-pdf|visual-pdf> --source <pdf> --output-root <dir> --pages <selector>
+    background_task_entrypoint: python3 adapters/pdf_background_task.py start --task-type <workflow-a|native-pdf|native-pdf-batch|local-ocr-pdf|hybrid-pdf|visual-pdf> --source <file> --output-root <dir> --pages <selector>
     background_task_contract: contracts/long-task-interaction.yaml
+    # Historical generic batch; independent of the production PDF collection queue.
     batch_entrypoint: python3 adapters/workflow_a_batch.py --source <file-1> --source <file-2> --output-root <dir> --pages all
     batch_entrypoint_status: blocked-until-generic-execute-promotion
     excluded_legacy_routes: [workflow_a_runner, workflow_a_legacy_loader, legacy-document-profile]

@@ -145,6 +145,11 @@ execution_policy:
     rendered_probe_policy: local-deterministic-and-candidate-pages-only
     full_page_background_with_text: extractable-not-proof-of-visible-text; retain-page-render-and-use-local-ocr-if-structure-not-confirmed
     visual_merge_policy: visual-output-must-not-overwrite-native-text
+    visual_worker_recovery:
+      readiness: exact-configured-LAN-model-must-be-installed
+      local_fallback: on-missing-model-or-failed-visual-worker-use-Apple-Vision-OCR-in-a-separate-attempt
+      evidence: keep-prior-attempt; verify-local-OCR-hash-and-source-render; retain-render-in-engineering-output
+      limit: OCR-does-not-infer-figure-relations-or-bypass-reader-acceptance
     page_failure_policy: write-failed-route-and-incomplete-page-unit;continue-later-pages
     resume_policy: require-source-sha256-page-number-passed-route-record-and-one-valid-page-marker
     completion_evidence: reports/page-completion.json
@@ -161,8 +166,27 @@ execution_policy:
       audit_policy_version: 3.0.0
       policy: verify-all-final-page-sections; omit-only-with-independent-source-text-and-no-visual-candidates; preserve-unresolved-renders-and-engineering-evidence
       scan_second_ocr: local-tesseract-only-on-eligible-apple-vision-scan-pages; replay-hash-locked-evidence-offline; fail-closed
+      scan_collection_concurrency: up-to-four-local-page-workers; preserve-page-order; offline-replay-remains-sequential
       no_reference_policy: verified-native-or-needs-review; do-not-auto-render-or-rewrite-engineering-package-at-reader-stage
       public_delivery: false
+    editable_book_markdown:
+      scope: independently-accepted-full-pdf-native-or-page-hybrid
+      input: index.md
+      output: <source-title>.md beside index.md
+      policy: create-byte-identical-copy-once; preserve-existing-work-copy-on-resume
+      acceptance_source: index.md
+  pdf_collection:
+    scope: production; at-least-two-pdfs-including-the-pdf-subset-of-mixed-input
+    runtime_contract: ../../contracts/workflow-a-production-runtime-context.yaml
+    lifecycle_contract: ../../contracts/long-task-interaction.yaml
+    source_list: UTF-8; one absolute PDF path per line
+    route: explicit-hybrid-recommended; native-only-requires-preflight-approval; no-whole-book-visual
+    execution: detached-silent; serial-one-independent-package-per-source; existing-per-source-page-and-stage-rules
+    mixed_inputs: route-by-media-type; single-PDF-and-non-PDF-keep-existing-entrypoints; no-automatic-pairing
+    not_substitutes: [ad-hoc-conversion-loop, ad-hoc-background-script, native-pdf-batch, blocked-generic-workflow-a-batch]
+    new_batch_root: <output-root>/conversions/<route>
+    adopt_existing_batch: --run-root <existing-exact-registered-official-route-batch-root>
+    collection_completion: one-route-batch-completion-is-not-collection-completion; reader-export-requires-100-percent-source-level-strict-acceptance-in-_consolidated
   source_rendering_policy:
     deterministic_phase: producer-consumer-incremental-page-assets
     orchestration: single-runner-producer-consumer
@@ -189,6 +213,12 @@ execution_policy:
     no_real_source_this_round: true
     fixture_tests_run_this_round: true
     production_proof_this_round: false
+    docx_native_route:
+      adapter: ../../adapters/workflow_a_docx.py
+      validator: ../../adapters/validate_docx_markdown.py
+      scope: whole-document-native-only
+      outputs: [index.md, optional-flat-assets, reports/validation-result.json]
+      no_ocr_or_page_rendering: true
   execution_preflight:
     stage: before-A1
     adapter: ../../adapters/workflow_a_preflight.py
@@ -212,7 +242,7 @@ execution_policy:
     progress_stream: evidence/progress.jsonl
   legacy_code_policy:
     reference: ../../references/legacy-code-status.zh.md
-    production_entrypoints: [adapters/workflow_a_source_runner.py]
+    production_entrypoints: [adapters/workflow_a_source_runner.py, adapters/pdf_background_task.py]
     migration_pending: [adapters/workflow_a_dispatcher.py, adapters/workflow_a_batch.py]
     compatibility_entrypoints: []
     excluded_routes: [workflow_a_runner, workflow_a_legacy_loader, legacy-document-profile]
@@ -247,6 +277,9 @@ execution_policy:
       pdf:
         deterministic: [embedded-lossless, pdf-render, complex-region-or-object-evidence]
         visual_understanding_input: page-render-or-region-crop
+      docx:
+        deterministic: [referenced-embedded-originals, ooxml-order-and-byte-validation]
+        visual_understanding_input: not-run-by-native-route
       image:
         deterministic: [original-preserved, region-crop-when-needed]
         visual_understanding_input: original-or-region-crop
@@ -586,7 +619,9 @@ entrypoint:
   page_vision_pdf: python3 adapters/mac96_pdf_vision_runner.py --source <pdf> --output-root <directory> --pages <selector> --noise-profile <profile.yaml>
   page_vision_resume: python3 adapters/mac96_pdf_vision_resume.py --source <pdf> --package <package> --pages <selector> --noise-profile <profile.yaml>
   execute_pending: python3 adapters/workflow_a_dispatcher.py --workflow document-to-markdown-assets --source <absolute-file> --candidate-comparison <comparison-json> --output-root <absolute-directory> --pages <explicit-pages>
+  pdf_collection: python3 adapters/pdf_background_task.py start --task-type pdf-collection --source-list <list> --output-root <root> --route <hybrid|native-only> --pages all
   batch: python3 adapters/workflow_a_batch.py --source <absolute-file-1> --source <absolute-file-2> --output-root <absolute-directory> --pages all
+  batch_status: blocked-until-generic-execute-promotion
   page_batch: python3 adapters/workflow_a_batch.py --source <long-pdf> --output-root <absolute-directory> --pages all --batch-size 8
   candidate_comparison_command: python3 adapters/workflow_a_candidate_compare.py --source-a <pptx> --source-b <pdf> --pages 3,4 --output <comparison-json>
   compatibility: []
@@ -634,7 +669,7 @@ handoff_exports:
     consumer: markdown-to-gpt-image
 inputs:
   - name: source_document
-    types: [ppt, pptx, pdf, png, jpg, jpeg]
+    types: [ppt, pptx, pdf, docx, png, jpg, jpeg]
     required: true
   - name: output_root
     types: [directory]
@@ -698,11 +733,10 @@ stages:
     name: 原生内容提取
     reader_name: 把原文件里的文字和结构取出来
     user_problem: 只依赖已有 OCR/错误文本会让换一个文件就不可用，且会丢掉 PPTX 图表和布局关系。
-    success_signal: PPTX XML 或 PDF 布局已按来源页保存文字、节点、关系、坐标和定位；DOCX 仍属未接入 active runner 的扩展路线。
+    success_signal: PPTX XML 或 PDF 布局按来源页定位；DOCX 原生全文路线保留受支持的正文结构并核对正文、表格和有序嵌入图片，不复刻分页。
     failure_visible_as: extract-timeout、contract-invalid 或字段级 Unknown；不能用固定示例文本填充其他来源。
     type: stage
-    skills: [pptx-xml-extraction, pdf-layout-extraction]
-    deferred_skills: [docx-structure-extraction]
+    skills: [pptx-xml-extraction, pdf-layout-extraction, docx-structure-extraction]
     route: local-code
     output: transient native content model (not written in reader-only mode)
     evidence: []

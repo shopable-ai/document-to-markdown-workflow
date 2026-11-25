@@ -2,7 +2,7 @@
 
 ## 这个 Workflow 解决什么问题
 
-把 PPT、PPTX、PDF 或图片转换为一个可检索、可追溯的 Markdown 资产包，同时保留页面图、嵌入图片，并在整页图不足以支撑复核时生成复杂结构区域图。
+把 PPT、PPTX、PDF、DOCX 或图片转换为 Markdown。分页路线保留页面图、嵌入图片和必要的区域证据；DOCX 原生路线保留原生正文及引用图片，不复刻 Word 分页。
 
 它的目标不是“把文档 OCR 成一段文字”，而是同时保存：
 
@@ -64,11 +64,17 @@ mac96/SSH/Ollama 和旧 Markdown 模板不得复制到新 runner。
 预检只作为内部执行门禁，不会写入默认输出目录；默认转换完成以 `index.md` 与其截图链接可用为准。规则和专家推进方式见
 [执行前风险预检](../../references/execution-preflight.zh.md)。
 
+### DOCX 原生全文
+
+同一个单来源入口接受 `.docx`，使用本机 Pandoc，且只接受 `--pages all`。输出 `index.md`、可选的扁平 `assets/` 和 `reports/validation-result.json`；原文件只读。验收器重新读取 OOXML 和成品，检查正文与顺序、表格数以及图片引用顺序和字节。Word 页数仅为元数据。图片型 DOCX 保留图片并标为 `needs-review`；此路线不做 OCR、Word 排版复刻、候选比较或 `--engineering-output`。
+
+预计超过 30 秒时可用 `pdf_background_task.py start --task-type workflow-a` 显式启动；返回的包路径与成品一致，待复核结果不会报告为运行失败。
+
 ## 输入
 
 必需：
 
-- `source_document`：PPT、PPTX、PDF、PNG、JPG 或 JPEG；
+- `source_document`：PPT、PPTX、PDF、DOCX、PNG、JPG 或 JPEG；
 - `output_root`：输出资产包的目录。
 
 ### 输入边界与单一来源原则
@@ -135,6 +141,8 @@ PDF 的默认生产入口现在是页面级混合路线。文档级预检只决�
 佐证时才进入 `visual-only`。单页失败会登记到路线记录与 `reports/page-completion.json`，然后继续后续页；最终只有
 所选页无缺页、重页、额外页且每页路线所需证据完整时才能为 `passed`。同一来源断点续跑必须校验 SHA-256、
 页码、已通过路线记录、路线证据与唯一页面标记，不能只凭文件存在复用。
+
+原生或 page-hybrid 整本 PDF 通过验收后，会在工程包内保留正式稿 `index.md`，并另外生成同目录的书名 Markdown 工作副本。例如 `《驭心高手》.pdf` 会生成 `驭心高手.md`。工作副本可用于格式修复或网页导入；首次写入时与正式稿内容一致，续跑不会覆盖。两份文件共用原来的相对图片路径；正式验收及整批读者导出规则不变。
 
 运行期间只在阶段边界追加 `evidence/progress.jsonl`；它是短的阶段账本，不再重复写入每一页的完整证据路径。mac96 路径把最新页状态覆盖写入 `evidence/progress-current.json`，把逐页详情写入 `evidence/progress-pNNN.json`，并把当前阶段、页码、状态、耗时和下一步打印到 stderr。读取运行状态时优先读取 `progress-current.json`；只有调查某一页时才读取对应的 `progress-pNNN.json`，不要把整个 `progress.jsonl` 载入上下文。这不等于已经证明 15 秒实时心跳或无进展硬停止。PDF 页面图只为视觉路线页和需要本地结构佐证的候选页生成；某页图片可读后立即进入该页视觉请求、转写和 page-unit 投影，纯文字页直接保留原生 Markdown。全部选定 page-unit 或失败占位就绪后，执行器先完成全页覆盖报告，再跨页清洗明确噪声。已有且经来源与路线校验的页面图/页面单元直接复用，不需要另起脚本或重复渲染/调用模型。调度器只对当前失败页停止该页的下游视觉步骤，不阻断后续页；允许的 OCR/视觉降级必须作为当前页面路线的明确 fallback 记录。旧恢复脚本和夹具脚本的边界见根目录 [`references/legacy-code-status.zh.md`](../../references/legacy-code-status.zh.md)。
 
@@ -381,7 +389,7 @@ A1–A7 是当前 Workflow 的运行阶段，不是完整的工程任务树。�
 [`EXECUTION-TASK-TREE.zh.md`](../../EXECUTION-TASK-TREE.zh.md) 先以 ET0 的可观测 smoke 和 ET1 单页内容质量纵向切片验证，再以 ET2/ET3 扩展到多页和多文件；ET1.5 的语义/视觉质量审计与 A7 的 package validator 是互补门，不能用某个阶段或某个 Skill 的成功替代整条切片验收。
 
 1. **A1 来源预检**：识别文件类型、页数、文字层和可解析性。
-2. **A2 原生内容提取**：当前 active runner 优先解析 PPTX XML 或 PDF 布局；DOCX OOXML 仍是未接入生产入口的扩展路线。
+2. **A2 原生内容提取**：当前 active runner 优先解析 PPTX XML、PDF 布局或 DOCX OOXML；DOCX 仅支持原生全文路线，不生成分页工作单元。
 3. **A3 视觉来源资产保留**：保留整页图和嵌入媒体；只有整页图无法支撑复杂关系复核时才生成区域图，不能为了满足目录而重复截图；按需图级升级时在同一 manifest 中登记 crop、可选 enhanced-raster 及其父子派生和 fallback。
 4. **A4 文字识别、Markdown 结构重建与广告策略**：原生结构提取后，将 Apple Vision OCR 加
    确定性结构重建、mac96 小视觉模型和 mac96 30B 作为候选路线，用同一真实页面集比较后选择。

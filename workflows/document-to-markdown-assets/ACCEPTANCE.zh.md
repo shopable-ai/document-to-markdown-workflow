@@ -2,7 +2,7 @@
 
 ## 默认 reader-only 必须通过
 
-默认 `output_root/<package-name>/` 必须包含 `index.md`；只有存在 Markdown 无法替代的语义视觉时才包含被引用的 `assets/` 图片。纯文本结果可不创建 `assets/`，不得把 JSON、manifest、evidence、reports 或 page-units 当作默认交付。
+除下述 DOCX 原生全文例外，默认 `output_root/<package-name>/` 必须包含 `index.md`；只有存在 Markdown 无法替代的语义视觉时才包含被引用的 `assets/` 图片。纯文本结果可不创建 `assets/`，不得把 JSON、manifest、evidence、reports 或 page-units 当作默认交付。
 
 - [ ] `index.md` 非空，包含可读的关键点 Markdown。
 - [ ] `index.md` 的每个图片链接都存在且指向当前包内的截图。
@@ -16,6 +16,20 @@
 知识库导入前的 `prune-low-value-ebook-pages` 是 A1–A7 之后的可选读者层操作，不是 Workflow A
 通过条件。若对 engineering package 原位删除 page-units，该目录不再满足全页工程输出边界；只有
 保留完整工程包、并在独立知识库工作副本中清洗，才能继续使用原包做完整验收证据。
+
+## DOCX 原生全文验收
+
+- [ ] 仅接受 `--pages all`；不渲染 Word 分页，不接受 `--engineering-output`。
+- [ ] `reports/validation-result.json` 由独立验收器重读来源和成品生成；核对原生正文、表格数量及正文图片出现顺序、字节和本地链接。
+- [ ] 图片型正文保留已核对的原图，不冒充 OCR；未核验对象或内容差异明确标为 `needs-review`。后台状态展示实际包路径及验收结论。
+
+## 多 PDF 队列验收
+
+- [ ] 两份及以上 PDF（包括混合输入中的 PDF 子集）通过 `pdf-collection` 正式队列逐本处理，一来源一工程包。其他文件仍走各自单来源入口，不自动配对；旧通用批处理和单本分页任务不是替代入口。
+- [ ] 队列使用 `--pages all` 和显式路线：`hybrid` 沿用逐页决策，`native-only` 有预检批准；不支持整本视觉集合，不改变每个来源的页面和验收门。
+- [ ] 采用固定路线根或通过 `--run-root` 采纳准确的官方批次根，不能手工指定 `--run-id`。同根活动或其他路线持有同集合锁时不启动第二个队列，分别返回 `already-running` 或 `collection-busy`；非托管旧队列没有伪造的 ID 或取消命令。
+- [ ] 未活动已登记的任务返回 `already-registered`、`existing_status` 和 `resume_command`。续跑（含 `completed` 的原地重验）保留原路线、来源清单和逐书包，核验原登记证据，只跳过仍严格验收通过的来源；旧结果、空 `index.md` 或队列状态不能证明某本通过。
+- [ ] 低空间 `paused` 以及 `status` 的 `batch_summary`（文件级计数）、`active_source`、`strict_accepted_count` 和 `halt_reason` 不替代来源级总账。单路线批次完成不等于整个集合通过；跨路线续接只处理总账中尚未 strict accepted 的来源，`_consolidated/source-consolidation.json` 显示所有预期来源均 strict accepted 后才输出最终读者层目录。
 
 ## 显式 engineering-output 验收
 
@@ -34,7 +48,7 @@
 - [ ] A4/A5/A6 已执行视觉资产语义筛选：明确为 text-only 且 Markdown 足够的页面在首次投影时直接不写图片链接；对旧包的后置移除仍必须有 `evidence/visual-asset-pruning.json`。复杂图、流程、表格关系、颜色/空间编码不得因文字完整而移除；工程 `assets/`、manifest、source occurrences 和来源哈希仍保留。
 - [ ] `type: divider` 的无语义章节分隔页若经用户明确要求物理删除来源图片，读者层、page-unit 和聚合预览均无图片链接；原始 manifest 保持不变，`evidence/visual-asset-pruning.json` 保留原 SHA-256/页码/资产 ID/删除授权，validator 只对该精确覆盖记录豁免缺图，普通页面不得借此放宽。
 - [ ] 每个引用的视觉资产存在、可打开，且 manifest 中有来源页码/区域。
-- [ ] PPTX/XML 或 PDF 布局提取结果与 OCR 候选分层保存；DOCX 只有在单独接入 active runner、契约和真实验收后才能加入输入范围。
+- [ ] PPTX/XML 或 PDF 布局提取结果与 OCR 候选分层保存；DOCX 适用上面的独立原生全文验收，不适用本分页工程清单。
 - [ ] A4 把 `text-recognition`、`markdown-structure-reconstruction`、`advertising-classification-and-treatment` 作为三个独立阶段记录；任何阶段不得覆盖原始 OCR/模型响应。
 - [ ] Apple Vision OCR 加确定性结构重建、mac96 小视觉模型与 mac96 30B 都只作为候选路线；主路线和升级顺序必须引用同一真实页面集的质量、耗时及资源证据，不得预设固定优先级。
 - [ ] 每个视觉模型请求只包含当前一张页面图或区域图；提示词不得调用 OCR、读取其他文件或参考前后图片/页面。
@@ -44,6 +58,7 @@
 - [ ] PDF 每个选定页都有 `evidence/page-routes/pNNN.json`，路线只能是 `native-only`、`native-plus-visual` 或 `visual-only`；“如图”等文字只作候选，必须记录图片对象/面积、bbox 空白、`pdfplumber` 表格或本地渲染结构佐证。
 - [ ] 新 LAN page-hybrid 全页工程包通过工程验收后，读者投影按锁定的 3.0.0 规则复核每个终稿页（含无图引用页）：仅对 Apple Vision 扫描候选采集本地 Tesseract 证据；验收离线重算正文字符重数与顺序、像素与 PDF 对象否决门及 SHA-256。不允许忽略标点或正负号冒充覆盖，也不认隐藏层或同源 OCR 自证。缺证、失败、冲突、可读浅色叠印或未证实图形均保留。历史 2.0.0 按旧规则只读复验。
 - [ ] 读者验收确认正文、页序及保留链接/资产逐字节不变。待裁和待复核整页图继续保留；无图且未证实的页令 reader 返回 needs-review，不自动重写工程包或补渲染。已提交的旧报告仍按旧规则复核，不重写历史工程包。
+- [ ] 原生或 page-hybrid 整本 PDF 通过后，同目录首次生成与 `index.md` 字节一致的书名工作副本；续跑不覆盖手工修改，验收仍只读取正式稿和工程证据。
 - [ ] `native-only` 页不调用视觉模型，也不要求页面图或视觉 JSON；“如图”但没有图片对象的页保留原生正文并标为 `needs-review`，不得补造图示内容。
 - [ ] `native-plus-visual` 页在同一个 `page-units/pNNN.md` 中先保留原生正文，再追加视觉说明/表格结构/图示关系；视觉结果不得覆盖、改写或替换原生正文。
 - [ ] `visual-only` 页必须有原生文字为空/不足以及图片、表格或渲染结构佐证；视觉证据记录图片资产 ID、来源指纹、图片 SHA-256、页码、请求策略、实际调用次数、模型和状态，不得记录密钥、认证信息或订阅地址。

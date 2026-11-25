@@ -17,6 +17,11 @@ source_types:
     page_unit: page
     native_extractors: [pdf-layout-parser]
     page_asset_strategy: [embedded-lossless, pdf-render, region-crop-when-needed]
+  - id: docx
+    suffixes: [.docx]
+    page_unit: whole-document
+    native_extractors: [docx-ooxml-parser]
+    page_asset_strategy: [referenced-embedded-originals]
   - id: image
     suffixes: [.png, .jpg, .jpeg]
     page_unit: image

@@ -259,11 +259,13 @@ def merge_profile(profile: dict, config: dict | None) -> dict:
 def build_execution_plan(source: Path, pages: str, profile: dict, *, mode: str) -> dict:
     suffix = source.suffix.lower()
     source_type = source_type_for(profile, suffix)
+    if suffix == ".docx" and pages.strip().lower() != "all":
+        raise ValueError("DOCX requires --pages all; Word pagination is not a stable native selector")
     selected_pages = parse_pages(pages)
     return {
         "contract": "workflow-a-source-runner",
         "runner": {
-            "id": "workflow-a-source-runner", "version": "0.3.0", "mode": mode,
+            "id": "workflow-a-source-runner", "version": "0.4.0", "mode": mode,
             "profile_id": profile.get("id", "unknown"), "workflow_id": "document-to-markdown-assets",
         },
         "source": {
@@ -1560,10 +1562,50 @@ def _markdown_image_paths(text: str, package: Path) -> set[Path]:
     return paths
 
 
+def execute_docx_boundary(
+    plan: dict, source: Path, output_root: Path, run_root: Path | None, source_fingerprint: str,
+) -> dict:
+    try:
+        from workflow_a_docx import execute_docx
+    except ImportError:  # package-style imports
+        from .workflow_a_docx import execute_docx
+
+    pandoc = tool_path("pandoc")
+    if not pandoc:
+        raise ValueError("DOCX conversion requires a local Pandoc executable")
+    if not source.is_file() or not os.access(source, os.R_OK):
+        raise ValueError(f"source is not a readable file: {source}")
+    output_root.mkdir(parents=True, exist_ok=True)
+    target = run_root if run_root is not None else resolve_package_target(output_root, source)[1]
+    if target.parent != output_root:
+        raise ValueError("DOCX --run-root must be a new direct child of --output-root")
+    report = execute_docx(source, target, pandoc, source_fingerprint)
+    result_path = str(target / "reports/validation-result.json")
+    plan["source"].update(
+        sha256=report["source_sha256"], source_fingerprint_status="computed",
+    )
+    plan["scope"].update(word_metadata_pages=report["word_metadata_pages"], converted_documents=1)
+    plan.update(status=report["status"], output_root=str(output_root), package_path=str(target))
+    plan["validation"].update(
+        status=report["status"], result_path=result_path,
+        passed=report["status"] == "passed", authority="independent-docx-validator",
+    )
+    plan["evidence"] = {
+        "mode": "docx-native-validation", "written": True, "validation": result_path,
+        "diagnostics": report["review"],
+    }
+    plan["artifacts"] = {
+        "markdown": "index.md", "embedded_media": report["distinct_assets"],
+    }
+    plan["diagnostics"] = report["review"]
+    return plan
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Plan or execute source-independent Workflow A conversion")
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--run-root", type=Path, help="new exact package directory (DOCX execute only)")
     parser.add_argument("--pages", default="all")
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
     parser.add_argument("--config", type=Path)
@@ -1585,11 +1627,17 @@ def main(argv: list[str] | None = None) -> int:
             profile = merge_profile(profile, load_yaml(args.config.expanduser().resolve()))
         validate_profile(profile)
         plan = build_execution_plan(args.source, args.pages, profile, mode=mode)
+        is_docx = plan["source"]["suffix"] == ".docx"
+        if args.run_root is not None and not (is_docx and args.execute):
+            raise ValueError("--run-root is supported only for DOCX execute")
+        if is_docx and (args.engineering_output or args.candidate_comparison):
+            raise ValueError("DOCX native route does not support engineering output or candidate comparison")
         if args.candidate_comparison:
             plan["candidate_comparison"] = str(args.candidate_comparison.expanduser().resolve())
         plan["output_root"] = str(args.output_root.expanduser().resolve())
         if args.execute:
             source = args.source.expanduser().resolve()
+            source_fingerprint = sha256(source)
             local_slot = (
                 resource_slots.acquire_local_pdf_slot(
                     purpose="workflow-a-source-runner-pdf"
@@ -1599,12 +1647,18 @@ def main(argv: list[str] | None = None) -> int:
             )
             with local_slot, task_guard.acquire_task_lock(
                 source=source,
-                source_sha256=sha256(source),
+                source_sha256=source_fingerprint,
                 output_root=args.output_root.expanduser().resolve(),
                 pages=args.pages,
                 entrypoint="workflow_a_source_runner.py",
             ):
-                if args.engineering_output:
+                if is_docx:
+                    plan = execute_docx_boundary(
+                        plan, source, args.output_root.expanduser().resolve(),
+                        args.run_root.expanduser().absolute() if args.run_root else None,
+                        source_fingerprint,
+                    )
+                elif args.engineering_output:
                     plan = execute_boundary(plan, args.source, args.output_root)
                 else:
                     plan = execute_reader_boundary(plan, args.source, args.output_root)

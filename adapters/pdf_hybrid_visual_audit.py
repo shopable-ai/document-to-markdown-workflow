@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
+import errno
 import hashlib
 import html
+from itertools import islice
 import json
 import math
 import os
@@ -22,6 +25,7 @@ VERSION = "3.0.0"
 PREVIOUS_VERSION = "2.0.0"
 LEGACY_VERSION = "1.0.0"
 SCAN_CACHE = Path("evidence/reader-scan-ocr")
+SCAN_AUDIT_MAX_WORKERS = 4
 MARKER = re.compile(r"^[ \t]*<!--\s*page:(\d+)\s*-->[ \t]*\r?$", re.M)
 IMAGE = re.compile(r"!\[[^\]\n]*\]\([ \t]*(?:<([^>\n]+)>|([^\s)]+))(?:[ \t]+[^)\n]*)?\)")
 PAGE_IMAGE = re.compile(r"(?:^|/)page-(\d+)\.png$", re.I)
@@ -137,10 +141,15 @@ def coverage(evidence: TextEvidence, markdown: str, *, strict: bool = False) -> 
 
 def apple_rows(payload: dict) -> TextEvidence:
     try:
-        from .ocr_markdown_structure import group_rows, parse_candidates
+        from .ocr_markdown_structure import StructureError, group_rows, parse_candidates
     except ImportError:  # direct script
-        from ocr_markdown_structure import group_rows, parse_candidates
-    candidates = parse_candidates(payload)
+        from ocr_markdown_structure import StructureError, group_rows, parse_candidates
+    try:
+        candidates = parse_candidates(payload)
+    except StructureError as exc:
+        # Empty or unusable OCR is missing page-local text evidence. Preserve
+        # the verified source render and let the rest of the book be audited.
+        raise ValueError(str(exc)) from exc
     if payload.get("candidate_count") != len(candidates):
         raise ValueError("OCR candidate count mismatch")
     rows = [[Box(c.text, float(c.confidence or 0), c.x, max(0, 1 - c.y - c.height),
@@ -506,6 +515,10 @@ def _audit_scan(root: Path, page: int, body: str, source_sha: str, image: Path,
     except FileNotFoundError:
         record["scan_evidence_status"] = "missing"
     except (OSError, ValueError, KeyError, StopIteration, TypeError, AttributeError, RuntimeError) as exc:
+        if collect_scan and isinstance(exc, OSError) and exc.errno in {errno.ENOSPC, errno.EDQUOT}:
+            # Exhausted storage is a retriable run failure, not immutable OCR
+            # evidence. Previously published page caches remain available.
+            raise
         record["scan_evidence_status"] = "invalid"
         record["evidence_diagnostics"] = [f"scan-ocr:{type(exc).__name__}"]
     return record
@@ -638,9 +651,29 @@ def audit_package(package: Path, source: Path | None = None, selected_pages: lis
     if any(PAGE_IMAGE.search(unquote(m.group(1) or m.group(2))) for m in IMAGE.finditer(markdown[:markers[0].start()])):
         raise ValueError("page render reference outside any page")
     source_path, source_sha, source_mode = source_fingerprint(root, source, index_sha, sequence)
-    pages = [audit_page(root, page, markdown[marker.end():markers[i+1].start() if i+1 < len(markers) else len(markdown)], source_sha,
-                        version=version, collect_scan=collect_scan)
-             for i, (page, marker) in enumerate(zip(sequence, markers))]
+
+    def audit_section(i: int) -> dict:
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(markdown)
+        return audit_page(root, sequence[i], markdown[markers[i].end():end], source_sha,
+                          version=version, collect_scan=collect_scan)
+
+    if collect_scan and version == VERSION and len(sequence) > 1:
+        # Collection is page-local (and Tesseract itself is single-threaded).
+        # Keep only a worker-sized window in flight; serialize results in page order.
+        workers = min(SCAN_AUDIT_MAX_WORKERS, len(sequence))
+        remaining = iter(range(len(sequence)))
+        results = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            pending = {executor.submit(audit_section, i): i for i in islice(remaining, workers)}
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    results[pending.pop(future)] = future.result()
+                for i in islice(remaining, len(done)):
+                    pending[executor.submit(audit_section, i)] = i
+        pages = [results[i] for i in range(len(sequence))]
+    else:
+        pages = [audit_section(i) for i in range(len(sequence))]
     by_decision = {key: [record["page"] for record in pages if record["asset"] and record["decision"] == key]
                    for key in DECISIONS}
     no_ref = [record["page"] for record in pages if not record["asset"]]

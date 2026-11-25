@@ -46,7 +46,7 @@ tools:
   - id: docx-ooxml-parser
     kind: local-deterministic
     used_by: [docx-structure-extraction]
-    implementation: planned
+    implementation: available
   - id: office-page-renderer
     kind: local-deterministic
     used_by: [page-rendering]

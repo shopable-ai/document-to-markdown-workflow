@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>电子书转换工作台 · R3</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body><main>
+<header class="header"><div><h1>电子书转换工作台</h1><p>文档转 Markdown · 本地任务管理 · R3 只读</p></div><button disabled title="R4 开放任务提交">＋ 添加文件</button></header>
+<nav aria-label="工作台栏目"><button data-tab="queue" aria-selected="true">转换队列</button><button data-tab="config" aria-selected="false">转换配置</button><button data-tab="disk" aria-selected="false">资源与清理</button><button data-tab="plan" aria-selected="false">需求与开发计划</button></nav>
+<div class="notice row spread"><span id="connection" role="status">正在连接 · Unknown</span><span id="observed" class="small">尚无快照</span><button id="reconnect">重新连接</button></div>
+<section id="queue"><div class="panel row spread"><label>已登记批次 <select id="batch"><option>Unknown</option></select></label><span id="batch-meta" class="small"></span></div><div class="cards" id="metrics"></div><div class="panel"><div class="row spread"><div><h2>当前批次</h2><p id="reason"></p></div><div class="actions"><button disabled>暂停</button><button disabled>恢复</button><button disabled>调整顺序</button></div></div><p id="ledger"></p><div class="row spread"><label>搜索来源 <input type="search" id="search" placeholder="书名或完整路径"></label><label>状态 <select id="filter"><option value="">全部</option><option>running</option><option>pending</option><option>passed</option><option>needs-review</option><option>failed</option><option>interrupted</option><option>Unknown</option></select></label></div><div id="tasks"><p>等待真实数据 · Unknown</p></div><p class="small">当前路线严格验收数不代表跨路线总账。页数完成不等于严格验收通过。断线时保留最后快照，仅供参考。</p></div></section>
+<section id="config" hidden><div class="panel"><h2>转换配置</h2><p>R4 才接入文件选择、预检和正式任务启动。本轮不提交、不重排、不暂停任何生产任务。</p><button disabled>选择文件</button><button disabled>预检并提交</button></div></section>
+<section id="disk" hidden><div class="cards" id="resources"></div><div class="panel"><h2>清理与资源保护</h2><p>磁盘数据来自服务所在机器的已配置输出根。资源槽容量来自登记快照；当前槽占用 Unknown（不尝试抢锁）。</p><p>临时截图、必要资产、缓存及可回收字节：Unknown，尚未核验引用关系、锁和重建能力。</p><button disabled>清理预览</button><button disabled>删除文件</button></div></section>
+<section id="plan" hidden><div class="panel"><h2>需求与开发计划</h2><p>WB-04 只读状态观察；WB-05 磁盘与资源容量观察。R4 正式参数预检、提交及控制；R5 等待调度和并发；R6 安全资源回收；R7 图片识别降本；R8 真实批量验收。</p><p>沿用 R01—R11、长任务契约和来源级验收总账，不新增平行需求权威。</p></div></section>
+<footer class="foot">正式工作台 R3 · 无模拟数据 · 不控制生产任务</footer>
+</main></body></html>
